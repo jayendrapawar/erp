@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { getColoursForName, linkOrCreateArticle, searchArticleNames } from '@/app/actions/articles'
 import type { ParsedQr } from '@/lib/qr-parser'
 import { Button } from '@/components/ui/button'
@@ -14,16 +14,18 @@ type Props = {
   mode: 'unknown' | 'new_colour'
   existingName?: string
   notes?: string
+  saveScan?: boolean
+  initialSizes?: string
   onClose: () => void
   onSaveLater: () => Promise<boolean>
   onLinked: () => Promise<void>
 }
 
-export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, onClose, onSaveLater, onLinked }: Props) {
+export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, saveScan = true, initialSizes, onClose, onSaveLater, onLinked }: Props) {
   const [articleName, setArticleName] = useState(existingName ?? '')
   const [colourChoice, setColourChoice] = useState('')
   const [otherColour, setOtherColour] = useState('')
-  const [sizes, setSizes] = useState(suggestSizes(parsed.articleCode))
+  const [sizes, setSizes] = useState(initialSizes ?? suggestSizes(parsed.articleCode))
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [colours, setColours] = useState<string[]>([])
   const [selectedKnownName, setSelectedKnownName] = useState(Boolean(existingName))
@@ -31,11 +33,14 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, onC
   const [errorMessage, setErrorMessage] = useState('')
   const [warning, setWarning] = useState<'mismatch' | 'size' | null>(null)
   const [articleSizes, setArticleSizes] = useState<string[]>([])
+  const messageRef = useRef<HTMLDivElement>(null)
+  const warningButtonRef = useRef<HTMLButtonElement>(null)
+  const createButtonRef = useRef<HTMLButtonElement>(null)
 
   const isLockedName = mode === 'new_colour'
   const matchingName = suggestions.find((name) => name.trim().toLocaleLowerCase() === articleName.trim().toLocaleLowerCase())
   const hasKnownName = selectedKnownName || Boolean(matchingName)
-  const showSizes = mode === 'unknown' && !hasKnownName
+  const showSizes = mode === 'unknown'
   const colourName = colours.length === 0 || colourChoice === '__other__' ? otherColour.trim() : colourChoice
   const canSubmit = articleName.trim().length > 0 && colourName.length > 0 && (!showSizes || sizes.trim().length > 0)
   const readOnlyRows = useMemo(() => [
@@ -86,6 +91,13 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, onC
     return () => window.removeEventListener('keydown', closeOnEscape)
   }, [loading, onClose])
 
+  useEffect(() => {
+    if (!warning && !errorMessage) return
+    messageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    if (warning) warningButtonRef.current?.focus()
+    else createButtonRef.current?.focus()
+  }, [warning, errorMessage])
+
   async function submit(event?: FormEvent<HTMLFormElement>, confirmWarnings = false, addScannedSize = false) {
     event?.preventDefault()
     if (!canSubmit || loading) return
@@ -100,6 +112,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, onC
         addScannedSize,
         confirmWarnings,
         notes,
+        saveScan,
       })
       if (result.ok) {
         await onLinked()
@@ -159,7 +172,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, onC
             <h2 id="new-article-title" className="text-lg font-semibold">New Article Detected</h2>
             <p className="mt-1 text-sm text-muted-foreground">Add article details or save this scan to finish later.</p>
           </div>
-          <button type="button" aria-label="Close and save scan" disabled={loading} onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xl hover:bg-muted disabled:opacity-50">×</button>
+          <button type="button" aria-label="Close (scan is saved without article details)" title="Close (scan is saved without article details)" disabled={loading} onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xl hover:bg-muted disabled:opacity-50">×</button>
         </div>
 
         <div className="mb-5 grid grid-cols-2 gap-2 rounded-lg bg-muted/50 p-3">
@@ -200,13 +213,13 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, onC
             </div>
           )}
 
-          {warning === 'mismatch' && <div role="alert" className="space-y-3 rounded-lg border border-amber-500/40 bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/30 dark:text-amber-100"><p>The article number in the name differs from the scanned code. Confirm to continue.</p><Button type="button" disabled={loading} onClick={() => submit(undefined, true, false)} className="min-h-11 w-full">Confirm and continue</Button></div>}
-          {warning === 'size' && <div role="alert" className="space-y-3 rounded-lg border border-amber-500/40 bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/30 dark:text-amber-100"><p>Scanned size {parsed.size} is not in this article&apos;s sizes: {articleSizes.join(', ') || 'none listed'}.</p><Button type="button" disabled={loading} onClick={() => submit(undefined, true, true)} className="min-h-11 w-full">Add size {parsed.size} to this article</Button></div>}
-          {errorMessage && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{errorMessage}</p>}
+          {warning === 'mismatch' && <div ref={messageRef} role="alert" className="space-y-3 rounded-lg border border-amber-500/40 bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/30 dark:text-amber-100"><p>The article number in the name differs from the scanned code. Confirm to continue.</p><Button ref={warningButtonRef} type="button" disabled={loading} onClick={() => submit(undefined, true, false)} className="min-h-11 w-full">Confirm and continue</Button></div>}
+          {warning === 'size' && <div ref={messageRef} role="alert" className="space-y-3 rounded-lg border border-amber-500/40 bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/30 dark:text-amber-100"><p>Scanned size {parsed.size} is not in this article&apos;s sizes: {articleSizes.join(', ') || 'none listed'}.</p><Button ref={warningButtonRef} type="button" disabled={loading} onClick={() => submit(undefined, true, true)} className="min-h-11 w-full">Add size {parsed.size} to this article</Button></div>}
+          {errorMessage && <div ref={messageRef} role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{errorMessage}</div>}
 
           <div className="grid gap-2 pt-1 sm:grid-cols-2">
-            <Button type="submit" disabled={!canSubmit || loading} className="min-h-12 text-base">{loading ? 'Saving…' : 'Create / Link'}</Button>
-            <Button type="button" variant="outline" disabled={loading} onClick={saveLater} className="min-h-12 whitespace-normal text-center">Save scan, add details later</Button>
+            <Button ref={createButtonRef} type="submit" disabled={!canSubmit || loading} className="min-h-12 text-base">{loading ? 'Saving…' : 'Create / Link'}</Button>
+            {saveScan && <Button type="button" variant="outline" disabled={loading} onClick={saveLater} className="min-h-12 whitespace-normal text-center">Save scan, add details later</Button>}
           </div>
         </form>
       </div>

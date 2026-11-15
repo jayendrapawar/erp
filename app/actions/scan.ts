@@ -3,7 +3,7 @@
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { scans } from '@/lib/db/schema'
-import { articles, articleMrps } from '@/lib/db/schema'
+import { articles, articleMrps, articleScanLinks } from '@/lib/db/schema'
 import { and, eq, isNull, desc, sql } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
@@ -162,22 +162,34 @@ export async function getRecentScans(limit = 50) {
     .orderBy(desc(scans.scannedAt))
     .limit(limit * 4)
 
+  const masterArticles = await db.select({ artCode: articles.artCode, colorCode: articles.colorCode, artName: articles.artName, colorName: articles.color }).from(articles)
+  const masterByPair = new Map<string, { artName: string; colorName: string }>()
+  for (const article of masterArticles) {
+    if (!normalizeArticleValue(article.artCode) || !normalizeArticleValue(article.colorCode)) continue
+    const key = `${normalizeArticleValue(article.artCode)}|${normalizeArticleValue(article.colorCode)}`
+    if (!masterByPair.has(key)) masterByPair.set(key, { artName: article.artName, colorName: article.colorName })
+  }
+
   type ScanRow = typeof scans.$inferSelect
 
-  const expanded: Array<ScanRow & { _boxCode?: string }> = []
+  const expanded: Array<ScanRow & { _boxCode?: string; masterArtName: string; masterColorName: string }> = []
 
   for (const row of dbRows) {
     const codes: string[] = Array.isArray(row.boxCodes) && row.boxCodes.length > 0
       ? (row.boxCodes as string[])
       : row.rawQrCode ? [row.rawQrCode] : []
+    const normalizedCode = normalizeArticleValue(row.artNumber ?? '')
+    const normalizedColor = normalizeArticleValue(row.colorNumber ?? '')
+    const master = normalizedCode && normalizedColor ? masterByPair.get(`${normalizedCode}|${normalizedColor}`) : undefined
+    const articleLabels = { masterArtName: master?.artName ?? '—', masterColorName: master?.colorName ?? '—' }
 
     if (codes.length > 0) {
       for (let i = codes.length - 1; i >= 0; i--) {
-        expanded.push({ ...row, quantity: 1, rawQrCode: codes[i], _boxCode: codes[i] })
+        expanded.push({ ...row, ...articleLabels, quantity: 1, rawQrCode: codes[i], _boxCode: codes[i] })
         if (expanded.length >= limit) break
       }
     } else {
-      expanded.push(row)
+      expanded.push({ ...row, ...articleLabels })
     }
     if (expanded.length >= limit) break
   }
@@ -199,8 +211,8 @@ export async function updateScanQuantity(scanId: number, quantity: number) {
 
 export async function deleteScan(
   scanId: number,
-  boxCode?: string,
-): Promise<typeof scans.$inferSelect | null> {
+  rawQrCode?: string,
+): Promise<{ scan: typeof scans.$inferSelect | null; undone?: { action: 'created' | 'linked'; artCode: string; colorCode: string } } | null> {
   const rows = await db
     .select({ id: scans.id, quantity: scans.quantity })
     .from(scans)
@@ -209,30 +221,63 @@ export async function deleteScan(
 
   if (rows.length === 0) return null
 
+  const [scanData] = await db.select().from(scans).where(eq(scans.id, scanId)).limit(1)
+  const storedBoxCodes = Array.isArray(scanData.boxCodes) ? scanData.boxCodes as string[] : []
+  const qrToDelete = rawQrCode ?? scanData.rawQrCode
+  if (rawQrCode && storedBoxCodes.length > 0 && !storedBoxCodes.includes(rawQrCode)) return null
+  if (rawQrCode && storedBoxCodes.length === 0 && scanData.rawQrCode !== rawQrCode) return null
+
   const { id, quantity } = rows[0]
 
   if (quantity <= 1) {
     await db.delete(scans).where(eq(scans.id, id))
+    const undone = qrToDelete ? await undoArticleLink(qrToDelete, scanData.artNumber ?? '', scanData.colorNumber ?? '') : undefined
     revalidatePath('/scanner')
     revalidatePath('/dashboard')
-    return null
+    return { scan: null, undone }
   }
 
   const updated = await db
     .update(scans)
     .set({
       quantity:  sql`${scans.quantity} - 1`,
-      ...(boxCode
-        ? { boxCodes: sql`(SELECT jsonb_agg(v) FROM jsonb_array_elements_text(COALESCE(${scans.boxCodes}, '[]'::jsonb)) v WHERE v != ${boxCode})` }
+      ...(rawQrCode
+        ? { boxCodes: sql`(SELECT COALESCE(jsonb_agg(v), '[]'::jsonb) FROM jsonb_array_elements_text(COALESCE(${scans.boxCodes}, '[]'::jsonb)) v WHERE v != ${rawQrCode})` }
         : {}),
       updatedAt: sql`now()`,
     })
     .where(eq(scans.id, id))
     .returning()
 
+  const undone = qrToDelete && quantity <= 1 ? await undoArticleLink(qrToDelete, scanData.artNumber ?? '', scanData.colorNumber ?? '') : undefined
+
   revalidatePath('/scanner')
   revalidatePath('/dashboard')
-  return updated[0]
+  return { scan: updated[0], undone }
+}
+
+async function undoArticleLink(rawQr: string, artCode: string, colorCode: string): Promise<{ action: 'created' | 'linked'; artCode: string; colorCode: string } | undefined> {
+  try {
+    const [link] = await db.select().from(articleScanLinks).where(eq(articleScanLinks.rawQr, rawQr)).limit(1)
+    if (!link) return undefined
+    const normalizedCode = normalizeArticleValue(artCode)
+    const normalizedColor = normalizeArticleValue(colorCode)
+    const [remaining] = await db.select({ count: sql<number>`count(*)` }).from(scans).where(
+      sql`upper(regexp_replace(btrim(${scans.artNumber}), '\\s+', ' ', 'g')) = ${normalizedCode} AND upper(regexp_replace(btrim(${scans.colorNumber}), '\\s+', ' ', 'g')) = ${normalizedColor}`
+    )
+    if (Number(remaining?.count ?? 0) > 0) return undefined
+    if (link.action === 'created') {
+      await db.delete(articles).where(eq(articles.id, link.articleId))
+      const [otherArticle] = await db.select({ id: articles.id }).from(articles).where(sql`upper(regexp_replace(btrim(${articles.artCode}), '\\s+', ' ', 'g')) = ${normalizedCode}`).limit(1)
+      if (!otherArticle) await db.delete(articleMrps).where(sql`upper(btrim(${articleMrps.artCode})) = ${normalizedCode}`)
+    } else {
+      await db.update(articles).set({ artCode: '', colorCode: '' }).where(eq(articles.id, link.articleId))
+    }
+    await db.delete(articleScanLinks).where(eq(articleScanLinks.id, link.id))
+    return { action: link.action, artCode, colorCode }
+  } catch {
+    return undefined
+  }
 }
 
 export async function getAllScans() {

@@ -1,7 +1,7 @@
 'use server'
 
 import { db } from '@/lib/db'
-import { articles, articleSizes, articleColors, articleMrps, scans, user } from '@/lib/db/schema'
+import { articles, articleSizes, articleColors, articleMrps, articleScanLinks, scans, user } from '@/lib/db/schema'
 import { asc, sql, eq } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { headers } from 'next/headers'
@@ -39,6 +39,39 @@ function friendlyUniqueError(error: unknown): never {
 export async function getArticles(): Promise<Article[]> {
   await requireAuth()
   return db.select().from(articles).orderBy(asc(articles.artName))
+}
+
+export type MissingArticle = { artCode: string; colorCode: string; boxCount: number; sizes: string[]; mrps: string[]; rawQr: string }
+
+export async function getMissingArticles(): Promise<MissingArticle[]> {
+  await requireAuth()
+  const [scanRows, masterRows] = await Promise.all([
+    db.select({ artNumber: scans.artNumber, colorNumber: scans.colorNumber, sizeNumber: scans.sizeNumber, mrp: scans.mrp, quantity: scans.quantity, rawQrCode: scans.rawQrCode, boxCodes: scans.boxCodes }).from(scans),
+    db.select({ artCode: articles.artCode, colorCode: articles.colorCode }).from(articles),
+  ])
+  const known = new Set(masterRows.map(row => `${normalizeArticleValue(row.artCode)}|${normalizeArticleValue(row.colorCode)}`))
+  const missing = new Map<string, MissingArticle>()
+  for (const row of scanRows) {
+    const artCode = row.artNumber?.trim() ?? ''
+    const colorCode = row.colorNumber?.trim() ?? ''
+    if (!artCode || !colorCode || known.has(`${normalizeArticleValue(artCode)}|${normalizeArticleValue(colorCode)}`)) continue
+    const key = `${normalizeArticleValue(artCode)}|${normalizeArticleValue(colorCode)}`
+    const entry = missing.get(key) ?? { artCode, colorCode, boxCount: 0, sizes: [], mrps: [], rawQr: row.rawQrCode ?? (Array.isArray(row.boxCodes) ? row.boxCodes[0] : '') ?? '' }
+    entry.boxCount += row.quantity
+    if (row.sizeNumber && !entry.sizes.includes(row.sizeNumber)) entry.sizes.push(row.sizeNumber)
+    if (row.mrp && !entry.mrps.includes(row.mrp)) entry.mrps.push(row.mrp)
+    if (!entry.rawQr && Array.isArray(row.boxCodes)) entry.rawQr = row.boxCodes[0] ?? ''
+    missing.set(key, entry)
+  }
+  return [...missing.values()].sort((a, b) => a.artCode.localeCompare(b.artCode) || a.colorCode.localeCompare(b.colorCode))
+}
+
+export async function getArticleMrps(): Promise<Record<string, string[]>> {
+  await requireAuth()
+  const rows = await db.select({ artCode: articleMrps.artCode, mrp: articleMrps.mrp }).from(articleMrps).orderBy(asc(articleMrps.artCode), asc(articleMrps.mrp))
+  const result: Record<string, string[]> = {}
+  for (const row of rows) (result[normalizeArticleValue(row.artCode)] ??= []).push(row.mrp)
+  return result
 }
 
 // ── Save (upsert) a single article ───────────────────────────────────────────
@@ -266,7 +299,7 @@ export async function getColoursForName(name: string): Promise<Array<{ colorName
 type LinkResult = { ok: true; articleId: number } | { ok: false; error: 'SIZE_NOT_IN_ARTICLE'; sizes: string[] } | { ok: false; error: 'NUMBER_MISMATCH' | 'DUPLICATE_QR' | 'SIZES_REQUIRED' | 'NAME_REQUIRED' | 'ALREADY_EXISTS' | 'FORBIDDEN' | 'INVALID_QR' }
 
 export async function linkOrCreateArticle(input: {
-  rawQr: string; artName: string; colorName: string; sizesText: string; addScannedSize: boolean; confirmWarnings: boolean; notes?: string
+  rawQr: string; artName: string; colorName: string; sizesText: string; addScannedSize: boolean; confirmWarnings: boolean; notes?: string; saveScan?: boolean
 }): Promise<LinkResult> {
   try {
     return await linkOrCreateArticleOnce(input)
@@ -282,7 +315,7 @@ export async function linkOrCreateArticle(input: {
 }
 
 async function linkOrCreateArticleOnce(input: {
-  rawQr: string; artName: string; colorName: string; sizesText: string; addScannedSize: boolean; confirmWarnings: boolean; notes?: string
+  rawQr: string; artName: string; colorName: string; sizesText: string; addScannedSize: boolean; confirmWarnings: boolean; notes?: string; saveScan?: boolean
 }): Promise<LinkResult> {
   const session = await auth.api.getSession({ headers: await headers() })
   if (!session?.user) return { ok: false, error: 'FORBIDDEN' }
@@ -298,13 +331,16 @@ async function linkOrCreateArticleOnce(input: {
   const name = input.artName.trim()
   const color = input.colorName.trim()
   if (!name || !color) return { ok: false, error: 'NAME_REQUIRED' }
-  const duplicate = await db.select({ id: scans.id }).from(scans).where(sql`${scans.rawQrCode} = ${input.rawQr} OR ${scans.boxCodes} @> ${JSON.stringify([input.rawQr])}::jsonb`).limit(1)
-  if (duplicate.length) return { ok: false, error: 'DUPLICATE_QR' }
+  if (input.saveScan !== false) {
+    const duplicate = await db.select({ id: scans.id }).from(scans).where(sql`${scans.rawQrCode} = ${input.rawQr} OR ${scans.boxCodes} @> ${JSON.stringify([input.rawQr])}::jsonb`).limit(1)
+    if (duplicate.length) return { ok: false, error: 'DUPLICATE_QR' }
+  }
   if (!input.confirmWarnings && hasArticleNumberMismatch(name, artCode)) return { ok: false, error: 'NUMBER_MISMATCH' }
 
   const existingSizes = await db.select({ id: articles.id })
     .from(articles).where(sql`upper(regexp_replace(btrim(${articles.artCode}), '\\s+', ' ', 'g')) = ${artCode} AND upper(regexp_replace(btrim(${articles.colorCode}), '\\s+', ' ', 'g')) = ${colorCode}`).limit(1)
   let sizes: string[] = []
+  let linkAction: 'created' | 'linked' | undefined
   let articleId: number | undefined = existingSizes[0]?.id
   try { await db.transaction(async (tx) => {
     if (articleId) {
@@ -320,20 +356,23 @@ async function linkOrCreateArticleOnce(input: {
     } else {
       const byName = await tx.select({ id: articles.id, artName: articles.artName, color: articles.color, artCode: articles.artCode, colorCode: articles.colorCode })
         .from(articles).where(sql`upper(regexp_replace(btrim(${articles.artName}), '\\s+', ' ', 'g')) = ${normalizeArticleValue(name)}`)
+      const sameCodeRows = await tx.select({ id: articles.id, artName: articles.artName })
+        .from(articles).where(sql`upper(regexp_replace(btrim(${articles.artCode}), '\\s+', ' ', 'g')) = ${artCode}`)
       const sameColorRows = byName.filter(r => normalizeArticleValue(r.color) === normalizeArticleValue(color))
-      const sameColor = sameColorRows.find(r => !normalizeArticleValue(r.artCode) && !normalizeArticleValue(r.colorCode)) ?? sameColorRows[0]
-      const blankCode = sameColor && !normalizeArticleValue(sameColor.artCode) && !normalizeArticleValue(sameColor.colorCode) ? sameColor : undefined
-      const source = sameColor ?? byName[0]
+      const blankCode = sameColorRows.find(r => !normalizeArticleValue(r.artCode) && !normalizeArticleValue(r.colorCode))
+      const sizeSource = sameCodeRows[0] ?? blankCode
       const storedName = byName[0]?.artName ?? name
-      sizes = source ? (await tx.select({ sizeLabel: articleSizes.sizeLabel }).from(articleSizes).where(eq(articleSizes.articleId, source.id)).orderBy(articleSizes.sortOrder)).map(r => r.sizeLabel) : parseSizeText(input.sizesText)
-      if (!source && !parseSizeText(input.sizesText).length) throw new Error('SIZES_REQUIRED')
+      sizes = sizeSource ? (await tx.select({ sizeLabel: articleSizes.sizeLabel }).from(articleSizes).where(eq(articleSizes.articleId, sizeSource.id)).orderBy(articleSizes.sortOrder)).map(r => r.sizeLabel) : parseSizeText(input.sizesText)
+      if (!sizeSource && !sizes.length) throw new Error('SIZES_REQUIRED')
+      if (blankCode && !sameCodeRows.length) linkAction = 'linked'
       if (!sizes.includes(parsed.size)) {
         if (!input.addScannedSize) throw new Error(`SIZE_NOT_IN_ARTICLE:${JSON.stringify(sizes)}`)
         sizes.push(parsed.size)
       }
-      if (blankCode) {
+      if (blankCode && !sameCodeRows.length) {
         const updated = await tx.update(articles).set({ artCode, colorCode }).where(sql`${articles.id} = ${blankCode.id} AND ${articles.artCode} = '' AND ${articles.colorCode} = ''`).returning({ id: articles.id })
         articleId = updated[0]?.id
+        if (articleId) linkAction = 'linked'
       }
       if (!articleId) {
         const min = Math.min(...sizes.map(Number).filter(Number.isFinite))
@@ -341,6 +380,7 @@ async function linkOrCreateArticleOnce(input: {
         const [inserted] = await tx.insert(articles).values({ artName: storedName, artCode, color, colorCode, minSize: Number.isFinite(min) ? String(min) : '', maxSize: Number.isFinite(max) ? String(max) : '' }).returning({ id: articles.id })
         const insertedArticleId = inserted.id
         articleId = insertedArticleId
+        linkAction = 'created'
         await tx.insert(articleColors).values({ articleId: insertedArticleId, colorName: color, colorHex: colorCode || null })
         if (sizes.length) await tx.insert(articleSizes).values(sizes.map((sizeLabel, idx) => ({ articleId: insertedArticleId, sizeLabel, sortOrder: idx + 1 })))
       } else {
@@ -363,8 +403,17 @@ async function linkOrCreateArticleOnce(input: {
   }
   if (!articleId) throw new Error('Unable to link article')
   if (!sizes.includes(parsed.size)) return { ok: false, error: 'SIZE_NOT_IN_ARTICLE', sizes }
-  const scanResult = await recordScanInternal(input.rawQr, input.notes)
-  if (!scanResult) return { ok: false, error: 'DUPLICATE_QR' }
+  let linkedUserName = ''
+  try { linkedUserName = session.user.name ?? '' } catch { /* Session was already validated above. */ }
+  if (input.saveScan !== false) {
+    const scanResult = await recordScanInternal(input.rawQr, input.notes)
+    if (!scanResult) return { ok: false, error: 'DUPLICATE_QR' }
+  }
+  if (linkAction) {
+    try {
+      await db.insert(articleScanLinks).values({ articleId, action: linkAction, rawQr: input.rawQr, userName: linkedUserName })
+    } catch { /* Linking remains successful if the optional audit table is unavailable. */ }
+  }
   revalidatePath('/master')
   try {
     const historicalMrps = await db.selectDistinct({ mrp: scans.mrp }).from(scans)

@@ -3,7 +3,7 @@
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { articles, articleColors, articleSizes } from '@/lib/db/schema'
-import { ilike, asc, eq, sql } from 'drizzle-orm'
+import { asc, eq, sql } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { searchVendors, getVendors } from '@/app/actions/vendors'
 import { fuzzyScore } from '@/lib/fuzzy'
@@ -200,14 +200,45 @@ export async function loadCatalogue(): Promise<CatalogueData> {
 
   // Build one ArticleDetail per unique artName (first article id = stable key)
   const artDetailMap = new Map<string, ArticleDetail>()
+  const representativeArticleIds = new Map<string, number>()
+  const seenSizes = new Set<string>()
+  const normalizedLabel = (value: string) => value.trim().replace(/\s+/g, ' ').toLocaleLowerCase()
   for (const row of artRows) {
     if (!artDetailMap.has(row.artName)) {
       artDetailMap.set(row.artName, { id: row.id, artNumber: row.artName, colors: [], sizes: [] })
     }
     const detail = artDetailMap.get(row.artName)!
-    for (const c of colorsByArt.get(row.id) ?? []) detail.colors.push(c)
-    for (const s of sizesByArt.get(row.id) ?? []) detail.sizes.push(s)
+    const sizeArticleIds = new Set<number>()
+    for (const c of colorsByArt.get(row.id) ?? []) {
+      const key = `${row.artName}|${normalizedLabel(c.colorName)}`
+      const representativeId = representativeArticleIds.get(key)
+      if (representativeId === undefined) {
+        representativeArticleIds.set(key, c.articleId)
+        detail.colors.push(c)
+        sizeArticleIds.add(c.articleId)
+      } else {
+        sizeArticleIds.add(representativeId)
+      }
+    }
+    if (sizeArticleIds.size === 0) sizeArticleIds.add(row.id)
+    for (const s of sizesByArt.get(row.id) ?? []) {
+      for (const articleId of sizeArticleIds) {
+        const key = `${articleId}|${normalizedLabel(s.sizeLabel)}`
+        if (seenSizes.has(key)) continue
+        seenSizes.add(key)
+        detail.sizes.push({ ...s, articleId })
+      }
+    }
   }
+
+  const sizeOrder = (a: string, b: string) => {
+    const numA = Number(a), numB = Number(b)
+    if (Number.isFinite(numA) && Number.isFinite(numB)) return numA - numB
+    if (Number.isFinite(numA)) return -1
+    if (Number.isFinite(numB)) return 1
+    return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+  }
+  for (const detail of artDetailMap.values()) detail.sizes.sort((a, b) => sizeOrder(a.sizeLabel, b.sizeLabel))
 
   const vendors: CatalogueVendor[] = vendorRows
     .filter(v => v.status === 'active')
@@ -222,18 +253,3 @@ export async function loadCatalogue(): Promise<CatalogueData> {
   return { vendors, articles: Array.from(artDetailMap.values()) }
 }
 
-// ── Ranking helper ────────────────────────────────────────────────────────────
-
-function rankResults<T>(rows: T[], query: string, getKey: (r: T) => string): T[] {
-  const q = query.toLowerCase()
-  const scored = rows.map(r => {
-    const key = getKey(r).toLowerCase()
-    let score = 3 // contains
-    if (key === q) score = 0                             // exact
-    else if (key.startsWith(q)) score = 1               // starts with
-    else if (key.split(/\s+/).some(w => w.startsWith(q))) score = 2 // word starts with
-    return { r, score }
-  })
-  scored.sort((a, b) => a.score !== b.score ? a.score - b.score : getKey(a.r).localeCompare(getKey(b.r)))
-  return scored.map(s => s.r)
-}

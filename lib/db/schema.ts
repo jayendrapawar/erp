@@ -113,6 +113,15 @@ export const articleMrps = pgTable('article_mrps', {
   check('article_mrps_artCode_normalized_check', sql`${t.artCode} = upper(btrim(${t.artCode}))`),
 ])
 
+export const articleScanLinks = pgTable('article_scan_links', {
+  id: serial('id').primaryKey(),
+  articleId: integer('articleId').notNull().references(() => articles.id, { onDelete: 'cascade' }),
+  action: text('action').$type<'created' | 'linked'>().notNull(),
+  rawQr: text('rawQr').notNull(),
+  userName: text('userName').notNull().default(''),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+})
+
 export const articleColors = pgTable('article_colors', {
   id:          serial('id').primaryKey(),
   articleId:   integer('articleId').notNull().references(() => articles.id, { onDelete: 'cascade' }),

@@ -525,7 +525,9 @@ export function ScannerPage() {
       let masterCheck
       try {
         masterCheck = await checkScanAgainstMaster(qrCode)
-      } catch {
+      } catch (error) {
+        console.error('Article check unavailable:', error)
+        showWarning('Article check unavailable. Scan saved.')
         await saveCameraScanNormally(qrCode)
         return
       }
@@ -572,8 +574,8 @@ export function ScannerPage() {
     }
   }
 
-  function completeCameraScan(scan: RecentScan, message: string) {
-    setLastCameraScan(scan)
+  function completeCameraScan(scan: Omit<RecentScan, 'masterArtName' | 'masterColorName'> & Partial<Pick<RecentScan, 'masterArtName' | 'masterColorName'>>, message: string) {
+    setLastCameraScan({ ...scan, masterArtName: scan.masterArtName ?? '—', masterColorName: scan.masterColorName ?? '—' })
     setDailyScanCount(incrementDailyScanCount())
     triggerScanFeedback()
     showSuccess(message)
@@ -733,15 +735,21 @@ export function ScannerPage() {
     if (!deleteTarget) return
     setDeleteLoading(true)
     try {
-      await deleteScan(
+      const deleteResult = await deleteScan(
         deleteTarget.id,
-        deleteTarget.rawQrCode?.split('-').pop(),
+        deleteTarget.rawQrCode ?? undefined,
       )
       setRecentScans((prev) =>
         prev.filter((s) => s.rawQrCode !== deleteTarget.rawQrCode)
       )
       setDeleteTarget(null)
       setDeleteConfirmText('')
+      if (deleteResult?.undone) {
+        const { action, artCode, colorCode } = deleteResult.undone
+        showSuccess(action === 'created'
+          ? `Scan deleted. Created article ${artCode} / ${colorCode} was removed.`
+          : `Scan deleted. Article ${artCode} / ${colorCode} was unlinked.`)
+      } else showSuccess('Scan deleted.')
     } catch {
     } finally {
       setDeleteLoading(false)
@@ -1349,11 +1357,13 @@ export function ScannerPage() {
                                 {scan.entryType}
                               </Badge>
                             </TableCell>
-                            <TableCell className="font-mono text-xs sm:text-sm font-semibold px-3 sm:px-4">
-                              {scan.artNumber || '-'}
+                            <TableCell className="px-3 sm:px-4">
+                              <div className="font-mono text-xs sm:text-sm font-semibold">{scan.artNumber || '-'}</div>
+                              <div className="text-[10px] text-muted-foreground">{scan.masterArtName ?? '—'}</div>
                             </TableCell>
-                            <TableCell className="font-mono text-xs sm:text-sm px-3 sm:px-4">
-                              {scan.colorNumber || '-'}
+                            <TableCell className="px-3 sm:px-4">
+                              <div className="font-mono text-xs sm:text-sm">{scan.colorNumber || '-'}</div>
+                              <div className="text-[10px] text-muted-foreground">{scan.masterColorName ?? '—'}</div>
                             </TableCell>
                             <TableCell className="font-mono text-xs sm:text-sm px-3 sm:px-4">
                               {scan.sizeNumber || '-'}

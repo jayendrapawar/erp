@@ -1,9 +1,12 @@
 'use client'
 
-import { useState, useMemo, useTransition, useRef } from 'react'
+import { useState, useMemo, useTransition, useRef, useEffect } from 'react'
 import { fuzzyFilter } from '@/lib/fuzzy'
-import { saveArticle, importArticles, deleteArticle, getArticleSizes } from '@/app/actions/articles'
+import { saveArticle, importArticles, deleteArticle, getArticleSizes, getArticles, getArticleMrps, getMissingArticles } from '@/app/actions/articles'
+import type { MissingArticle } from '@/app/actions/articles'
 import type { Article } from '@/app/actions/articles'
+import { NewArticleDialog } from '@/components/scanner/new-article-dialog'
+import { parseQr } from '@/lib/qr-parser'
 
 // ── CSV parser ────────────────────────────────────────────────────────────────
 // Expected columns (case-insensitive, order flexible):
@@ -81,11 +84,25 @@ const EMPTY_FORM: ArticleForm = {
 
 interface Props {
   initialArticles: Article[]
+  initialMissingArticles: MissingArticle[]
   onListChange?: (list: Article[]) => void
 }
 
-export function ArticlesTab({ initialArticles, onListChange }: Props) {
+export function ArticlesTab({ initialArticles, initialMissingArticles, onListChange }: Props) {
   const [articleList, setArticleList] = useState<Article[]>(initialArticles)
+  const [missingArticles, setMissingArticles] = useState(initialMissingArticles)
+  const [mrpsByCode, setMrpsByCode] = useState<Record<string, string[]>>({})
+  const [missingDialog, setMissingDialog] = useState<MissingArticle | null>(null)
+  const mrpKey = (code: string) => code.trim().toUpperCase().replace(/\s+/g, ' ')
+
+  useEffect(() => { getArticleMrps().then(setMrpsByCode).catch(() => setMrpsByCode({})) }, [])
+
+  async function refreshMasterLists() {
+    const [articles, missing, mrps] = await Promise.all([getArticles(), getMissingArticles(), getArticleMrps()])
+    updateArticles(articles)
+    setMissingArticles(missing)
+    setMrpsByCode(mrps)
+  }
 
   function updateArticles(next: Article[]) {
     setArticleList(next)
@@ -295,6 +312,29 @@ export function ArticlesTab({ initialArticles, onListChange }: Props) {
         </div>
       )}
 
+      <section className="mb-5 rounded-xl border border-amber-500/30 p-4">
+        <h3 className="mb-3 font-semibold">Missing articles ({missingArticles.length})</h3>
+        {missingArticles.length === 0 ? <p className="text-sm text-muted-foreground">No scanned code and colour pairs are missing from master articles.</p> : <div className="space-y-2">
+          {missingArticles.map((item) => <div key={`${item.artCode}|${item.colorCode}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-muted/40 p-3 text-sm">
+            <span className="font-mono">{item.artCode} / {item.colorCode}</span>
+            <span>{item.boxCount} boxes</span>
+            <span>Sizes: {item.sizes.join(', ') || '—'}</span>
+            <span>MRPs: {item.mrps.join(', ') || '—'}</span>
+            <button disabled={!item.rawQr} onClick={() => setMissingDialog(item)} className="ml-auto rounded-md border px-3 py-1.5 text-xs font-medium disabled:opacity-50">Create / Link</button>
+          </div>)}
+        </div>}
+      </section>
+      {missingDialog && <NewArticleDialog
+        rawQr={missingDialog.rawQr}
+        parsed={parseQr(missingDialog.rawQr)}
+        mode="unknown"
+        saveScan={false}
+        initialSizes={missingDialog.sizes.join(', ') || undefined}
+        onClose={() => setMissingDialog(null)}
+        onSaveLater={async () => false}
+        onLinked={async () => { setMissingDialog(null); await refreshMasterLists() }}
+      />}
+
       {filtered.length === 0 && (
         <p className="text-center py-10 text-sm text-muted-foreground">No articles found</p>
       )}
@@ -306,7 +346,7 @@ export function ArticlesTab({ initialArticles, onListChange }: Props) {
             <div className="flex items-start justify-between gap-2 px-4 pt-4 pb-3">
               <div className="min-w-0">
                 <p className="font-semibold text-base text-foreground truncate">{a.artName || '—'}</p>
-                {a.artCode && <p className="text-xs text-muted-foreground font-mono mt-0.5">{a.artCode}</p>}
+                {a.artCode && <p className="text-xs text-muted-foreground font-mono mt-0.5">{a.artCode}{mrpsByCode[mrpKey(a.artCode)]?.length ? ` · MRPs ${mrpsByCode[mrpKey(a.artCode)].join(', ')}` : ''}</p>}
               </div>
               {a.colorCode && (
                 <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium border border-border bg-muted">
@@ -373,7 +413,7 @@ export function ArticlesTab({ initialArticles, onListChange }: Props) {
                   <td className="px-2 py-3 max-w-[160px]">
                     <p className="font-medium text-foreground truncate text-sm" title={a.artName}>{a.artName || '—'}</p>
                   </td>
-                  <td className="px-2 py-3 font-mono text-xs text-foreground whitespace-nowrap">{a.artCode || '—'}</td>
+                  <td className="px-2 py-3 font-mono text-xs text-foreground whitespace-nowrap">{a.artCode || '—'}{mrpsByCode[mrpKey(a.artCode)]?.length ? <span className="block font-sans text-[10px] text-muted-foreground">MRPs: {mrpsByCode[mrpKey(a.artCode)].join(', ')}</span> : null}</td>
                   <td className="px-2 py-3 text-sm text-foreground whitespace-nowrap">{a.color || '—'}</td>
                   <td className="px-2 py-3 whitespace-nowrap">
                     {a.colorCode ? (

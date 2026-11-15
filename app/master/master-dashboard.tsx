@@ -9,6 +9,7 @@ import { VendorsTab } from './vendors-tab'
 import type { Vendor } from './vendors-tab'
 import { ArticlesTab } from './articles-tab'
 import type { Article } from './articles-tab'
+import type { MissingArticle } from '@/app/actions/articles'
 import { SetsTab } from './sets-tab'
 import type { OrderSet } from './sets-tab'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -167,6 +168,7 @@ interface Props {
   currentUserId: string
   vendors: Vendor[]
   articles: Article[]
+  missingArticles: MissingArticle[]
   sets: OrderSet[]
   /** When true, only Vendors and Articles tabs are shown (hides Users tab) — used for accountant role */
   isAccountant?: boolean
@@ -174,7 +176,7 @@ interface Props {
 
 const ROLES: AppRole[] = ['admin', 'accountant', 'salesman', 'picker', 'dispatcher', 'user']
 
-export function MasterDashboard({ users, currentUserId, vendors: initialVendors, articles: initialArticles, sets: initialSets, isAccountant = false }: Props) {
+export function MasterDashboard({ users, currentUserId, vendors: initialVendors, articles: initialArticles, missingArticles, sets: initialSets, isAccountant = false }: Props) {
   const [isPending, startTransition] = useTransition()
   const [search, setSearch] = useState('')
   const [vendorList, setVendorList] = useState<Vendor[]>(initialVendors)
@@ -329,7 +331,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
 
           {/* ── Articles tab ── */}
           <TabsContent value="articles">
-            <ArticlesTab initialArticles={articleList} onListChange={setArticleList} />
+            <ArticlesTab initialArticles={articleList} initialMissingArticles={missingArticles} onListChange={setArticleList} />
           </TabsContent>
 
           {/* ── Sets tab (admin only) ── */}
