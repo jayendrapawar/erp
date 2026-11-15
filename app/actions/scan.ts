@@ -3,11 +3,13 @@
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { scans } from '@/lib/db/schema'
+import { articles, articleMrps } from '@/lib/db/schema'
 import { and, eq, isNull, desc, sql } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import { DUPLICATE_QR_ERROR, INVALID_QR_ERROR } from '@/lib/errors'
 import { parseQr, isValidWarehouseQr } from '@/lib/qr-parser'
+import { normalizeArticleValue } from '@/lib/article-utils'
 
 async function getUser() {
   const session = await auth.api.getSession({ headers: await headers() })
@@ -35,6 +37,15 @@ export async function recordScan(rawQrCode: string, notes?: string): Promise<Rec
 
   const user = await getUser()
   const parsed = parseQr(rawQrCode)
+
+  const result = await saveParsedScan(rawQrCode, parsed, user.name, notes)
+  if (result.ok) {
+    try { await recordArticleMrp(parsed) } catch { /* Master price history must never block a scan. */ }
+  }
+  return result
+}
+
+async function saveParsedScan(rawQrCode: string, parsed: ReturnType<typeof parseQr>, userName: string | null, notes?: string): Promise<RecordScanResult> {
 
   const existing = await db
     .select({ id: scans.id, scannedByName: scans.scannedByName })
@@ -101,12 +112,44 @@ export async function recordScan(rawQrCode: string, notes?: string): Promise<Rec
       mfgMonth,
       mfgYear,
       notes,
-      scannedByName: user.name ?? '',
+      scannedByName: userName ?? '',
       quantity: 1,
     })
     .returning()
 
   return { ok: true, data: rows[0] }
+}
+
+async function recordArticleMrp(parsed: ReturnType<typeof parseQr>) {
+  if (!parsed.mrp || !parsed.articleCode) return
+  const normalizedCode = normalizeArticleValue(parsed.articleCode)
+  const [known] = await db.select({ id: articles.id }).from(articles)
+    .where(sql`upper(regexp_replace(btrim(${articles.artCode}), '\\s+', ' ', 'g')) = ${normalizedCode}`).limit(1)
+  if (!known) return
+  await db.insert(articleMrps).values({ artCode: normalizedCode, mrp: String(parsed.mrp) }).onConflictDoNothing()
+}
+
+export type MasterScanCheck =
+  | { status: 'duplicate' }
+  | { status: 'known' }
+  | { status: 'new_colour'; artName: string }
+  | { status: 'unknown' }
+
+export async function checkScanAgainstMaster(rawQr: string): Promise<MasterScanCheck> {
+  await getUser()
+  if (!isValidWarehouseQr(rawQr)) throw new Error('Invalid QR')
+  const duplicate = await db.select({ id: scans.id }).from(scans).where(
+    sql`${scans.rawQrCode} = ${rawQr} OR ${scans.boxCodes} @> ${JSON.stringify([rawQr])}::jsonb`
+  ).limit(1)
+  if (duplicate.length) return { status: 'duplicate' }
+  const parsed = parseQr(rawQr)
+  const code = normalizeArticleValue(parsed.articleCode)
+  const color = normalizeArticleValue(parsed.colorCode)
+  const codeRows = await db.select({ id: articles.id, artName: articles.artName, colorCode: articles.colorCode })
+    .from(articles).where(sql`upper(regexp_replace(btrim(${articles.artCode}), '\\s+', ' ', 'g')) = ${code}`)
+  if (!codeRows.length) return { status: 'unknown' }
+  if (codeRows.some((row) => normalizeArticleValue(row.colorCode) === color)) return { status: 'known' }
+  return { status: 'new_colour', artName: codeRows[0].artName }
 }
 
 export async function getRecentScans(limit = 50) {

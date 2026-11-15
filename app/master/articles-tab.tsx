@@ -7,7 +7,7 @@ import type { Article } from '@/app/actions/articles'
 
 // ── CSV parser ────────────────────────────────────────────────────────────────
 // Expected columns (case-insensitive, order flexible):
-// artName, artCode, color, colorCode, maxSize, minSize
+// artName, artCode, color, colorCode, maxSize, minSize, optional sizes
 function parseCsvLine(line: string): string[] {
   const cells: string[] = []
   let cell = ''
@@ -33,7 +33,7 @@ function parseCsvLine(line: string): string[] {
   return cells
 }
 
-function parseCsv(text: string): Omit<Article, 'id' | 'createdAt' | 'updatedAt'>[] {
+function parseCsv(text: string): (Omit<Article, 'id' | 'createdAt' | 'updatedAt'> & { customSizes?: string })[] {
   const lines = text.split(/\r?\n/).filter(l => l.trim())
   if (lines.length < 2) return []
 
@@ -52,7 +52,8 @@ function parseCsv(text: string): Omit<Article, 'id' | 'createdAt' | 'updatedAt'>
       colorCode: get('colorcode') || '',
       maxSize:   get('maxsize') || get('max') || '',
       minSize:   get('minsize') || get('min') || '',
-    }] as Omit<Article, 'id' | 'createdAt' | 'updatedAt'>[]
+      customSizes: get('sizes'),
+    }]
   })
 }
 
