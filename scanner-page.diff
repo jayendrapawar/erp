@@ -1,0 +1,202 @@
+﻿diff --git a/components/scanner-page.tsx b/components/scanner-page.tsx
+index 1671894..f4653d7 100644
+--- a/components/scanner-page.tsx
++++ b/components/scanner-page.tsx
+@@ -6,7 +6,8 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
+ import { useRouter } from 'next/navigation'
+ import { addManualEntry } from '@/app/actions/dashboard'
+ import { createFlag } from '@/app/actions/flags'
+-import { deleteScan, getCurrentUserName, getRecentScans, recordScan } from '@/app/actions/scan'
++import { checkScanAgainstMaster, deleteScan, getCurrentUserName, getRecentScans, recordScan } from '@/app/actions/scan'
++import { NewArticleDialog } from '@/components/scanner/new-article-dialog'
+ import { LanguageToggle } from '@/components/language-toggle'
+ import { DashboardPage } from '@/components/dashboard-page'
+ import { DEFAULT_MANUAL_FORM, SCAN_INTERVAL_MS, SCAN_MAX_DIM } from '@/components/scanner/constants'
+@@ -25,7 +26,7 @@ import { DUPLICATE_ENTRY_ERROR, DUPLICATE_QR_ERROR, INVALID_QR_ERROR } from '@/l
+ import { useLanguage } from '@/lib/language-context'
+ import { cacheFlags, enqueuePendingFlag, getCachedFlags } from '@/lib/offline-flags'
+ import { enqueue, getQueue, removeFromQueue, type OfflineEntry } from '@/lib/offline-queue'
+-import { isValidWarehouseQr, parseQr } from '@/lib/qr-parser'
++import { isValidWarehouseQr, parseQr, type ParsedQr } from '@/lib/qr-parser'
+ import { syncFlags, syncQueue, type SyncResult } from '@/lib/sync-engine'
+ import { useOnline } from '@/lib/use-online'
+ 
+@@ -51,7 +52,16 @@ export function ScannerPage() {
+   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+   const scanningRef = useRef(false)
+   const scanPausedRef = useRef(false)
++  const articleDialogOpenRef = useRef(false)
++  const scanDecisionPendingRef = useRef(false)
+   const [qrDetected, setQrDetected] = useState(false)
++  const [newArticleDialog, setNewArticleDialog] = useState<{
++    rawQr: string
++    parsed: ParsedQr
++    mode: 'unknown' | 'new_colour'
++    existingName?: string
++    notes?: string
++  } | null>(null)
+ 
+   const [flags, setFlags]             = useState<string[]>([])
+   const [activeFlag, setActiveFlag]   = useState<string>('')
+@@ -456,8 +466,8 @@ export function ScannerPage() {
+         scanPausedRef.current = true
+         setQrDetected(true)
+         setTimeout(() => {
+-          scanPausedRef.current = false
+-          setQrDetected(false)
++          if (!articleDialogOpenRef.current && !scanDecisionPendingRef.current) scanPausedRef.current = false
++          if (!articleDialogOpenRef.current) setQrDetected(false)
+         }, 2000)
+         handleCameraScan(code.data)
+       }
+@@ -509,26 +519,118 @@ export function ScannerPage() {
+       showSuccess(t('offlineSaved'))
+       return
+     }
++    scanPausedRef.current = true
++    scanDecisionPendingRef.current = true
++    try {
++      let masterCheck
++      try {
++        masterCheck = await checkScanAgainstMaster(qrCode)
++      } catch {
++        await saveCameraScanNormally(qrCode)
++        return
++      }
++      if (masterCheck.status === 'unknown' || masterCheck.status === 'new_colour') {
++        const parsed = parseQr(qrCode)
++        articleDialogOpenRef.current = true
++        setNewArticleDialog({
++          rawQr: qrCode,
++          parsed,
++          mode: masterCheck.status,
++          notes: activeFlagRef.current ? `[Flag: ${activeFlagRef.current}]` : undefined,
++          ...(masterCheck.status === 'new_colour' ? { existingName: masterCheck.artName } : {}),
++        })
++        return
++      }
++      await saveCameraScanNormally(qrCode)
++    } finally {
++      scanDecisionPendingRef.current = false
++      if (!articleDialogOpenRef.current) setTimeout(() => {
++        if (!articleDialogOpenRef.current && !scanDecisionPendingRef.current) {
++          scanPausedRef.current = false
++          setQrDetected(false)
++        }
++      }, 2000)
++    }
++  }
+ 
+-    const res = await recordScan(qrCode, activeFlagRef.current ? `[Flag: ${activeFlagRef.current}]` : undefined)
+-    if (!res.ok) {
+-      if (res.error === INVALID_QR_ERROR) {
+-        showWarning('QR code format not recognised. Only warehouse QR codes can be scanned.')
+-      } else if (res.error === DUPLICATE_QR_ERROR) {
+-        const who = res.scannedByName
+-        showWarning(who ? `${t('duplicateByUser')} ${who}` : t('duplicateQR'))
+-      } else {
+-        showError(t('scanRecordError'))
++  async function saveCameraScanNormally(qrCode: string): Promise<boolean> {
++    try {
++      const res = await recordScan(qrCode, activeFlagRef.current ? `[Flag: ${activeFlagRef.current}]` : undefined)
++      if (!res.ok) {
++        if (res.error === INVALID_QR_ERROR) showWarning('QR code format not recognised. Only warehouse QR codes can be scanned.')
++        else if (res.error === DUPLICATE_QR_ERROR) {
++          const who = res.scannedByName
++          showWarning(who ? `${t('duplicateByUser')} ${who}` : t('duplicateQR'))
++        } else showError(t('scanRecordError'))
++        return false
+       }
+-      return
++      completeCameraScan(res.data, t('cameraScanSuccess'))
++      return true
++    } catch {
++      showError(t('scanRecordError'))
++      return false
+     }
+-    setLastCameraScan(res.data)
++  }
++
++  function completeCameraScan(scan: RecentScan, message: string) {
++    setLastCameraScan(scan)
+     setDailyScanCount(incrementDailyScanCount())
+     triggerScanFeedback()
+-    showSuccess(t('cameraScanSuccess'))
++    showSuccess(message)
+     loadRecentScans()
+   }
+ 
++  function resumeAfterArticleDialog() {
++    articleDialogOpenRef.current = false
++    scanDecisionPendingRef.current = false
++    scanPausedRef.current = true
++    setNewArticleDialog(null)
++    setTimeout(() => {
++      if (!articleDialogOpenRef.current && !scanDecisionPendingRef.current) {
++        scanPausedRef.current = false
++        setQrDetected(false)
++      }
++    }, 2000)
++  }
++
++  async function savePendingScanForLater(qrCode: string): Promise<boolean> {
++    try {
++      const result = await recordScan(qrCode, activeFlagRef.current ? `[Flag: ${activeFlagRef.current}]` : undefined)
++      if (!result.ok) {
++        if (result.error === DUPLICATE_QR_ERROR) {
++          const who = result.scannedByName
++          showWarning(who ? `${t('duplicateByUser')} ${who}` : t('duplicateQR'))
++          resumeAfterArticleDialog()
++          return true
++        }
++        showError(t('scanRecordError'))
++        return false
++      }
++      completeCameraScan(result.data, t('cameraScanSuccess'))
++      resumeAfterArticleDialog()
++      return true
++    } catch {
++      showError(t('scanRecordError'))
++      return false
++    }
++  }
++
++  async function finishArticleLink(qrCode: string) {
++    let savedScan: RecentScan | undefined
++    try {
++      const recent = await getRecentScans(50)
++      setRecentScans(recent)
++      savedScan = recent.find((scan) => scan.rawQrCode === qrCode || scan.boxCodes?.includes(qrCode))
++    } catch {
++      // The link action already saved the scan; recent history can refresh later.
++    }
++    setLastCameraScan(savedScan ?? null)
++    setDailyScanCount(incrementDailyScanCount())
++    triggerScanFeedback()
++    showSuccess('Article linked and scan saved.')
++    resumeAfterArticleDialog()
++  }
++
+   async function handleManualForm(e: FormEvent<HTMLFormElement>) {
+     e.preventDefault()
+     setManualLoading(true)
+@@ -1421,6 +1523,19 @@ export function ScannerPage() {
+ 
+         </Tabs>
+ 
++        {newArticleDialog && (
++          <NewArticleDialog
++            rawQr={newArticleDialog.rawQr}
++            parsed={newArticleDialog.parsed}
++            mode={newArticleDialog.mode}
++            existingName={newArticleDialog.existingName}
++            notes={newArticleDialog.notes}
++            onClose={() => { void savePendingScanForLater(newArticleDialog.rawQr) }}
++            onSaveLater={() => savePendingScanForLater(newArticleDialog.rawQr)}
++            onLinked={() => finishArticleLink(newArticleDialog.rawQr)}
++          />
++        )}
++
+         {/* ΓöÇΓöÇ Delete confirm dialog ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */}
+         {deleteTarget && (
+           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
