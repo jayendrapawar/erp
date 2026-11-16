@@ -8,7 +8,7 @@ import { isRedirectError } from 'next/dist/client/components/redirect-error'
 import { getAllUsers } from '@/app/actions/users'
 import { MasterDashboard } from './master-dashboard'
 import { getVendors } from '@/app/actions/vendors'
-import { getArticles } from '@/app/actions/articles'
+import { getArticles, getMissingArticles } from '@/app/actions/articles'
 import { getSets } from '@/app/actions/sets'
 
 export const metadata = {
@@ -32,11 +32,12 @@ export default async function MasterPage() {
     redirect('/sign-in')
   }
 
-  const [allUsers, vendors, articles, sets] = await Promise.all([
+  const [allUsers, vendors, articles, sets, missingArticles] = await Promise.all([
     getAllUsers(),
     getVendors(),
     getArticles(),
     getSets(),
+    getMissingArticles(),
   ])
 
   return (
@@ -45,6 +46,7 @@ export default async function MasterPage() {
       currentUserId={currentUserId}
       vendors={vendors}
       articles={articles}
+      missingArticles={missingArticles}
       sets={sets}
       isAccountant={isAccountant}
     />

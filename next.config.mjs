@@ -9,6 +9,17 @@ const nextConfig = {
     '192.168.29.112',
     '192.168.*.*',
   ],
+  // Send the extra production alias to the primary domain so the Google OAuth
+  // callback and session cookie always live on the same host.
+  // localhost is deliberately NOT redirected, so the app can run on a laptop.
+  async redirects() {
+    return ['shayona-inventory-managment.vercel.app'].map((host) => ({
+      source: '/:path*',
+      has: [{ type: 'host', value: host }],
+      destination: 'https://shayona-footwear.vercel.app/:path*',
+      permanent: false,
+    }))
+  },
 }
 
 export default nextConfig

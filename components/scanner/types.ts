@@ -2,7 +2,8 @@ import type { getRecentScans } from '@/app/actions/scan'
 import type { OfflineEntry } from '@/lib/offline-queue'
 import type { SyncResult } from '@/lib/sync-engine'
 
-export type RecentScan = Awaited<ReturnType<typeof getRecentScans>>[number]
+type LoadedRecentScan = Awaited<ReturnType<typeof getRecentScans>>[number]
+export type RecentScan = Omit<LoadedRecentScan, 'masterArtName' | 'masterColorName'> & Partial<Pick<LoadedRecentScan, 'masterArtName' | 'masterColorName'>>
 
 export interface ManualFormState {
   artNumber: string

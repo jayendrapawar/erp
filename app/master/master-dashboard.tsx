@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useTransition, useEffect, useRef } from 'react'
+import { useState, useTransition, useEffect, useRef, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import { RolePill, fmt, PageHeader } from '../orders/_components/shared'
 import { updateUserRole } from '@/app/actions/users'
 import type { AppRole } from '@/app/actions/users'
@@ -8,6 +9,7 @@ import { VendorsTab } from './vendors-tab'
 import type { Vendor } from './vendors-tab'
 import { ArticlesTab } from './articles-tab'
 import type { Article } from './articles-tab'
+import type { MissingArticle } from '@/app/actions/articles'
 import { SetsTab } from './sets-tab'
 import type { OrderSet } from './sets-tab'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -22,9 +24,10 @@ interface RoleSelectorProps {
 
 function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelectorProps) {
   const [isOpen, setIsOpen] = useState(false)
-  const [openUpward, setOpenUpward] = useState(false)
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({})
   const containerRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   const activeRoles = (currentRoles ?? 'user')
     .split(',')
@@ -33,20 +36,47 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false)
-      }
+      const target = event.target as Node
+      if (containerRef.current?.contains(target) || menuRef.current?.contains(target)) return
+      setIsOpen(false)
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  // The menu is rendered in a portal with fixed positioning, so close it when the page moves underneath it.
+  useEffect(() => {
+    if (!isOpen) return
+    function close(event: Event) {
+      if (menuRef.current?.contains(event.target as Node)) return
+      setIsOpen(false)
+    }
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('resize', close)
+    return () => {
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('resize', close)
+    }
+  }, [isOpen])
+
   function handleButtonClick() {
     if (!isOpen && buttonRef.current) {
       const rect = buttonRef.current.getBoundingClientRect()
+      const menuHeight = 230
+      const gap = 4
       const spaceBelow = window.innerHeight - rect.bottom
-      // Dropdown menu is about 220px tall. If space is less than 240px, open upwards.
-      setOpenUpward(spaceBelow < 240)
+      const spaceAbove = rect.top
+      const openUpward = spaceBelow < menuHeight + gap && spaceAbove > spaceBelow
+      const available = Math.max(openUpward ? spaceAbove : spaceBelow, 120) - gap * 2
+      setMenuStyle({
+        position: 'fixed',
+        left: rect.left,
+        width: Math.max(rect.width, 192),
+        maxHeight: available,
+        ...(openUpward
+          ? { bottom: window.innerHeight - rect.top + gap }
+          : { top: rect.bottom + gap }),
+      })
     }
     setIsOpen(!isOpen)
   }
@@ -103,10 +133,12 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
         </svg>
       </button>
 
-      {isOpen && (
-        <div className={`absolute right-0 w-full sm:w-48 rounded-md shadow-lg bg-popover border border-border ring-1 ring-black ring-opacity-5 z-50 p-2 space-y-1 ${
-          openUpward ? 'bottom-full mb-1 origin-bottom-right' : 'top-full mt-1 origin-top-right'
-        }`}>
+      {isOpen && createPortal(
+        <div
+          ref={menuRef}
+          style={menuStyle}
+          className="overflow-y-auto rounded-md shadow-lg bg-popover border border-border z-50 p-2 space-y-1"
+        >
           {['admin', 'accountant', 'salesman', 'picker', 'dispatcher', 'user'].map(r => {
             const isChecked = activeRoles.includes(r)
             return (
@@ -125,7 +157,8 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
               </label>
             )
           })}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )
@@ -135,6 +168,7 @@ interface Props {
   currentUserId: string
   vendors: Vendor[]
   articles: Article[]
+  missingArticles: MissingArticle[]
   sets: OrderSet[]
   /** When true, only Vendors and Articles tabs are shown (hides Users tab) — used for accountant role */
   isAccountant?: boolean
@@ -142,7 +176,7 @@ interface Props {
 
 const ROLES: AppRole[] = ['admin', 'accountant', 'salesman', 'picker', 'dispatcher', 'user']
 
-export function MasterDashboard({ users, currentUserId, vendors: initialVendors, articles: initialArticles, sets: initialSets, isAccountant = false }: Props) {
+export function MasterDashboard({ users, currentUserId, vendors: initialVendors, articles: initialArticles, missingArticles, sets: initialSets, isAccountant = false }: Props) {
   const [isPending, startTransition] = useTransition()
   const [search, setSearch] = useState('')
   const [vendorList, setVendorList] = useState<Vendor[]>(initialVendors)
@@ -297,7 +331,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
 
           {/* ── Articles tab ── */}
           <TabsContent value="articles">
-            <ArticlesTab initialArticles={articleList} onListChange={setArticleList} />
+            <ArticlesTab initialArticles={articleList} initialMissingArticles={missingArticles} onListChange={setArticleList} />
           </TabsContent>
 
           {/* ── Sets tab (admin only) ── */}

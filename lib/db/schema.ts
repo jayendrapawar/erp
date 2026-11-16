@@ -1,4 +1,5 @@
-import { pgTable, text, timestamp, boolean, serial, integer, jsonb, numeric, unique, pgEnum, index } from 'drizzle-orm/pg-core'
+import { pgTable, text, timestamp, boolean, serial, integer, jsonb, numeric, unique, pgEnum, index, uniqueIndex, check } from 'drizzle-orm/pg-core'
+import { sql } from 'drizzle-orm'
 
 // --- Better Auth required tables -------------------------------------------
 // Column names are camelCase to match Better Auth's defaults. Do not rename.
@@ -96,11 +97,30 @@ export const articles = pgTable('articles', {
   colorCode: text('colorCode').notNull().default(''),
   maxSize:   text('maxSize').notNull().default(''),
   minSize:   text('minSize').notNull().default(''),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
 }, (t) => [
   index('articles_art_name_idx').on(t.artName),
+  uniqueIndex('articles_artCode_colorCode_unique')
+    .on(sql`upper(regexp_replace(btrim(${t.artCode}), '\\s+', ' ', 'g'))`, sql`upper(regexp_replace(btrim(${t.colorCode}), '\\s+', ' ', 'g'))`)
+    .where(sql`btrim(${t.artCode}) <> '' AND btrim(${t.colorCode}) <> ''`),
 ])
+
+export const articleMrps = pgTable('article_mrps', {
+  id: serial('id').primaryKey(),
+  artCode: text('artCode').notNull(),
+  mrp: numeric('mrp', { precision: 10, scale: 2 }).notNull(),
+}, (t) => [
+  unique('article_mrps_artCode_mrp_unique').on(t.artCode, t.mrp),
+  check('article_mrps_artCode_normalized_check', sql`${t.artCode} = upper(btrim(${t.artCode}))`),
+])
+
+export const articleScanLinks = pgTable('article_scan_links', {
+  id: serial('id').primaryKey(),
+  articleId: integer('articleId').notNull().references(() => articles.id, { onDelete: 'cascade' }),
+  action: text('action').$type<'created' | 'linked'>().notNull(),
+  rawQr: text('rawQr').notNull(),
+  userName: text('userName').notNull().default(''),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+})
 
 export const articleColors = pgTable('article_colors', {
   id:          serial('id').primaryKey(),
