@@ -8,7 +8,7 @@ export const ARTICLE_TYPE_PREFIXES: string[] = ['FL', 'P', 'S']
 export const DIVISION_MAP: Record<string, string> = {
   FL: 'Flite EVA',
   P: 'Flite PU',
-  S: 'Sparx',
+  S: 'SparxR',
 }
 
 export const DEFAULT_DIVISION = 'Bahamas'
