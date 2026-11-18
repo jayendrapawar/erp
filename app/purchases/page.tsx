@@ -21,6 +21,7 @@ export default async function Purchases() {
       initialSummary={summary}
       initialBills={bills}
       canUpload={hasPermission(u.roles, 'purchases.upload')}
+      mailReady={Boolean(process.env.BILL_MAIL_USER && process.env.BILL_MAIL_PASSWORD && process.env.BILL_MAIL_FROM)}
       canReceive={hasPermission(u.roles, 'purchases.receive')}
       canManage={hasPermission(u.roles, 'purchases.manage')}
     />

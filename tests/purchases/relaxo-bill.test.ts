@@ -51,6 +51,29 @@ describe('Relaxo bill reader', () => {
     assert.equal(b.lines[1].description, 'PUG 183 G MOUSE BROWN 0810')
   })
 
+  test('Sparx layout: leading space and the description wrapping before "/n"', () => {
+    const page = [
+      'PERFORMA INVOICE', 'RELAXO FOOTWEARS LIMITED', 'PO No. : 17/11/2026,', '12345678',
+      'RV0526000001', '17.11.2026', '502213564,', '17.11.2026,', '0520426736/1087',
+      ' 1 64029190 SS0810G-BKDG0610, SPARX SANDALS 810 G BLACK',
+      'D.GREY 0610 /10',
+      'A 10 12 120 849.00 566.00 67920.00 6112.80',
+      '9.00 %',
+      ' 2 64021990 SN1167G-BKSL0610, SPARX SHOES 1167 G BLACK',
+      'SILVER 0610 /1',
+      'A 1 12 12 1349.00 835.10 10021.20 901.91',
+      'Total 11 132 77,941.20 7,014.71 0.00 0.00 70926.49 0 0 3546.32 0.00 74472.81',
+    ].join('\n')
+    const r = parseRelaxoBill([page])
+    assert.ok(r.ok, JSON.stringify(r))
+    if (!r.ok) return
+    assert.deepEqual([r.bill.refNo, r.bill.billDate, r.bill.poNo], ['0520426736/1087', '2026-11-17', '17/11/2026'])
+    assert.deepEqual(r.bill.lines.map((l) => [l.articleCode, l.colourCode, l.sizeFrom, l.sizeTo, l.cartons, l.pairsPerCarton, l.mrp, l.description]), [
+      ['SS0810G', 'BKDG', '6', '10', 10, 12, 849, 'SPARX SANDALS 810 G BLACK D.GREY 0610'],
+      ['SN1167G', 'BKSL', '6', '10', 1, 12, 1349, 'SPARX SHOES 1167 G BLACK SILVER 0610'],
+    ])
+  })
+
   test('refuses a bill whose lines do not add up to its total', () => {
     const r = parseRelaxoBill([page1, page2.replace('Total 5 186', 'Total 6 186')])
     assert.equal(r.ok, false)

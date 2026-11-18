@@ -1,6 +1,6 @@
 # Purchases: expected stock, carton receiving, verification
 
-Status: built on development, 18 Nov 2026 (migration 0007). Home → Purchases.
+Status: built on development, 18–19 Nov 2026 (migrations 0007, 0008). Home → Purchases.
 Owner decisions: bill PDFs by upload now, Yahoo mail later; a matched carton adds its contents to
 stock at once (as 'carton' stock); bills not received 5 days after the bill date are overdue.
 
@@ -21,6 +21,25 @@ stock at once (as 'carton' stock); bills not received 5 days after the bill date
   line's pairs per carton and size range (code 0810 → `810`) is chosen automatically; if several
   fit (Gents / Ladies …) the bill shows them to choose; if none, it says to add one in
   Master → Assortments. The segment is never guessed from the code.
+
+## Bills by mail (Check mail)
+
+Relaxo mails every bill from `sys_admin@relaxofootwear.com` to the shop's Yahoo mailbox, one PDF per
+mail, subject "Performa Invoice No <ref>". **Check mail** (admin, accountant) reads mails from that
+sender in INBOX and the "Relaxo" folder (IMAP, read-only: nothing is moved or marked) and imports the
+PDFs exactly like an upload (`lib/purchases/mail.ts`, `POST /api/purchases/check-mail`).
+
+- Which mails: since one day before the newest mail already looked at (or the oldest mail that
+  failed), the last 7 days on the first check, or from a date chosen on the screen. Up to 15 mails per
+  press (time limit); the screen says when more are left.
+- Each mail is recorded in `bill_mail_messages` (migration 0008) and never imported twice; failed
+  mails are retried. A bill already uploaded by hand is recognised (same reference) and skipped.
+- Attachments are fetched whole in one request: chunked downloads from Yahoo sometimes arrived cut
+  short (48 KB of a 519 KB PDF) and were unreadable.
+- Settings (env, never committed): `BILL_MAIL_IMAP_HOST`, `BILL_MAIL_USER`, `BILL_MAIL_PASSWORD` (a Yahoo
+  **app password**), `BILL_MAIL_FROM`. Production needs the same four in Vercel. On demand only — no polling.
+- Checked 19 Nov 2026 on development: 7 bill mails of the last week → 7 bills (Sparx and Bahamas),
+  matching the PDFs in Downloads byte for byte.
 
 ## Receiving cartons (warehouse, supervisor, admin)
 
@@ -66,9 +85,9 @@ Not cached; no polling. Receiving refreshes the header figures at most every 2 s
 
 ## Not built yet / open
 
-- **Yahoo mail**: "Check mail" to read new bill PDFs (needs a Yahoo app password and the sender
-  address). Upload is the way in until then.
-- The final **tax invoice** for goods already on a proforma: format and reference not seen yet.
-- Pack letter meaning ("A" on every sample) — used only to match bill lines and labels.
+- Every bill seen so far (8 samples, 7 mails) is a "PERFORMA INVOICE"; the owner treats these as the
+  actual bills. A separate tax invoice, if one ever comes, is not handled yet.
+- Pack letter: "A" on every sample; owner's guess (19 Nov 2026): another letter such as "B" may be
+  factory seconds. Used to match bill lines and labels; a carton with a letter other than A gets a warning.
 - Flite PU articles and assortments are not in the master yet, so the four sample bills' cartons
   would be recorded but not added to stock until they are.

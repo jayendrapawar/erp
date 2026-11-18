@@ -12,11 +12,13 @@ import {
 } from '@/app/actions/purchases'
 import type { BillDetail, BillRow, ExpectedStockRow, PurchaseSummary, ReceiptRow, ReceiveOutcome } from '@/lib/purchases/store'
 import type { UploadFileResult } from '@/app/api/purchases/upload/route'
+import type { MailCheckResult } from '@/lib/purchases/mail'
 
 interface Props {
   initialSummary: PurchaseSummary
   initialBills: BillRow[]
   canUpload: boolean
+  mailReady: boolean
   canReceive: boolean
   canManage: boolean
 }
@@ -50,7 +52,7 @@ const STATUS: Record<string, { label: string; cls: string }> = {
 }
 
 /** Purchases: expected stock from supplier bills, receiving cartons against them. */
-export function PurchasesPage({ initialSummary, initialBills, canUpload, canReceive, canManage }: Props) {
+export function PurchasesPage({ initialSummary, initialBills, canUpload, mailReady, canReceive, canManage }: Props) {
   const [summary, setSummary] = useState(initialSummary)
   const [bills, setBills] = useState(initialBills)
   const [tab, setTab] = useState<string>('bills')
@@ -103,7 +105,7 @@ export function PurchasesPage({ initialSummary, initialBills, canUpload, canRece
             <TabsTrigger value="unexpected" className="text-xs sm:text-sm">Unexpected ({summary.unexpectedCartons})</TabsTrigger>
           </TabsList>
           <TabsContent value="bills">
-            <BillsTab bills={bills} canUpload={canUpload} onOpen={setOpenBill} onUploaded={refresh} />
+            <BillsTab bills={bills} canUpload={canUpload} mailReady={mailReady} onOpen={setOpenBill} onUploaded={refresh} />
           </TabsContent>
           <TabsContent value="receive">
             {tab === 'receive' && (canReceive
@@ -145,12 +147,14 @@ function Progress({ done, total }: { done: number; total: number }) {
 
 // ── Bills ──────────────────────────────────────────────────────────────
 
-function BillsTab({ bills, canUpload, onOpen, onUploaded }: { bills: BillRow[]; canUpload: boolean; onOpen: (id: number) => void; onUploaded: () => void }) {
+function BillsTab({ bills, canUpload, mailReady, onOpen, onUploaded }: { bills: BillRow[]; canUpload: boolean; mailReady: boolean; onOpen: (id: number) => void; onUploaded: () => void }) {
   const [showAll, setShowAll] = useState(false)
   const [results, setResults] = useState<UploadFileResult[] | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const [mailSince, setMailSince] = useState('')
+  const [mail, setMail] = useState<MailCheckResult | null>(null)
   const list = showAll ? bills : bills.filter((b) => b.status === 'expected' || b.status === 'partial')
 
   async function upload(files: FileList | null) {
@@ -168,13 +172,37 @@ function BillsTab({ bills, canUpload, onOpen, onUploaded }: { bills: BillRow[]; 
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = '' }
   }
 
+  async function checkMail() {
+    setBusy(true); setError(''); setResults(null); setMail(null)
+    try {
+      const res = await fetch('/api/purchases/check-mail', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mailSince ? { since: mailSince } : {}) })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error ?? 'Checking mail failed.')
+      setMail(body)
+      setResults(body.files)
+      onUploaded()
+    } catch (e) { setError(errText(e, 'Checking mail failed.')) }
+    finally { setBusy(false) }
+  }
+
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2 mb-3">
+        {canUpload && mailReady && (
+          <>
+            <button onClick={checkMail} disabled={busy} className="rounded-lg bg-foreground text-background px-3 py-2 text-xs font-semibold hover:opacity-90 disabled:opacity-50">
+              {busy ? 'Working…' : 'Check mail'}
+            </button>
+            <label className="flex items-center gap-1 text-[11px] text-muted-foreground" title="Leave empty: new mails since the last check (first time: last 7 days)">
+              from
+              <input type="date" value={mailSince} onChange={(e) => setMailSince(e.target.value)} className={`${inputCls} py-1 text-xs`} />
+            </label>
+          </>
+        )}
         {canUpload && (
           <>
             <input ref={fileRef} type="file" accept="application/pdf,.pdf" multiple className="hidden" onChange={(e) => upload(e.target.files)} />
-            <button onClick={() => fileRef.current?.click()} disabled={busy} className="rounded-lg bg-foreground text-background px-3 py-2 text-xs font-semibold hover:opacity-90 disabled:opacity-50">
+            <button onClick={() => fileRef.current?.click()} disabled={busy} className="rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-muted disabled:opacity-50">
               {busy ? 'Reading bills…' : 'Upload bill PDFs'}
             </button>
           </>
@@ -185,7 +213,13 @@ function BillsTab({ bills, canUpload, onOpen, onUploaded }: { bills: BillRow[]; 
         </label>
       </div>
       {error && <p className="mb-2 text-xs text-red-600">{error}</p>}
-      {results && (
+      {mail && (
+        <p className="mb-2 text-xs text-muted-foreground">
+          Mail since {when.format(new Date(mail.since))}: {mail.found} bill mail{mail.found === 1 ? '' : 's'} found, {mail.alreadyDone} already imported, {mail.processed} read now
+          {mail.remaining > 0 ? <span className="text-amber-700 dark:text-amber-400"> · {mail.remaining} more — press Check mail again</span> : null}.
+        </p>
+      )}
+      {results && results.length > 0 && (
         <div className="mb-3 rounded-xl border border-border divide-y divide-border text-xs">
           {results.map((r) => (
             <div key={r.file} className="px-3 py-2">

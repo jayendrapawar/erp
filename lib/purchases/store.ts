@@ -372,6 +372,8 @@ export async function receiveCarton(db: Db, actor: Actor, input: { rawInput: str
       LIMIT 1
       FOR UPDATE OF l`)
     const line = cand.rows[0]
+    // Owner's guess (19 Nov 2026): "A" = regular stock; another letter (e.g. "B") may be factory seconds.
+    if (pack && pack !== 'A') warnings.push(`Pack letter "${pack}" (not A) — possibly factory seconds; check the carton.`)
     if (line && mrp != null && Number(line.mrp) !== mrp) warnings.push(`Label MRP ₹${mrp} differs from the bill's ₹${Number(line.mrp)}.`)
     if (line && input.billId && Number(line.billId) !== input.billId) warnings.push(`Not on the chosen bill — matched to bill ${line.refNo}.`)
     const ins = await tx.execute<{ id: number }>(sql`
