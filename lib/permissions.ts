@@ -40,7 +40,7 @@ export const PERMISSIONS = {
   'inventory.view.all': STAFF, // stock levels were visible to every staff member before; kept
 
   'inventory.export': ['admin', 'supervisor', 'accountant'],
-  'inventory.adjust': ['admin', 'supervisor'],
+  'inventory.adjust': ['admin', 'supervisor'], // stock corrections on the Inventory screen
   'articles.view': STAFF,
   'articles.edit': ['admin', 'accountant'],
   'articles.delete': ['admin'],

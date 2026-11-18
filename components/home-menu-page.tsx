@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { ScanBarcode, ShoppingCart, Receipt, Package, BookOpen, BarChart2 } from 'lucide-react'
+import { ScanBarcode, ShoppingCart, Receipt, Package, BookOpen, BarChart2, Boxes } from 'lucide-react'
 import { hasPermission, parseRoles, type Permission } from '@/lib/permissions'
 import { PageNav } from '@/components/page-nav'
 
@@ -26,6 +26,15 @@ const MENU_ITEMS: MenuItem[] = [
     color: 'bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-400',
     border: 'border-blue-200 dark:border-blue-800',
     permission: 'scan.record',
+  },
+  {
+    label: 'Inventory',
+    description: 'Stock on hand, value and movements',
+    href: '/inventory',
+    icon: Boxes,
+    color: 'bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400',
+    border: 'border-indigo-200 dark:border-indigo-800',
+    permission: 'inventory.view.all',
   },
   {
     label: 'Orders',
