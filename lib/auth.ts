@@ -1,5 +1,6 @@
 import { betterAuth } from 'better-auth'
 import { pool } from '@/lib/db'
+import { devPasswordLoginEnabled } from '@/lib/dev-login'
 
 if (!process.env.BETTER_AUTH_SECRET) {
   throw new Error('BETTER_AUTH_SECRET environment variable is required')
@@ -96,6 +97,11 @@ export const auth = betterAuth({
   secret: process.env.BETTER_AUTH_SECRET,
   baseURL,
   trustedOrigins,
+  // Local testing only (lib/dev-login.ts): off in every production build and on Vercel.
+  emailAndPassword: {
+    enabled: devPasswordLoginEnabled(),
+    disableSignUp: true,
+  },
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID!,
