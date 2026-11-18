@@ -1,6 +1,9 @@
 // Post-migration verification (read-only).
 //
-//   npx tsx scripts/db/verify.ts --env-file .env.local [--against backups/<endpoint>/<stamp>]
+//   npx tsx scripts/db/verify.ts --env-file .env.local [--against backups/<endpoint>/<stamp> [--after-reset]]
+//
+// --after-reset: the article master was cleared after the backup (reset-article-master.ts), so
+// article rows must equal what imports created since, and scans start from zero.
 //
 // Checks: migration history, ledger = balances, every resolved scan posted exactly once,
 // no voided scan left un-reversed, legacy quantity = imported quantity, and (with
@@ -8,7 +11,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { arg, connect, log, resolveTarget } from './_connect'
+import { arg, connect, flag, log, resolveTarget } from './_connect'
 
 async function main() {
   const t = resolveTarget()
@@ -53,10 +56,16 @@ async function main() {
     const against = arg('against')
     if (against) {
       const man = JSON.parse(fs.readFileSync(path.join(against, 'manifest.json'), 'utf8'))
+      const afterReset = flag('after-reset')
+      if (afterReset) {
+        const n = Number((await c.query(`select count(*)::int as n from audit_events where action = 'article_master.reset' and "occurredAt" >= $1`, [man.takenAt])).rows[0].n)
+        log(`INFO  article master reset after the backup: ${n ? 'recorded in audit_events' : 'not in audit_events (expected when the reset ran on the baseline schema; see backups/<endpoint>/reset-*.json)'}`)
+      }
       const same: Array<[string, string]> = [['vendors', 'retailers'], ['scans', 'legacy_scans'], ['user', 'user'], ['orders', 'orders'], ['order_items', 'order_items'], ['bill_lines', 'bill_lines']]
       for (const [before, after] of same) {
         if (!man.tables[before]) continue
         const now = Number(await one(`select count(*) from "${after}"`))
+        if (afterReset && after === 'legacy_scans') { check(now === 0, 'legacy_scans cleared by the reset', `found ${now}`); continue }
         check(now === man.tables[before].rows, `${after} row count unchanged`, `${man.tables[before].rows} → ${now}`)
       }
       // Article tables change on purpose (duplicate clean-up, catalogue import). Every row must be
@@ -72,10 +81,10 @@ async function main() {
         : { rows: 0, sizes: 0, colours: 0 }
       for (const [table, key] of [['articles', 'rows'], ['article_sizes', 'sizes'], ['article_colors', 'colours']] as const) {
         if (!man.tables[table]) continue
-        const before = man.tables[table].rows as number
+        const before = afterReset ? 0 : man.tables[table].rows as number
         const expected = before - Number(archived[key]) + Number(created[key])
         const now = Number(await one(`select count(*) from "${table}"`))
-        check(now === expected, `${table} rows accounted for`, `${before} − ${archived[key]} archived + ${created[key]} imported = ${expected}; found ${now}`)
+        check(now === expected, `${table} rows accounted for`, `${afterReset ? 'reset → 0' : before} − ${archived[key]} archived + ${created[key]} imported = ${expected}; found ${now}`)
       }
     }
     const totals = (await c.query(`select provenance, sum(quantity)::int q from stock_balances group by 1 order by 1`)).rows

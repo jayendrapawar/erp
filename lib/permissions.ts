@@ -47,6 +47,8 @@ export const PERMISSIONS = {
   'articles.create_from_scan': ['admin'],
   'articles.review_missing': ['admin'],
   'articles.review_catalog': ['admin'],
+  'assortments.view': STAFF,
+  'assortments.edit': ['admin', 'accountant'],
   'retailers.view': STAFF,
   'retailers.edit': ['admin', 'accountant'],
   'suppliers.view': ['admin', 'supervisor', 'accountant'],

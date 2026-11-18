@@ -8,7 +8,9 @@ Sources (business context, **not** the Sparx article master):
 | `eva assortment.xlsx` | "FLITE EVA ASSORTMENT": pairs per size inside one carton, by segment, packing and assortment code | `eva/assortments.csv` |
 
 Regenerate the CSVs and `eva/analysis.json`: `npx tsx scripts/catalog/eva-analysis.ts --assortments "<eva assortment.xlsx>"`.
-Parsing and checks: `lib/catalog/eva.ts`. Nothing has been written to the database.
+Parsing and checks: `lib/catalog/eva.ts`. The 32 assortments are now stored as carton assortments
+(division Flite EVA) — see `docs/architecture/carton-assortments.md`; upload-format copy:
+`eva/flite-eva-assortments.xlsx`. The price list is still not in the database.
 
 ## 1. Price list (article level)
 

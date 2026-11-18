@@ -482,3 +482,31 @@ export const missingArticleReviews = pgTable('missing_article_reviews', {
   updatedBy:   text('updatedBy').references(() => user.id, { onDelete: 'set null' }),
   updatedAt:   timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [primaryKey({ columns: [t.articleCode, t.colourCode] })])
+
+// --- Carton assortments (migration 0005) ---
+// Pairs per size inside one carton, per division + segment + pairs per carton + assortment code.
+// Versioned: an edit retires the active row and inserts the next version. Never deleted.
+export interface AssortmentSize { size: string; pairs: number }
+
+export const cartonAssortments = pgTable('carton_assortments', {
+  id:            serial('id').primaryKey(),
+  division:      text('division').notNull(),
+  segment:       text('segment').notNull(),
+  packing:       integer('packing').notNull(),
+  code:          text('code').notNull(),
+  sizes:         jsonb('sizes').$type<AssortmentSize[]>().notNull(),
+  version:       integer('version').notNull().default(1),
+  active:        boolean('active').notNull().default(true),
+  note:          text('note').notNull().default(''),
+  source:        text('source').$type<'manual' | 'upload'>().notNull().default('manual'),
+  sourceFile:    text('sourceFile'),
+  createdBy:     text('createdBy').references(() => user.id, { onDelete: 'set null' }),
+  createdAt:     timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  retiredAt:     timestamp('retiredAt', { withTimezone: true }),
+  retiredBy:     text('retiredBy').references(() => user.id, { onDelete: 'set null' }),
+  retiredReason: text('retiredReason'),
+  replacedById:  integer('replacedById'),
+}, (t) => [
+  uniqueIndex('carton_assortments_active_key').on(t.division, t.segment, t.packing, t.code).where(sql`active`),
+  uniqueIndex('carton_assortments_version_key').on(t.division, t.segment, t.packing, t.code, t.version),
+])

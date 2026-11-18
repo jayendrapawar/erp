@@ -12,6 +12,8 @@ import type { Article } from './articles-tab'
 import type { MissingArticle, CatalogReviewItem } from '@/app/actions/articles'
 import { SetsTab } from './sets-tab'
 import { SuppliersTab } from './suppliers-tab'
+import { AssortmentsTab } from './assortments-tab'
+import type { Assortment } from '@/lib/catalog/assortment-store'
 import type { Supplier } from '@/app/actions/suppliers'
 import { ROLE_LABELS, ROLES as ALL_ROLES } from '@/lib/permissions'
 import type { OrderSet } from './sets-tab'
@@ -175,13 +177,14 @@ interface Props {
   catalogReviewItems: CatalogReviewItem[]
   sets: OrderSet[]
   suppliers: Supplier[]
+  assortments: Assortment[]
   /** When true, only Vendors and Articles tabs are shown (hides Users tab) — used for accountant role */
   isAccountant?: boolean
 }
 
 const ROLES: AppRole[] = [...ALL_ROLES, 'user']
 
-export function MasterDashboard({ users, currentUserId, vendors: initialVendors, articles: initialArticles, missingArticles, catalogReviewItems, sets: initialSets, suppliers, isAccountant = false }: Props) {
+export function MasterDashboard({ users, currentUserId, vendors: initialVendors, articles: initialArticles, missingArticles, catalogReviewItems, sets: initialSets, suppliers, assortments, isAccountant = false }: Props) {
   const [isPending, startTransition] = useTransition()
   const [search, setSearch] = useState('')
   const [vendorList, setVendorList] = useState<Vendor[]>(initialVendors)
@@ -234,12 +237,13 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
         <Tabs defaultValue={defaultTab} className="w-full">
           <TabsList
             className="grid w-full mb-6"
-            style={{ gridTemplateColumns: isAccountant ? 'repeat(3, minmax(0, 1fr))' : 'repeat(5, minmax(0, 1fr))' }}
+            style={{ gridTemplateColumns: isAccountant ? 'repeat(4, minmax(0, 1fr))' : 'repeat(6, minmax(0, 1fr))' }}
           >
             {!isAccountant && <TabsTrigger value="users"    className="text-xs sm:text-sm">Users ({users.length})</TabsTrigger>}
             <TabsTrigger value="vendors"  className="text-xs sm:text-sm">Retailers ({vendorList.length})</TabsTrigger>
             <TabsTrigger value="suppliers" className="text-xs sm:text-sm">Suppliers ({suppliers.length})</TabsTrigger>
             <TabsTrigger value="articles" className="text-xs sm:text-sm">Articles ({articleList.length})</TabsTrigger>
+            <TabsTrigger value="assortments" className="text-xs sm:text-sm">Assortments ({assortments.length})</TabsTrigger>
             {isAdmin && <TabsTrigger value="sets" className="text-xs sm:text-sm">Sets ({setList.length})</TabsTrigger>}
           </TabsList>
 
@@ -342,6 +346,10 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
 
           <TabsContent value="articles">
             <ArticlesTab initialArticles={articleList} initialMissingArticles={missingArticles} initialReviewItems={catalogReviewItems} canReviewCatalog={!isAccountant} onListChange={setArticleList} />
+          </TabsContent>
+
+          <TabsContent value="assortments">
+            <AssortmentsTab initialAssortments={assortments} canEdit />
           </TabsContent>
 
           {/* ── Sets tab (admin only) ── */}

@@ -11,6 +11,7 @@ import { getVendors } from '@/app/actions/vendors'
 import { getArticles, getCatalogReviewItems, getMissingArticles } from '@/app/actions/articles'
 import { getSets } from '@/app/actions/sets'
 import { getSuppliers } from '@/app/actions/suppliers'
+import { getAssortments } from '@/app/actions/assortments'
 
 export const metadata = {
   title: 'Master - Shayona Inventory',
@@ -33,7 +34,7 @@ export default async function MasterPage() {
     redirect('/sign-in')
   }
 
-  const [allUsers, vendors, articles, sets, missingArticles, suppliers, catalogReviewItems] = await Promise.all([
+  const [allUsers, vendors, articles, sets, missingArticles, suppliers, catalogReviewItems, assortments] = await Promise.all([
     getAllUsers(),
     getVendors(),
     getArticles(),
@@ -41,6 +42,7 @@ export default async function MasterPage() {
     getMissingArticles(),
     getSuppliers(),
     getCatalogReviewItems(),
+    getAssortments(),
   ])
 
   return (
@@ -53,6 +55,7 @@ export default async function MasterPage() {
       catalogReviewItems={catalogReviewItems}
       sets={sets}
       suppliers={suppliers}
+      assortments={assortments}
       isAccountant={isAccountant}
     />
   )

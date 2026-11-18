@@ -1,7 +1,14 @@
 # Article catalogue: Article → Variant → SKU
 
-Status: implemented on development (migration 0003, import batch 1, 18 Nov 2026).
+Status: implemented on development (migration 0003, 18 Nov 2026).
 Production: rehearsed, not released (see `docs/runbooks/production-release.md`).
+
+**Owner decision, 18 Nov 2026:** the article master starts from the approved Sparx list only.
+The old hand-entered rows (other brands, wrong codes, duplicates) were cleared on development
+with `scripts/release/reset-article-master.ts` (backup first) and will be cleared the same way
+on production. Other brands and articles not in the list arrive through scanning (Missing
+Articles → admin confirms). The matching / retiring rules below still apply to every later
+import (e.g. the corrected four-division sheets).
 
 ## Model
 
@@ -72,13 +79,13 @@ Consistency risks and mitigations:
   state read inside its transaction; admin edits touch single rows and are serialised by row locks.
 - *Cache*: the booking catalogue is reference data; it is re-read on page load (no new cache).
 
-## Data on development after batch 1
+## Data on development (after the reset, 18 Nov 2026)
 
-651 catalogue variants (533 matched with ids kept, 118 created), 267 article codes, 704 size
-ranges, 3,120 active catalogue SKUs (391 created, 2,646 re-ordered, 187 deactivated — none with
-stock), 284 Sparx variants retired (10 of them hold test scans/stock and have review items),
-1,843 other-brand variants untouched, 31 review items. Reports:
-`docs/catalog/sparx-reconciliation.md` and `docs/catalog/sparx-reconciliation/*.csv`.
+651 variants, 267 article codes, 704 size ranges, 3,120 SKUs, 0 retired, 0 review items, no
+scans or stock (the 10 test scans were cleared with the reset). Logins kept. Import batch 1
+with `--trust-source`. Reports: `docs/catalog/sparx-reconciliation.md` and
+`docs/catalog/sparx-reconciliation/*.csv`. Backup before the reset:
+`backups/ep-damp-scene-b3i40jjo/2026-11-18T14-37-03-311Z` (local, not committed).
 
 ## Tests
 
