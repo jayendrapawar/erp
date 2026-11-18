@@ -22,7 +22,8 @@ An assortment says how many pairs of each size one carton holds:
   module (not built yet) will look up an assortment by key.
 - Divisions: Sparx, Flite EVA, Flite PU, Bahamas (`lib/catalog/assortments.ts`). An admin can add
   a new division from the Add form; once it holds an assortment, uploads accept it too.
-  Segments: Gents, Ladies, Boys, Girls, Kids, Baby.
+  Segments: Gents, Ladies, Kids (as in the owner's final article list, which will carry a segment
+  column per article — that column links an article to its assortments) and Baby (Flite EVA sheet).
 
 ## Versioning
 

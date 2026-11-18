@@ -39,7 +39,7 @@ including deployment and smoke tests. `W` = path of the Sparx workbook.
 
 | # | Step | Command / action |
 |---|---|---|
-| 0 | Approval & window | Owner approves the commit and the time. Tell staff not to use the app. |
+| 0 | Approval & window | Owner approves the commit and the time. The app is not live yet (owner, 18 Nov 2026), so downtime affects no one. |
 | 1 | Backup [10 s] | `npm run db:backup -- --env-file .env` — keep the printed folder. Note the time for Neon point-in-time restore (second safety net). |
 | 2 | Start tracking [3 s] | `npm run db:migrate -- --env-file .env --to 0000 --confirm ep-royal-tooth-b3ub6jie` → 0000 is **adopted** (nothing changes, `schema_migrations` is created). |
 | 3 | Reset, dry run [6 s] | `npx tsx scripts/release/reset-article-master.ts --env-file .env` — must list `scans 0`, `article_sizes 15398`, `article_colors 2759`, `articles 2759` and no refusal. Stop if different (e.g. someone scanned or booked an order). |
@@ -70,7 +70,7 @@ the window closed until step 11 passes.
 
 ## Operational impact
 
-- App unavailable for the window (≈20 min). No business data exists yet (0 scans/orders/stock).
+- App unavailable for the window (≈20 min) — acceptable: the app is not in use yet. No business data exists (0 scans/orders/stock).
 - All 2,759 old article rows are removed (kept in the backup). The article master then holds the
   651 approved Sparx variants (267 article codes, 3,120 sizes).
 - Flite, PU, Bahamas and any Sparx article not in the list: their boxes are saved as Missing

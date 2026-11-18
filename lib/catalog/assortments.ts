@@ -12,7 +12,8 @@ import { expandSizeRange, normaliseSizeLabel, sortSizes } from './sizes'
 import type { AssortmentSize } from '../db/schema'
 
 export const DIVISIONS = ['Sparx', 'Flite EVA', 'Flite PU', 'Bahamas'] as const
-export const SEGMENTS = ['Gents', 'Ladies', 'Boys', 'Girls', 'Kids', 'Baby'] as const
+// Same segments as the article list (Gents, Ladies, Kids); Baby comes from the Flite EVA assortment sheet.
+export const SEGMENTS = ['Gents', 'Ladies', 'Kids', 'Baby'] as const
 export const SIZE_COLUMNS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'] as const
 export const SHEET_NAME = 'Assortments'
 export const HEADERS = ['Division', 'Segment', 'Pairs per carton', 'Assortment code', ...SIZE_COLUMNS, 'Total', 'Note'] as const
