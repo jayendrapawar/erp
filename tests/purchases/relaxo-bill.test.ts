@@ -1,0 +1,74 @@
+import { describe, test } from 'node:test'
+import assert from 'node:assert/strict'
+import { addDays, parseRelaxoBill, rangeCode, suggestDivision } from '../../lib/purchases/relaxo-bill'
+
+// Shape of the text pdf.js extracts from a Relaxo proforma invoice (synthetic values; no
+// customer address or GSTIN). Line 2 wraps over three lines like long descriptions do.
+const page1 = [
+  'For RELAXO FOOTWEARS LIMITED',
+  'PERFORMA INVOICE',
+  'RELAXO FOOTWEARS LIMITED',
+  'PO No. : PO-0000000001-26.08.,',
+  'Customer Code :',
+  '12345678',
+  'Invoice No. :',
+  'Date :',
+  'SO No. :',
+  'SO Date :',
+  'Ref :',
+  'RV0000000001',
+  '27.08.2026',
+  '500000001,',
+  '26.08.2026,',
+  '0520000001/1062',
+  'S.',
+  '1 64029990 PUG186G-DTDT0810, PUG 186 G D. TAN 0810 /1 A 1 30 30 299.50 199.65 5989.50 539.06',
+  '9.00 %',
+  '2 64029990 PUG183G-MBMB0810, PUG 183 G MOUSE BROWN 0810',
+  '/3',
+  'A 3 36 108 289.50 193.00 20844.00 1875.96',
+].join('\n')
+const page2 = [
+  'PERFORMA INVOICE',
+  '3 64041110 PUL0A5L-BKPK0406, PUL 5A LADIES, BKPK0406 , /1 A 1 48 48 204.50 129.65 6223.20 560.09 0.00 0.00 5663.11',
+  'Total 5 186 33,056.70 2,975.11 0.00 0.00 30081.59 0 0 1504.08 0.00 31585.67',
+].join('\n')
+
+describe('Relaxo bill reader', () => {
+  test('reads header, lines (including wrapped ones) and checks totals', () => {
+    const r = parseRelaxoBill([page1, page2])
+    assert.ok(r.ok, JSON.stringify(r))
+    if (!r.ok) return
+    const b = r.bill
+    assert.equal(b.docType, 'proforma')
+    assert.deepEqual([b.refNo, b.invoiceNo, b.billDate, b.soNo, b.soDate, b.customerCode], ['0520000001/1062', 'RV0000000001', '2026-08-27', '500000001', '2026-08-26', '12345678'])
+    assert.deepEqual([b.totalCartons, b.totalPairs, b.grossAmount], [5, 186, 31585.67])
+    assert.deepEqual(b.lines.map((l) => [l.articleCode, l.colourCode, l.sizeFrom, l.sizeTo, l.packLetter, l.cartons, l.pairsPerCarton, l.pairs, l.mrp]), [
+      ['PUG186G', 'DTDT', '8', '10', 'A', 1, 30, 30, 299.5],
+      ['PUG183G', 'MBMB', '8', '10', 'A', 3, 36, 108, 289.5],
+      ['PUL0A5L', 'BKPK', '4', '6', 'A', 1, 48, 48, 204.5],
+    ])
+    assert.equal(b.lines[1].description, 'PUG 183 G MOUSE BROWN 0810')
+  })
+
+  test('refuses a bill whose lines do not add up to its total', () => {
+    const r = parseRelaxoBill([page1, page2.replace('Total 5 186', 'Total 6 186')])
+    assert.equal(r.ok, false)
+    if (!r.ok) assert.match(r.errors.join(), /5 cartons; the bill total says 6/)
+  })
+
+  test('refuses something that is not a Relaxo bill', () => {
+    const r = parseRelaxoBill(['Some other PDF'])
+    assert.equal(r.ok, false)
+  })
+
+  test('helpers', () => {
+    assert.equal(rangeCode('6', '10'), '610')
+    assert.equal(rangeCode('8', '10'), '810')
+    assert.equal(rangeCode('11', '1'), '1101')
+    assert.equal(rangeCode('06', '08'), '608')
+    assert.equal(addDays('2026-08-27', 5), '2026-09-01')
+    assert.equal(addDays('2026-12-30', 5), '2027-01-04')
+    assert.equal(suggestDivision([{ articleCode: 'PUG186G' }, { articleCode: 'PUL0A5L' }, { articleCode: 'SS0702B' }], { PU: 'Flite PU', SS: 'Sparx' }), 'Flite PU')
+  })
+})

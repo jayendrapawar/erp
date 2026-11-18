@@ -1,32 +1,28 @@
-import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
-import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { user } from '@/lib/db/schema'
-import { eq } from 'drizzle-orm'
-import { isRedirectError } from 'next/dist/client/components/redirect-error'
+import { getSessionUser } from '@/lib/authz'
+import { hasPermission } from '@/lib/permissions'
+import { listBills, purchaseSummary } from '@/lib/purchases/store'
+import { PurchasesPage } from '@/components/purchases/purchases-page'
 
 export const metadata = {
   title: 'Purchases - Shayona Inventory',
-  description: 'Track stock purchases and suppliers',
+  description: 'Expected stock from supplier bills, carton receiving and verification',
 }
 
-export default async function PurchasesPage() {
-  try {
-    const session = await auth.api.getSession({ headers: await headers() })
-    if (!session?.user) redirect('/sign-in')
-    const [u] = await db.select({ role: user.role }).from(user).where(eq(user.id, session.user.id)).limit(1)
-    const roles = (u?.role ?? 'user').split(',').map(r => r.trim())
-    if (!roles.includes('admin') && !roles.includes('accountant')) redirect('/home')
-  } catch (err) {
-    if (isRedirectError(err)) throw err
-    redirect('/sign-in')
-  }
-
+// First paint: 2 queries in parallel (figures, bills).
+export default async function Purchases() {
+  const u = await getSessionUser()
+  if (!u) redirect('/sign-in')
+  if (!hasPermission(u.roles, 'purchases.view')) redirect('/home')
+  const [summary, bills] = await Promise.all([purchaseSummary(db), listBills(db, { limit: 200 })])
   return (
-    <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4">
-      <h1 className="text-2xl font-bold text-foreground">Purchases</h1>
-      <p className="mt-2 text-sm text-muted-foreground">Coming soon</p>
-    </div>
+    <PurchasesPage
+      initialSummary={summary}
+      initialBills={bills}
+      canUpload={hasPermission(u.roles, 'purchases.upload')}
+      canReceive={hasPermission(u.roles, 'purchases.receive')}
+      canManage={hasPermission(u.roles, 'purchases.manage')}
+    />
   )
 }

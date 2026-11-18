@@ -57,12 +57,12 @@ const MENU_ITEMS: MenuItem[] = [
   },
   {
     label: 'Purchases',
-    description: 'Track stock purchases and suppliers',
+    description: 'Expected stock from bills, carton receiving',
     href: '/purchases',
     icon: Package,
     color: 'bg-orange-50 text-orange-600 dark:bg-orange-950 dark:text-orange-400',
     border: 'border-orange-200 dark:border-orange-800',
-    permission: 'suppliers.view',
+    permission: 'purchases.view',
   },
   {
     label: 'Master',

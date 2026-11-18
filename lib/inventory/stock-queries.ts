@@ -53,15 +53,20 @@ export interface StockSummary {
 // Division: the variant's own division, else the catalogue brand ("SPARX" → "Sparx").
 const DIVISION = sql`coalesce(nullif(a.division, ''), initcap(c.brand), '')`
 
-/** Average MRP per SKU from scanned boxes (scan movements and their reversals). */
+/** Average MRP per SKU from scanned boxes and received cartons (net of undos). */
 const AVG_MRP = (skuFilter: SQL) => sql`
-  SELECT m."skuId",
-         sum(m.quantity * e.mrp) / nullif(sum(m.quantity), 0) AS mrp
-  FROM stock_movements m
-  JOIN scan_events e ON m."sourceType" = 'scan_event' AND e.id::text = m."sourceId"
-  WHERE e.mrp IS NOT NULL AND ${skuFilter}
-  GROUP BY m."skuId"
-  HAVING sum(m.quantity) > 0`
+  SELECT x."skuId", sum(x.quantity * x.mrp) / nullif(sum(x.quantity), 0) AS mrp
+  FROM (
+    SELECT m."skuId", m.quantity, e.mrp FROM stock_movements m
+    JOIN scan_events e ON m."sourceType" = 'scan_event' AND e.id::text = m."sourceId"
+    WHERE e.mrp IS NOT NULL AND m."movementType" <> 'provenance_transfer' AND ${skuFilter}
+    UNION ALL
+    SELECT m."skuId", m.quantity, c.mrp FROM stock_movements m
+    JOIN carton_receipts c ON m."sourceType" = 'carton_receipt' AND c.id::text = m."sourceId"
+    WHERE c.mrp IS NOT NULL AND ${skuFilter}
+  ) x
+  GROUP BY x."skuId"
+  HAVING sum(x.quantity) > 0`
 
 /** One page of variants with their sizes, pairs and value. One query. */
 export async function listStock(db: DbOrTx, f: StockFilters): Promise<{ rows: StockVariant[]; total: number }> {
@@ -154,7 +159,7 @@ export async function stockSummary(db: DbOrTx): Promise<StockSummary> {
   }
 }
 
-export type MovementKind = 'scan' | 'billed' | 'undo' | 'correction' | 'other'
+export type MovementKind = 'scan' | 'received' | 'billed' | 'undo' | 'correction' | 'other'
 
 export interface Movement {
   id: number
@@ -192,6 +197,7 @@ export interface MovementFilters {
 
 const KIND_TYPES: Record<Exclude<MovementKind, 'other'>, string[]> = {
   scan: ['stocktake_scan', 'stocktake_manual', 'legacy_import'],
+  received: ['receipt'],
   billed: ['dispatch'],
   undo: ['reversal'],
   correction: ['adjustment'],
@@ -206,7 +212,7 @@ export async function listMovements(db: DbOrTx, f: MovementFilters): Promise<{ r
   const conds: SQL[] = [sql`TRUE`]
   if (f.kind && f.kind !== 'all') {
     conds.push(f.kind === 'other'
-      ? sql`m."movementType" NOT IN ('stocktake_scan','stocktake_manual','legacy_import','dispatch','reversal','adjustment')`
+      ? sql`m."movementType" NOT IN ('stocktake_scan','stocktake_manual','legacy_import','receipt','dispatch','reversal','adjustment')`
       : sql`m."movementType" IN (SELECT json_array_elements_text(${JSON.stringify(KIND_TYPES[f.kind])}::json))`)
   }
   if (f.articleId) conds.push(sql`s."articleId" = ${f.articleId}`)
@@ -230,7 +236,7 @@ export async function listMovements(db: DbOrTx, f: MovementFilters): Promise<{ r
     LIMIT ${limit + 1}`)
   const rows = r.rows.slice(0, limit).map((x): Movement => {
     const type = String(x.movementType)
-    const kind: MovementKind = KIND_TYPES.scan.includes(type) ? 'scan' : type === 'dispatch' ? 'billed' : type === 'reversal' ? 'undo' : type === 'adjustment' ? 'correction' : 'other'
+    const kind: MovementKind = KIND_TYPES.scan.includes(type) ? 'scan' : type === 'receipt' ? 'received' : type === 'dispatch' ? 'billed' : type === 'reversal' ? 'undo' : type === 'adjustment' ? 'correction' : 'other'
     const undone = Boolean(x.undone)
     return {
       id: Number(x.id), at: new Date(x.createdAt as string).toISOString(),

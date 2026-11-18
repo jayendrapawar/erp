@@ -532,7 +532,7 @@ export const directBillDrafts = pgTable('direct_bill_drafts', {
   closedAt:          timestamp('closedAt', { withTimezone: true }),
 })
 
-export type BillStockSource = 'scanned' | 'unscanned' | 'unscanned_dispatch'
+export type BillStockSource = 'scanned' | 'carton' | 'unscanned' | 'unscanned_dispatch'
 
 /** One physical box on a bill. A box can be on one active bill only. */
 export const billScans = pgTable('bill_scans', {
@@ -560,4 +560,87 @@ export const billScans = pgTable('bill_scans', {
   releasedReason:   text('releasedReason'),
 }, (t) => [
   uniqueIndex('bill_scans_active_box').on(t.dedupeKey).where(sql`status = 'active'`),
+])
+
+// --- Purchases: expected stock, carton receiving (migration 0007) ---
+
+export type PurchaseBillStatus = 'expected' | 'partial' | 'received' | 'cancelled'
+
+export const purchaseBills = pgTable('purchase_bills', {
+  id:             serial('id').primaryKey(),
+  supplier:       text('supplier').notNull().default('Relaxo Footwears Limited'),
+  docType:        text('docType').$type<'proforma' | 'invoice'>().notNull().default('proforma'),
+  refNo:          text('refNo').notNull(),
+  invoiceNo:      text('invoiceNo').notNull().default(''),
+  billDate:       text('billDate').notNull(),
+  soNo:           text('soNo'),
+  soDate:         text('soDate'),
+  poNo:           text('poNo'),
+  customerCode:   text('customerCode'),
+  division:       text('division').notNull().default(''),
+  expectedOn:     text('expectedOn').notNull(),
+  totalCartons:   integer('totalCartons').notNull(),
+  totalPairs:     integer('totalPairs').notNull(),
+  grossAmount:    numeric('grossAmount', { precision: 12, scale: 2 }),
+  status:         text('status').$type<PurchaseBillStatus>().notNull().default('expected'),
+  source:         text('source').$type<'upload' | 'mail'>().notNull().default('upload'),
+  fileName:       text('fileName'),
+  fileSha256:     text('fileSha256').notNull(),
+  uploadedBy:     text('uploadedBy').references(() => user.id, { onDelete: 'set null' }),
+  uploadedByName: text('uploadedByName').notNull().default(''),
+  createdAt:      timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  receivedAt:     timestamp('receivedAt', { withTimezone: true }),
+  cancelledAt:    timestamp('cancelledAt', { withTimezone: true }),
+  cancelReason:   text('cancelReason'),
+}, (t) => [
+  uniqueIndex('purchase_bills_ref_unique').on(t.refNo),
+  uniqueIndex('purchase_bills_file_unique').on(t.fileSha256),
+])
+
+export const purchaseBillLines = pgTable('purchase_bill_lines', {
+  id:             serial('id').primaryKey(),
+  billId:         integer('billId').notNull().references(() => purchaseBills.id, { onDelete: 'restrict' }),
+  lineNo:         integer('lineNo').notNull(),
+  hsn:            text('hsn'),
+  articleCode:    text('articleCode').notNull(),
+  colourCode:     text('colourCode').notNull(),
+  sizeFrom:       text('sizeFrom').notNull(),
+  sizeTo:         text('sizeTo').notNull(),
+  packLetter:     text('packLetter').notNull().default(''),
+  description:    text('description').notNull().default(''),
+  cartons:        integer('cartons').notNull(),
+  pairsPerCarton: integer('pairsPerCarton').notNull(),
+  pairs:          integer('pairs').notNull(),
+  mrp:            numeric('mrp', { precision: 10, scale: 2 }).notNull(),
+  rate:           numeric('rate', { precision: 10, scale: 2 }),
+  amount:         numeric('amount', { precision: 12, scale: 2 }),
+  assortmentId:   integer('assortmentId').references(() => cartonAssortments.id),
+})
+
+export const cartonReceipts = pgTable('carton_receipts', {
+  id:            bigserial('id', { mode: 'number' }).primaryKey(),
+  clientEventId: uuid('clientEventId').notNull().unique(),
+  rawInput:      text('rawInput').notNull(),
+  dedupeKey:     text('dedupeKey').notNull(),
+  articleCode:   text('articleCode').notNull(),
+  colourCode:    text('colourCode').notNull(),
+  sizeFrom:      text('sizeFrom').notNull(),
+  sizeTo:        text('sizeTo').notNull(),
+  packLetter:    text('packLetter').notNull().default(''),
+  mrp:           numeric('mrp', { precision: 10, scale: 2 }),
+  match:         text('match').$type<'matched' | 'unexpected'>().notNull(),
+  billId:        integer('billId').references(() => purchaseBills.id),
+  billLineId:    integer('billLineId').references(() => purchaseBillLines.id),
+  assortmentId:  integer('assortmentId').references(() => cartonAssortments.id),
+  postedAt:      timestamp('postedAt', { withTimezone: true }),
+  postedPairs:   integer('postedPairs'),
+  status:        text('status').$type<'active' | 'voided'>().notNull().default('active'),
+  userId:        text('userId').references(() => user.id, { onDelete: 'set null' }),
+  userName:      text('userName').notNull().default(''),
+  createdAt:     timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  voidedAt:      timestamp('voidedAt', { withTimezone: true }),
+  voidedBy:      text('voidedBy').references(() => user.id, { onDelete: 'set null' }),
+  voidReason:    text('voidReason'),
+}, (t) => [
+  uniqueIndex('carton_receipts_active_label').on(t.dedupeKey).where(sql`status = 'active'`),
 ])

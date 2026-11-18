@@ -3,8 +3,9 @@
 // A biller's scan reserves the box (one active bill per box label). When the bill is generated,
 // every box leaves stock in one set-based step:
 //   1. the warehouse scanned this exact box in            → −1 'scanned'   (stockSource 'scanned')
-//   2. else its size has hand-counted (unscanned) stock    → −1 'unscanned' (stockSource 'unscanned')
-//   3. else stock is not touched                           → stockSource 'unscanned_dispatch'
+//   2. else its size has carton stock (received cartons)   → −1 'carton'    (stockSource 'carton')
+//   3. else its size has hand-counted (unscanned) stock    → −1 'unscanned' (stockSource 'unscanned')
+//   4. else stock is not touched                           → stockSource 'unscanned_dispatch'
 // Deleting a bill / sending it back releases its boxes and reverses their movements.
 // Statements per action do not grow with the number of boxes.
 
@@ -207,14 +208,14 @@ export async function discardDraft(db: Db, actor: Actor, draftId: number): Promi
 
 // ── Taking stock out ─────────────────────────────────────────────────────────
 
-export interface StockOutCounts { scanned: number; unscanned: number; unscanned_dispatch: number }
+export interface StockOutCounts { scanned: number; carton: number; unscanned: number; unscanned_dispatch: number }
 
 /**
  * Post every active, not-yet-posted box of an order. Set-based: resolve, lock the SKUs (in id
  * order, no deadlocks), read their balances, allocate, insert movements, update the rows.
  */
 export async function postOrderScans(tx: Tx, actor: Actor, orderId: number, orderNumber: string): Promise<StockOutCounts> {
-  const counts: StockOutCounts = { scanned: 0, unscanned: 0, unscanned_dispatch: 0 }
+  const counts: StockOutCounts = { scanned: 0, carton: 0, unscanned: 0, unscanned_dispatch: 0 }
   const scans = (await tx.execute<{ id: number; stockEventId: number | null; stockSku: number | null; sku: number | null }>(sql`
     SELECT b.id,
            e.id AS "stockEventId", e."skuId" AS "stockSku",
@@ -233,18 +234,19 @@ export async function postOrderScans(tx: Tx, actor: Actor, orderId: number, orde
   const skuOf = (s: (typeof scans)[number]) => (s.stockSku != null ? Number(s.stockSku) : s.sku != null ? Number(s.sku) : null)
   const skus = [...new Set(scans.map(skuOf).filter((x): x is number => x != null))].sort((a, b) => a - b)
   const loc = await mainLocationId(tx)
-  const avail = new Map<number, { scanned: number; unscanned: number }>()
+  const avail = new Map<number, { scanned: number; carton: number; unscanned: number }>()
   if (skus.length) {
     // Same per-SKU lock as hand corrections (lib/inventory/adjust.ts).
     await tx.execute(sql`SELECT pg_advisory_xact_lock(7301, x::int) FROM json_array_elements_text(${J(skus)}::json) x ORDER BY x::int`)
     const bal = await tx.execute<{ skuId: number; provenance: string; quantity: number }>(sql`
       SELECT "skuId", provenance, quantity FROM stock_balances
       WHERE "locationId" = ${loc} AND "skuId" IN (SELECT json_array_elements_text(${J(skus)}::json)::int)`)
-    for (const s of skus) avail.set(s, { scanned: 0, unscanned: 0 })
+    for (const s of skus) avail.set(s, { scanned: 0, carton: 0, unscanned: 0 })
     for (const b of bal.rows) {
       const a = avail.get(Number(b.skuId))!
       if (b.provenance === 'scanned') a.scanned = Number(b.quantity)
       if (b.provenance === 'unscanned') a.unscanned = Number(b.quantity)
+      if (b.provenance === 'carton') a.carton = Number(b.quantity)
     }
   }
 
@@ -254,6 +256,7 @@ export async function postOrderScans(tx: Tx, actor: Actor, orderId: number, orde
     if (sku != null) {
       const a = avail.get(sku)!
       if (s.stockEventId != null && a.scanned >= 1) { source = 'scanned'; a.scanned-- }
+      else if (a.carton >= 1) { source = 'carton'; a.carton-- }
       else if (a.unscanned >= 1) { source = 'unscanned'; a.unscanned-- }
     }
     counts[source]++

@@ -22,9 +22,10 @@ const num = new Intl.NumberFormat('en-IN')
 const when = new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })
 const inputCls = 'rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring'
 
-const KIND_LABEL: Record<MovementKind, string> = { scan: 'Scan', billed: 'Billed', undo: 'Undo', correction: 'Correction', other: 'Other' }
+const KIND_LABEL: Record<MovementKind, string> = { scan: 'Scan', received: 'Carton received', billed: 'Billed', undo: 'Undo', correction: 'Correction', other: 'Other' }
 const KIND_STYLE: Record<MovementKind, string> = {
   scan: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+  received: 'bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300',
   billed: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
   undo: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
   correction: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
@@ -308,10 +309,11 @@ function MovementsTab({ staff, onOpen }: { staff: Props['staff']; onOpen: (id: n
         <select value={kind} onChange={(e) => setKind(e.target.value as MovementKind | 'all')} aria-label="Type" className={`${inputCls} text-xs`}>
           <option value="all">All types</option>
           <option value="scan">Scans</option>
+          <option value="received">Cartons received</option>
           <option value="billed">Billed</option>
           <option value="undo">Undone (scans, bills, corrections)</option>
           <option value="correction">Corrections</option>
-          <option value="other">Other</option>
+          <option value="other">Other (box from carton, …)</option>
         </select>
         <select value={userId} onChange={(e) => setUserId(e.target.value)} aria-label="Staff" className={`${inputCls} text-xs`}>
           <option value="">All staff</option>

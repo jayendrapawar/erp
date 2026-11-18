@@ -80,7 +80,7 @@ describe('billing takes stock out (integration)', { skip: !harnessEnabled() && '
     await assert.rejects(generateDirectBill(h.db, biller, draftId, { shopkeeperName: '' }), /retailer/)
     const bill = await generateDirectBill(h.db, biller, draftId, { shopkeeperName: 'Test Shop', lineDiscPct: 25, manualLines: [{ artNumber: 'FL-20', mrp: 239.5, qty: 2 }] })
     orderId = bill.id
-    assert.deepEqual(bill.stock, { scanned: 1, unscanned: 1, unscanned_dispatch: 1 })
+    assert.deepEqual(bill.stock, { scanned: 1, carton: 0, unscanned: 1, unscanned_dispatch: 1 })
     assert.deepEqual(bill.lines.map((l) => [l.artNumber, l.mrp, l.qty]).sort(), [['FL-20', 239.5, 2], ['PUGN42G', 339.5, 2], ['SS0703G', 649, 1]])
     assert.deepEqual([await bal('scanned'), await bal('unscanned')], [0, 0])
     const o = (await h.db.execute<{ status: string; isEmergency: boolean }>(sql`SELECT status, "isEmergency" FROM orders WHERE id = ${orderId}`)).rows[0]
@@ -111,13 +111,13 @@ describe('billing takes stock out (integration)', { skip: !harnessEnabled() && '
     const o1 = await mk('ORD-T-1')
     const o2 = await mk('ORD-T-2')
     const r1 = await h.db.transaction((tx) => recordOrderScans(tx, biller, o1, 'ORD-T-1', [BOX, BOX, BOX_SIZE_8, 'garbage']))
-    assert.deepEqual(r1, { scanned: 1, unscanned: 0, unscanned_dispatch: 1, skipped: 2 })
+    assert.deepEqual(r1, { scanned: 1, carton: 0, unscanned: 0, unscanned_dispatch: 1, skipped: 2 })
     assert.equal(await bal('scanned'), 0)
     await assert.rejects(h.db.transaction((tx) => recordOrderScans(tx, biller, o2, 'ORD-T-2', [BOX_2, BOX])), /already on another bill: PUGN42G size 6 \(bill ORD-T-1\)/)
     assert.equal(await bal('unscanned'), 1) // rolled back: BOX_2 did not leave stock
     // Billing order 1 again (e.g. after edits) releases and re-posts: no double count.
     const r2 = await h.db.transaction((tx) => recordOrderScans(tx, biller, o1, 'ORD-T-1', [BOX]))
-    assert.deepEqual(r2, { scanned: 1, unscanned: 0, unscanned_dispatch: 0, skipped: 0 })
+    assert.deepEqual(r2, { scanned: 1, carton: 0, unscanned: 0, unscanned_dispatch: 0, skipped: 0 })
     assert.deepEqual([await bal('scanned'), await bal('unscanned')], [0, 1])
     const active = await h.db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM bill_scans WHERE "orderId" = ${o1} AND status = 'active'`)
     assert.equal(Number(active.rows[0].n), 1)

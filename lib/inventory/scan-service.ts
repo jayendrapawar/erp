@@ -11,6 +11,8 @@
  *    "missing article" scan with no stock movement. Linking the article later posts it.
  *  - Resolved QR scans post +1 'scanned' stock. Manual entries post 'unscanned' stock.
  *  - Undo = void + reversing ledger movement. Nothing is deleted.
+ *  - A box scanned while its size has CARTON stock (cartons received against a purchase bill)
+ *    comes out of that carton stock: −1 carton, +1 scanned, so it is not counted twice.
  */
 
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm'
@@ -214,9 +216,24 @@ async function findByClientEvent(db: DbOrTx, clientEventId: string): Promise<Sca
 
 function postKey(eventId: number) { return `scan_event:${eventId}:post` }
 
+function fromCartonKey(eventId: number) { return `scan_event:${eventId}:from_carton` }
+
 async function postScanMovement(db: DbOrTx, event: ScanEvent, userId: string | null) {
   if (!event.skuId) return
   const legacy = event.source === 'legacy_import'
+  if (event.entryType === 'scan' && !legacy) {
+    // Same per-SKU lock as corrections, billing and carton receiving.
+    await db.execute(sql`SELECT pg_advisory_xact_lock(7301, ${event.skuId})`)
+    const carton = await db.execute<{ q: number }>(sql`
+      SELECT quantity AS q FROM stock_balances WHERE "skuId" = ${event.skuId} AND "locationId" = ${event.locationId} AND provenance = 'carton'`)
+    if (Number(carton.rows[0]?.q ?? 0) >= event.quantity) {
+      await postMovement(db, {
+        skuId: event.skuId, locationId: event.locationId, provenance: 'carton', quantity: -event.quantity,
+        movementType: 'provenance_transfer', sourceType: 'scan_event', sourceId: event.id,
+        idempotencyKey: fromCartonKey(event.id), userId, reason: 'box scanned from a received carton',
+      })
+    }
+  }
   await postMovement(db, {
     skuId: event.skuId,
     locationId: event.locationId,
@@ -297,6 +314,9 @@ export async function voidScanEvent(
       await reverseMovement(tx, posted.id, { idempotencyKey: `scan_event:${ev.id}:void`, userId: actor.id, reason })
       reversed = true
     }
+    // The box goes back to carton stock if it had come out of it.
+    const [fromCarton] = await tx.select({ id: stockMovements.id }).from(stockMovements).where(eq(stockMovements.idempotencyKey, fromCartonKey(ev.id))).limit(1)
+    if (fromCarton) await reverseMovement(tx, fromCarton.id, { idempotencyKey: `scan_event:${ev.id}:void_from_carton`, userId: actor.id, reason })
     await audit(tx, { actor, action: 'scan.voided', entityType: 'scan_event', entityId: ev.id, before: { status: 'active' }, after: { status: 'voided', reversed }, reason })
 
     let articleDeactivated: { articleId: number; artCode: string; colorCode: string } | undefined

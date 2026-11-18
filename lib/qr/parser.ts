@@ -360,7 +360,9 @@ function buildCarton(
     colourCode: f(p.col, p.col, 'verified', 'Matches the individual-box colour code in every sample group.'),
   }
   const from = Number(p.from), to = Number(p.to)
-  if (!from || !to || from > to) issues.push(issue('size_range_invalid', 'error', `Size range ${p.from}–${p.to} is not valid.`))
+  // Children's ranges wrap from 11–13 back to 1 (11–1 = 11, 12, 13, 1), as in the article master.
+  const wraps = from >= 11 && from <= 13 && to >= 1 && to < from
+  if (!from || !to || (from > to && !wraps)) issues.push(issue('size_range_invalid', 'error', `Size range ${p.from}–${p.to} is not valid.`))
   else {
     fields.sizeFrom = f(String(from), p.from, 'verified', 'Every matching box size falls inside this range.')
     fields.sizeTo = f(String(to), p.to, 'verified')

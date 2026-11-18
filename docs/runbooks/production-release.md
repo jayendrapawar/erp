@@ -44,7 +44,7 @@ including deployment and smoke tests. `W` = path of the Sparx workbook.
 | 2 | Start tracking [3 s] | `npm run db:migrate -- --env-file .env --to 0000 --confirm ep-royal-tooth-b3ub6jie` → 0000 is **adopted** (nothing changes, `schema_migrations` is created). |
 | 3 | Reset, dry run [6 s] | `npx tsx scripts/release/reset-article-master.ts --env-file .env` — must list `scans 0`, `article_sizes 15398`, `article_colors 2759`, `articles 2759` and no refusal. Stop if different (e.g. someone scanned or booked an order). |
 | 4 | Reset [5 s] | same command `--apply --confirm ep-royal-tooth-b3ub6jie --actor-name "<your name>"`. One transaction. Writes a record to `backups/ep-royal-tooth-b3ub6jie/reset-*.json`. |
-| 5 | Migrations [5 s] | `npm run db:migrate -- --env-file .env --confirm ep-royal-tooth-b3ub6jie` → 0001 … 0006, each in its own transaction. |
+| 5 | Migrations [5 s] | `npm run db:migrate -- --env-file .env --confirm ep-royal-tooth-b3ub6jie` → 0001 … 0007, each in its own transaction. |
 | 6 | Article master, dry run [4 s] | `npm run catalog:import-sparx -- --file "$W" --env-file .env --trust-source --report-dir docs/release/prod-import` — expect **651 new, 0 matched, 0 retired, SKUs +3120, 0 review items**. Stop if different. |
 | 7 | Article master [7 s] | same command `--apply --confirm ep-royal-tooth-b3ub6jie --actor <admin email>`. Re-running must report NO CHANGES. |
 | 8 | Assortments [3 s] | `npx tsx scripts/catalog/import-assortments.ts --file docs/catalog/eva/flite-eva-assortments.xlsx --env-file .env --apply --confirm ep-royal-tooth-b3ub6jie` → 32 new. (Or upload it in Master → Assortments after deployment.) |
