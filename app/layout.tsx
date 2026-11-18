@@ -4,6 +4,7 @@ import './globals.css'
 import { LanguageProvider } from '@/lib/language-context'
 import { GlobalNetworkStatus } from '@/components/global-network-status'
 import { ServiceWorkerRegistration } from '@/components/service-worker-registration'
+import { AppNav } from '@/components/app-nav'
 
 export const metadata: Metadata = {
   title: 'Shayona Inventory Management',
@@ -24,8 +25,8 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  // Pinch-zoom stays available (accessibility); text boxes use 16px on phones so they never zoom.
+  viewportFit: 'cover',
   colorScheme: 'light dark',
   themeColor: [
     { media: '(prefers-color-scheme: light)', color: 'white' },
@@ -45,6 +46,7 @@ export default function RootLayout({
           <ServiceWorkerRegistration />
           <GlobalNetworkStatus />
           {children}
+          <AppNav />
         </LanguageProvider>
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>

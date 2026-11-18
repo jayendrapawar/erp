@@ -22,7 +22,7 @@ export function PageNav({ hideHome }: PageNavProps) {
   }
 
   return (
-    <div className="flex items-center gap-1.5 flex-shrink-0">
+    <div className="hidden md:flex items-center gap-1.5 flex-shrink-0">
       {!hideHome && (
         <a
           href="/home"

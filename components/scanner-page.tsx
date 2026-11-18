@@ -937,7 +937,7 @@ export function ScannerPage() {
                 </span>
               )}
             </div>
-            <div className="flex gap-1.5 sm:gap-2 items-center shrink-0">
+            <div className="hidden md:flex gap-1.5 sm:gap-2 items-center shrink-0">
               <Button variant="outline" size="sm" className="text-xs sm:text-sm px-2 sm:px-3" onClick={() => router.push('/home')}>
                 ← Home
               </Button>
@@ -970,7 +970,7 @@ export function ScannerPage() {
             }
           }}
         >
-          <TabsList className={`grid w-full ${totalOffline > 0 ? 'grid-cols-5' : 'grid-cols-4'}`}>
+          <TabsList className="flex w-full">
             <TabsTrigger value="camera" className="text-[11px] sm:text-sm truncate">{t('cameraTab')}</TabsTrigger>
             <TabsTrigger value="manual" className="text-[11px] sm:text-sm truncate">{t('manualTab')}</TabsTrigger>
             <TabsTrigger value="recent" className="text-[11px] sm:text-sm truncate">{t('recentScansTab')}</TabsTrigger>

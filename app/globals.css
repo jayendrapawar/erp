@@ -2,7 +2,12 @@
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
 
-@custom-variant dark (&:is(.dark *));
+/* Dark mode follows the phone / computer setting (same switch as the colour variables below);
+   a .dark class still forces it. Before 19 Nov 2026 only the class worked, so the dark: styles never applied. */
+@custom-variant dark {
+  &:where(.dark, .dark *) { @slot; }
+  @media (prefers-color-scheme: dark) { &:where(:root:not(.light), :root:not(.light) *) { @slot; } }
+}
 
 @theme inline {
   --color-sidebar-ring: var(--sidebar-ring);
@@ -188,4 +193,18 @@
   img, video, canvas, svg {
     max-width: 100%;
   }
+}
+
+/* Phone layout */
+@layer base {
+  /* Phones zoom into text boxes smaller than 16px; keep 16px there. */
+  @media (max-width: 767px) {
+    input:not([type='checkbox']):not([type='radio']):not([type='range']), select, textarea { font-size: 16px; }
+  }
+  html { -webkit-text-size-adjust: 100%; }
+}
+
+@layer utilities {
+  .no-scrollbar { scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
 }

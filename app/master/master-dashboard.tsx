@@ -217,16 +217,16 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
 
         {/* Stats row — hidden for accountant (user management not relevant) */}
         {!isAccountant && (
-        <div className="grid grid-cols-3 sm:grid-cols-5 gap-3 mb-6">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-4 px-4 mb-4 sm:mx-0 sm:px-0 sm:grid sm:grid-cols-5 sm:gap-3 sm:mb-6">
           {ROLES.map(r => {
             const count = users.filter(u => {
               const roles = (u.role ?? 'user').split(',').map(x => x.trim())
               return roles.includes(r)
             }).length
             return (
-              <div key={r} className="rounded-xl border border-border bg-card p-4">
-                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{r}</p>
-                <p className="text-2xl font-bold mt-1 text-foreground">{count}</p>
+              <div key={r} className="shrink-0 min-w-[92px] rounded-xl border border-border bg-card px-3 py-2 sm:p-4">
+                <p className="text-[10px] sm:text-xs text-muted-foreground font-medium uppercase tracking-wide">{r}</p>
+                <p className="text-lg sm:text-2xl font-bold sm:mt-1 text-foreground">{count}</p>
               </div>
             )
           })}
@@ -236,8 +236,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
         {/* Tabs — pill style matching scanner / admin hub */}
         <Tabs defaultValue={defaultTab} className="w-full">
           <TabsList
-            className="grid w-full mb-6"
-            style={{ gridTemplateColumns: isAccountant ? 'repeat(4, minmax(0, 1fr))' : 'repeat(6, minmax(0, 1fr))' }}
+            className="flex w-full mb-4 sm:mb-6"
           >
             {!isAccountant && <TabsTrigger value="users"    className="text-xs sm:text-sm">Users ({users.length})</TabsTrigger>}
             <TabsTrigger value="vendors"  className="text-xs sm:text-sm">Retailers ({vendorList.length})</TabsTrigger>

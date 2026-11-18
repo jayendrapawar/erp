@@ -89,7 +89,7 @@ export function InventoryPage({ initialSummary, initialStock, staff, canAdjust }
         )}
 
         <Tabs value={tab} onValueChange={(v) => setTab(String(v))} className="w-full">
-          <TabsList className="grid w-full grid-cols-3 mb-4">
+          <TabsList className="flex w-full mb-4">
             <TabsTrigger value="stock" className="text-xs sm:text-sm">Stock</TabsTrigger>
             <TabsTrigger value="movements" className="text-xs sm:text-sm">Movements</TabsTrigger>
             <TabsTrigger value="dispatch" className="text-xs sm:text-sm">Unscanned dispatch ({num.format(summary.unscannedDispatch)})</TabsTrigger>

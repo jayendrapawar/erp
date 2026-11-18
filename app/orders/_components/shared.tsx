@@ -73,7 +73,7 @@ export function fmt(d: Date | null | undefined) {
 
 export function PageHeader({ title, subtitle, back }: { title: string; subtitle?: string; back?: string }) {
   return (
-    <div className="flex items-center gap-3 mb-6">
+    <div className="flex items-center gap-3 mb-4 sm:mb-6 min-w-0">
       {back && (
         <a href={back} className="flex items-center justify-center w-8 h-8 rounded-lg border border-border hover:bg-muted transition-colors">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -82,8 +82,8 @@ export function PageHeader({ title, subtitle, back }: { title: string; subtitle?
         </a>
       )}
       <div>
-        <h1 className="text-xl font-semibold text-foreground">{title}</h1>
-        {subtitle && <p className="text-sm text-muted-foreground">{subtitle}</p>}
+        <h1 className="text-lg sm:text-xl font-semibold text-foreground truncate">{title}</h1>
+        {subtitle && <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2">{subtitle}</p>}
       </div>
     </div>
   )

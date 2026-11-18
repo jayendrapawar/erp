@@ -102,7 +102,7 @@ export function PurchasesPage({ initialSummary, initialBills, canUpload, mailbox
         )}
 
         <Tabs value={tab} onValueChange={(v) => setTab(String(v))} className="w-full">
-          <TabsList className="grid w-full grid-cols-4 mb-4">
+          <TabsList className="flex w-full mb-4">
             <TabsTrigger value="bills" className="text-xs sm:text-sm">Bills</TabsTrigger>
             <TabsTrigger value="receive" className="text-xs sm:text-sm">Receive</TabsTrigger>
             <TabsTrigger value="expected" className="text-xs sm:text-sm">Expected stock</TabsTrigger>
@@ -166,7 +166,7 @@ function MailStartPanel({ state, onChange, canSet, mailboxReady }: { state: Mail
   })
 
   return (
-    <div className={`mb-3 rounded-xl border px-3 py-2.5 text-xs ${on ? 'border-green-300 bg-green-50 dark:border-green-900 dark:bg-green-950/20' : 'border-border bg-muted/40'}`}>
+    <div className={`mb-3 rounded-xl border px-3 py-2.5 text-xs ${on ? 'border-green-300 bg-green-50 text-green-950 dark:border-green-800 dark:bg-green-950/40 dark:text-green-100' : 'border-border bg-muted/40 text-foreground'}`}>
       <div className="flex flex-wrap items-center gap-2">
         <p className="flex-1 min-w-[200px]">
           <span className="font-semibold">Bills from mail: {on ? 'ON' : 'OFF'}</span>
@@ -214,9 +214,14 @@ function BillsTab({ bills, canUpload, mailReady, onOpen, onUploaded }: { bills: 
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const [query, setQuery] = useState('')
+  const [shown, setShown] = useState(20)
   const [mailSince, setMailSince] = useState('')
   const [mail, setMail] = useState<MailCheckResult | null>(null)
-  const list = showAll ? bills : bills.filter((b) => b.status === 'expected' || b.status === 'partial')
+  const q = query.trim().toLowerCase()
+  const all = (showAll ? bills : bills.filter((b) => b.status === 'expected' || b.status === 'partial'))
+    .filter((b) => !q || b.refNo.toLowerCase().includes(q) || b.invoiceNo.toLowerCase().includes(q) || b.division.toLowerCase().includes(q))
+  const list = all.slice(0, shown)
 
   async function upload(files: FileList | null) {
     if (!files?.length) return
@@ -293,27 +298,41 @@ function BillsTab({ bills, canUpload, mailReady, onOpen, onUploaded }: { bills: 
           ))}
         </div>
       )}
-      {list.length === 0 && (
-        <p className="text-center py-10 text-sm text-muted-foreground">{bills.length ? 'No open bills. Everything uploaded has been received.' : 'No bills yet. Upload the bill PDFs Relaxo sends by mail.'}</p>
+      {bills.length > 0 && (
+        <input type="search" value={query} onChange={(e) => { setQuery(e.target.value); setShown(20) }} placeholder="Search bill no., invoice or division…" aria-label="Search bills"
+          className={`${inputCls} w-full mb-3`} />
       )}
+      {list.length === 0 && (
+        <p className="text-center py-10 text-sm text-muted-foreground">{q ? 'No bill matches.' : bills.length ? 'No open bills. Everything uploaded has been received.' : 'No bills yet. Upload the bill PDFs Relaxo sends by mail.'}</p>
+      )}
+      {list.length > 0 && <p className="mb-1.5 text-[11px] text-muted-foreground">{all.length} bill{all.length === 1 ? '' : 's'}</p>}
       <div className={`rounded-xl border border-border divide-y divide-border overflow-hidden ${list.length ? '' : 'hidden'}`}>
         {list.map((b) => (
-          <button key={b.id} onClick={() => onOpen(b.id)} className="w-full text-left px-3 sm:px-4 py-3 hover:bg-muted/40 flex gap-3 items-center">
+          <button key={b.id} onClick={() => onOpen(b.id)} className="w-full text-left px-3 sm:px-4 py-3 hover:bg-muted/40 flex flex-col sm:flex-row gap-2 sm:gap-3 sm:items-center">
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-foreground">
-                {b.refNo} <span className="font-normal text-muted-foreground">· {b.invoiceNo}</span>
-                <span className={`ml-2 rounded-full px-1.5 py-px text-[10px] font-medium align-middle ${STATUS[b.status]?.cls ?? ''}`}>{STATUS[b.status]?.label ?? b.status}</span>
-                {b.overdue && <span className="ml-1 rounded-full px-1.5 py-px text-[10px] font-medium align-middle bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300">Overdue</span>}
+              <p className="text-sm font-medium text-foreground flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                <span>{b.refNo}</span>
+                <span className="font-normal text-muted-foreground text-xs">{b.invoiceNo}</span>
+                <span className={`rounded-full px-1.5 py-px text-[10px] font-medium ${STATUS[b.status]?.cls ?? ''}`}>{STATUS[b.status]?.label ?? b.status}</span>
+                {b.overdue && <span className="rounded-full px-1.5 py-px text-[10px] font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300">Overdue</span>}
+              </p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                Bill {day(b.billDate)} · expected {day(b.expectedOn)} · {b.division || 'division?'}
               </p>
               <p className="text-[11px] text-muted-foreground">
-                Bill {day(b.billDate)} · expected {day(b.expectedOn)} · {b.division || 'division?'} · {num.format(b.totalPairs)} pairs{b.grossAmount != null ? ` · ${inr.format(b.grossAmount)}` : ''}
+                {num.format(b.totalPairs)} pairs{b.grossAmount != null ? ` · ${inr.format(b.grossAmount)}` : ''}
                 {b.pendingStock > 0 ? <span> · {b.pendingStock} carton(s) checked only — scan their boxes</span> : null}
               </p>
             </div>
-            <div className="w-28 sm:w-40 shrink-0"><Progress done={b.receivedCartons} total={b.totalCartons} /></div>
+            <div className="w-full sm:w-40 shrink-0"><Progress done={b.receivedCartons} total={b.totalCartons} /></div>
           </button>
         ))}
       </div>
+      {all.length > list.length && (
+        <button onClick={() => setShown((n) => n + 20)} className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted">
+          Show more ({all.length - list.length} left)
+        </button>
+      )}
     </div>
   )
 }
