@@ -46,6 +46,8 @@ export interface StockSummary {
   waitingScans: number
   waitingPairs: number
   movementsToday: number
+  /** Billed boxes that were never in stock (bill_scans 'unscanned_dispatch'). */
+  unscannedDispatch: number
 }
 
 // Division: the variant's own division, else the catalogue brand ("SPARX" → "Sparx").
@@ -135,7 +137,8 @@ export async function stockSummary(db: DbOrTx): Promise<StockSummary> {
       (SELECT count(*) FROM bal WHERE q < 0)::int AS negative,
       (SELECT count(*) FROM scan_events WHERE status = 'active' AND resolution <> 'resolved')::int AS waiting,
       (SELECT coalesce(sum(quantity), 0) FROM scan_events WHERE status = 'active' AND resolution <> 'resolved')::int AS waiting_pairs,
-      (SELECT count(*) FROM stock_movements WHERE "createdAt" >= date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS today`)
+      (SELECT count(*) FROM stock_movements WHERE "createdAt" >= date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS today,
+      (SELECT count(*) FROM bill_scans WHERE status = 'active' AND "stockSource" = 'unscanned_dispatch')::int AS dispatch`)
   const x = r.rows[0] ?? {}
   return {
     pairs: Number(x.pairs ?? 0),
@@ -147,10 +150,11 @@ export async function stockSummary(db: DbOrTx): Promise<StockSummary> {
     waitingScans: Number(x.waiting ?? 0),
     waitingPairs: Number(x.waiting_pairs ?? 0),
     movementsToday: Number(x.today ?? 0),
+    unscannedDispatch: Number(x.dispatch ?? 0),
   }
 }
 
-export type MovementKind = 'scan' | 'undo' | 'correction' | 'other'
+export type MovementKind = 'scan' | 'billed' | 'undo' | 'correction' | 'other'
 
 export interface Movement {
   id: number
@@ -188,6 +192,7 @@ export interface MovementFilters {
 
 const KIND_TYPES: Record<Exclude<MovementKind, 'other'>, string[]> = {
   scan: ['stocktake_scan', 'stocktake_manual', 'legacy_import'],
+  billed: ['dispatch'],
   undo: ['reversal'],
   correction: ['adjustment'],
 }
@@ -201,7 +206,7 @@ export async function listMovements(db: DbOrTx, f: MovementFilters): Promise<{ r
   const conds: SQL[] = [sql`TRUE`]
   if (f.kind && f.kind !== 'all') {
     conds.push(f.kind === 'other'
-      ? sql`m."movementType" NOT IN ('stocktake_scan','stocktake_manual','legacy_import','reversal','adjustment')`
+      ? sql`m."movementType" NOT IN ('stocktake_scan','stocktake_manual','legacy_import','dispatch','reversal','adjustment')`
       : sql`m."movementType" IN (SELECT json_array_elements_text(${JSON.stringify(KIND_TYPES[f.kind])}::json))`)
   }
   if (f.articleId) conds.push(sql`s."articleId" = ${f.articleId}`)
@@ -225,7 +230,7 @@ export async function listMovements(db: DbOrTx, f: MovementFilters): Promise<{ r
     LIMIT ${limit + 1}`)
   const rows = r.rows.slice(0, limit).map((x): Movement => {
     const type = String(x.movementType)
-    const kind: MovementKind = KIND_TYPES.scan.includes(type) ? 'scan' : type === 'reversal' ? 'undo' : type === 'adjustment' ? 'correction' : 'other'
+    const kind: MovementKind = KIND_TYPES.scan.includes(type) ? 'scan' : type === 'dispatch' ? 'billed' : type === 'reversal' ? 'undo' : type === 'adjustment' ? 'correction' : 'other'
     const undone = Boolean(x.undone)
     return {
       id: Number(x.id), at: new Date(x.createdAt as string).toISOString(),
@@ -247,3 +252,40 @@ export async function skuBalance(db: DbOrTx, skuId: number, locationId: number):
 }
 
 export interface VariantDetail { variant: StockVariant | null; movements: Movement[]; hasMore: boolean }
+
+export interface UnscannedDispatch {
+  id: number
+  at: string
+  orderNumber: string
+  articleCode: string
+  colourCode: string
+  size: string
+  mrp: number | null
+  artName: string | null
+  color: string | null
+  userName: string
+  raw: string
+}
+
+/** Billed boxes that were never in stock, newest first (keyset). One query. */
+export async function listUnscannedDispatch(db: DbOrTx, f: { before?: number; limit?: number } = {}): Promise<{ rows: UnscannedDispatch[]; hasMore: boolean }> {
+  const limit = Math.min(Math.max(f.limit ?? PAGE_SIZE, 1), 200)
+  const r = await db.execute<Record<string, unknown>>(sql`
+    SELECT b.id, b."postedAt", b."orderNumber", b."articleCode", b."colourCode", b."sizeLabel", b.mrp, b."userName", b."rawInput",
+           a."artName", a.color
+    FROM bill_scans b
+    LEFT JOIN article_sizes s ON s.id = b."skuId"
+    LEFT JOIN articles a ON a.id = s."articleId"
+    WHERE b.status = 'active' AND b."stockSource" = 'unscanned_dispatch' ${f.before ? sql`AND b.id < ${f.before}` : sql``}
+    ORDER BY b.id DESC
+    LIMIT ${limit + 1}`)
+  return {
+    hasMore: r.rows.length > limit,
+    rows: r.rows.slice(0, limit).map((x) => ({
+      id: Number(x.id), at: new Date(x.postedAt as string).toISOString(), orderNumber: String(x.orderNumber ?? ''),
+      articleCode: String(x.articleCode ?? ''), colourCode: String(x.colourCode ?? ''), size: String(x.sizeLabel ?? ''),
+      mrp: x.mrp != null ? Number(x.mrp) : null, artName: (x.artName as string) ?? null, color: (x.color as string) ?? null,
+      userName: String(x.userName ?? ''), raw: String(x.rawInput ?? ''),
+    })),
+  }
+}

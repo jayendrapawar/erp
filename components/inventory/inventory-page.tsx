@@ -6,9 +6,9 @@ import { PageNav } from '@/components/page-nav'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DIVISIONS } from '@/lib/catalog/assortments'
 import {
-  correctStockAction, getMovements, getStockPage, getStockSummary, getVariantDetail, undoCorrectionAction,
+  correctStockAction, getMovements, getStockPage, getStockSummary, getUnscannedDispatch, getVariantDetail, undoCorrectionAction,
 } from '@/app/actions/inventory'
-import type { Movement, MovementKind, StockSummary, StockVariant, VariantDetail } from '@/lib/inventory/stock-queries'
+import type { Movement, MovementKind, StockSummary, StockVariant, UnscannedDispatch, VariantDetail } from '@/lib/inventory/stock-queries'
 
 interface Props {
   initialSummary: StockSummary
@@ -22,9 +22,10 @@ const num = new Intl.NumberFormat('en-IN')
 const when = new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })
 const inputCls = 'rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring'
 
-const KIND_LABEL: Record<MovementKind, string> = { scan: 'Scan', undo: 'Undo', correction: 'Correction', other: 'Other' }
+const KIND_LABEL: Record<MovementKind, string> = { scan: 'Scan', billed: 'Billed', undo: 'Undo', correction: 'Correction', other: 'Other' }
 const KIND_STYLE: Record<MovementKind, string> = {
   scan: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+  billed: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
   undo: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
   correction: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
   other: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300',
@@ -87,15 +88,19 @@ export function InventoryPage({ initialSummary, initialStock, staff, canAdjust }
         )}
 
         <Tabs value={tab} onValueChange={(v) => setTab(String(v))} className="w-full">
-          <TabsList className="grid w-full grid-cols-2 mb-4">
+          <TabsList className="grid w-full grid-cols-3 mb-4">
             <TabsTrigger value="stock" className="text-xs sm:text-sm">Stock</TabsTrigger>
             <TabsTrigger value="movements" className="text-xs sm:text-sm">Movements</TabsTrigger>
+            <TabsTrigger value="dispatch" className="text-xs sm:text-sm">Unscanned dispatch ({num.format(summary.unscannedDispatch)})</TabsTrigger>
           </TabsList>
           <TabsContent value="stock">
             <StockTab initial={initialStock} onOpen={setOpenId} patch={stockPatch} />
           </TabsContent>
           <TabsContent value="movements">
             {tab === 'movements' && <MovementsTab staff={staff} onOpen={setOpenId} />}
+          </TabsContent>
+          <TabsContent value="dispatch">
+            {tab === 'dispatch' && <DispatchTab />}
           </TabsContent>
         </Tabs>
       </div>
@@ -303,7 +308,8 @@ function MovementsTab({ staff, onOpen }: { staff: Props['staff']; onOpen: (id: n
         <select value={kind} onChange={(e) => setKind(e.target.value as MovementKind | 'all')} aria-label="Type" className={`${inputCls} text-xs`}>
           <option value="all">All types</option>
           <option value="scan">Scans</option>
-          <option value="undo">Undone scans / corrections</option>
+          <option value="billed">Billed</option>
+          <option value="undo">Undone (scans, bills, corrections)</option>
           <option value="correction">Corrections</option>
           <option value="other">Other</option>
         </select>
@@ -474,6 +480,63 @@ function VariantDialog({ articleId, canAdjust, onClose, onChanged }: { articleId
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Unscanned dispatch ─────────────────────────────────────────────────
+
+/** Billed boxes the warehouse never scanned into stock (and with no hand-counted stock to take from). */
+function DispatchTab() {
+  const [rows, setRows] = useState<UnscannedDispatch[]>([])
+  const [hasMore, setHasMore] = useState(false)
+  const [error, setError] = useState('')
+  const [busy, start] = useTransition()
+
+  useEffect(() => {
+    start(async () => {
+      try { const r = await getUnscannedDispatch(); setRows(r.rows); setHasMore(r.hasMore) }
+      catch (e) { setError(errText(e, 'Could not load.')) }
+    })
+  }, [])
+
+  function loadMore() {
+    const last = rows[rows.length - 1]
+    if (!last) return
+    start(async () => {
+      try { const r = await getUnscannedDispatch(last.id); setRows((rs) => [...rs, ...r.rows]); setHasMore(r.hasMore) }
+      catch (e) { setError(errText(e, 'Could not load more.')) }
+    })
+  }
+
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground mb-3">
+        Boxes billed that were never scanned into stock, so stock was not reduced. Check whether they should have been counted.
+      </p>
+      {error && <p className="mb-2 text-xs text-red-600">{error}</p>}
+      {busy && rows.length === 0 && <p className="text-center py-10 text-sm text-muted-foreground">Loading…</p>}
+      {!busy && rows.length === 0 && !error && <p className="text-center py-10 text-sm text-muted-foreground">None. Every billed box came out of stock.</p>}
+      <div className={`rounded-xl border border-border divide-y divide-border overflow-hidden ${rows.length ? '' : 'hidden'}`}>
+        {rows.map((d) => (
+          <div key={d.id} className="flex items-start gap-2.5 px-3 py-2.5">
+            <div className="w-[68px] shrink-0 text-[11px] text-muted-foreground tabular-nums leading-tight pt-0.5">{when.format(new Date(d.at))}</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm text-foreground truncate">
+                {d.artName ?? d.articleCode} <span className="text-muted-foreground">· {d.color ?? d.colourCode} · size {d.size || '?'}</span>
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                Bill {d.orderNumber} · {d.userName || '—'}{d.mrp != null ? ` · MRP ₹${d.mrp}` : ''}{d.artName ? '' : ' · article not in master'}
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+      {hasMore && (
+        <button onClick={loadMore} disabled={busy} className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">
+          {busy ? 'Loading…' : 'Show older'}
+        </button>
+      )}
     </div>
   )
 }

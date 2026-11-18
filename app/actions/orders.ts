@@ -8,6 +8,7 @@ import { revalidatePath } from 'next/cache'
 import { requireAnyRole } from '@/lib/authz'
 import type { Role } from '@/lib/permissions'
 import type { Tx } from '@/lib/db/types'
+import { releaseOrderScans } from '@/lib/billing/bill-stock'
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -397,64 +398,26 @@ export async function markBilled(orderId: number, isEmergency = false) {
   revalidatePath('/orders/dispatcher')
 }
 
-/**
- * Create a standalone emergency bill from the Billing Scanner.
- * Creates a new order (status=billed, isEmergency=true) + bill_lines in one shot.
- * Returns the new order id + orderNumber so the caller can refresh the Receipts tab.
- */
-export async function createEmergencyBill(input: {
-  shopkeeperName: string
-  shopkeeperPhone: string | null
-  shopkeeperAddress: string | null
-  lines: { artNumber: string; mrp: number; qty: number }[]
-  lineDiscPct: number
-}) {
-  const u = await requireRole('biller', 'admin')
-  const orderNumber = genOrderNumber()
-  const order = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(orders).values({
-      orderNumber,
-      shopkeeperName: input.shopkeeperName,
-      retailerId: await retailerIdFor(tx, input.shopkeeperName),
-      shopkeeperPhone: input.shopkeeperPhone,
-      shopkeeperAddress: input.shopkeeperAddress,
-      billerId: u.id,
-      status: 'billed',
-      isEmergency: true,
-      billedAt: sql`now()`,
-    }).returning()
-    if (input.lines.length > 0) {
-      await tx.insert(billLines).values(
-        input.lines.map(l => ({
-          orderId: created.id,
-          artNumber: l.artNumber,
-          mrp: String(l.mrp),
-          qty: l.qty,
-          lineDiscPct: String(input.lineDiscPct),
-        }))
-      )
-    }
-    return created
-  })
-
-  revalidatePath('/orders/biller')
-  revalidatePath('/orders/admin')
-  return { id: order.id, orderNumber: order.orderNumber }
-}
+// Direct Bills (formerly "Emergency Bills") are created from drafts: app/actions/billing.ts.
 
 /** Biller sends order back to salesman for editing (resets to pending) */
 export async function sendBackToEdit(orderId: number) {
-  await requireRole('biller', 'admin')
-  await db.update(orders)
-    .set({
-      status: 'pending',
-      pickerId: null,
-      billerId: null,
-      packedAt: null,
-      billedAt: null,
-      updatedAt: sql`now()`,
-    })
-    .where(eq(orders.id, orderId))
+  const u = await requireRole('biller', 'admin')
+  await db.transaction(async (tx) => {
+    // Boxes billed for this order go back into stock.
+    await releaseOrderScans(tx, { id: u.id, name: u.name }, orderId, 'order sent back for editing')
+    await tx.update(orders)
+      .set({
+        status: 'pending',
+        pickerId: null,
+        billerId: null,
+        packedAt: null,
+        billedAt: null,
+        updatedAt: sql`now()`,
+      })
+      .where(eq(orders.id, orderId))
+  })
+  revalidatePath('/inventory')
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
   revalidatePath('/orders/biller')
@@ -509,16 +472,24 @@ export async function markDelivered(orderId: number) {
 // ── Admin actions ─────────────────────────────────────────────────────────────
 
 export async function deleteOrder(orderId: number) {
-  await requireRole('admin')
-  await db.delete(orders).where(eq(orders.id, orderId))
+  const u = await requireRole('admin')
+  await db.transaction(async (tx) => {
+    await releaseOrderScans(tx, { id: u.id, name: u.name }, orderId, 'order deleted')
+    await tx.delete(orders).where(eq(orders.id, orderId))
+  })
+  revalidatePath('/inventory')
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
 }
 
-/** Biller can delete emergency-tagged orders they generated */
+/** Biller can delete a Direct Bill (isEmergency). Its boxes go back into stock first. */
 export async function deleteEmergencyBill(orderId: number) {
-  await requireRole('biller', 'admin')
-  await db.delete(orders).where(and(eq(orders.id, orderId), eq(orders.isEmergency, true)))
+  const u = await requireRole('biller', 'admin')
+  await db.transaction(async (tx) => {
+    await releaseOrderScans(tx, { id: u.id, name: u.name }, orderId, 'Direct Bill deleted')
+    await tx.delete(orders).where(and(eq(orders.id, orderId), eq(orders.isEmergency, true)))
+  })
+  revalidatePath('/inventory')
   revalidatePath('/orders/biller')
   revalidatePath('/orders/admin')
 }
@@ -549,7 +520,7 @@ export async function getAllOrders() {
 }
 
 export async function adminUpdateOrderStatus(orderId: number, status: OrderStatus) {
-  await requireRole('admin')
+  const u = await requireRole('admin')
   const patch: Record<string, unknown> = { status, updatedAt: sql`now()` }
   if (status === 'packed') patch.packedAt = sql`now()`
   if (status === 'billed') patch.billedAt = sql`now()`
@@ -557,7 +528,14 @@ export async function adminUpdateOrderStatus(orderId: number, status: OrderStatu
   if (status === 'delivered') patch.deliveredAt = sql`now()`
   // Clear picker/biller assignment when manually reverting to pending
   if (status === 'pending') { patch.pickerId = null; patch.billerId = null }
-  await db.update(orders).set(patch).where(eq(orders.id, orderId))
+  await db.transaction(async (tx) => {
+    // Moving an order back before "billed" (or cancelling it) returns its billed boxes to stock.
+    if (['pending', 'assigned', 'packed', 'cancelled'].includes(status)) {
+      await releaseOrderScans(tx, { id: u.id, name: u.name }, orderId, `order set to ${status}`)
+    }
+    await tx.update(orders).set(patch).where(eq(orders.id, orderId))
+  })
+  revalidatePath('/inventory')
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
   revalidatePath('/orders/picker')

@@ -4,8 +4,8 @@ import { db } from '@/lib/db'
 import { requirePermission } from '@/lib/authz'
 import { correctStock, undoCorrection } from '@/lib/inventory/adjust'
 import {
-  listMovements, listStock, stockSummary,
-  type Movement, type MovementFilters, type StockFilters, type StockSummary, type StockVariant, type VariantDetail,
+  listMovements, listStock, listUnscannedDispatch, stockSummary,
+  type Movement, type MovementFilters, type UnscannedDispatch, type StockFilters, type StockSummary, type StockVariant, type VariantDetail,
 } from '@/lib/inventory/stock-queries'
 
 // Inventory screen. Reads: one query each. Writes: one transaction each.
@@ -52,4 +52,9 @@ export async function undoCorrectionAction(input: { articleId: number; movementI
   const u = await requirePermission('inventory.adjust')
   await undoCorrection(db, { id: u.id, name: u.name }, input.movementId, input.reason)
   return variantDetail(input.articleId)
+}
+
+export async function getUnscannedDispatch(before?: number): Promise<{ rows: UnscannedDispatch[]; hasMore: boolean }> {
+  await requirePermission('inventory.view.all')
+  return listUnscannedDispatch(db, { before })
 }

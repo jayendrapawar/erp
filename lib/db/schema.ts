@@ -510,3 +510,54 @@ export const cartonAssortments = pgTable('carton_assortments', {
   uniqueIndex('carton_assortments_active_key').on(t.division, t.segment, t.packing, t.code).where(sql`active`),
   uniqueIndex('carton_assortments_version_key').on(t.division, t.segment, t.packing, t.code, t.version),
 ])
+
+// --- Billing takes stock out (migration 0006) ---
+
+export interface DraftManualLine { artNumber: string; mrp: number; qty: number }
+
+/** A Direct Bill from its first scan until it is generated or discarded. */
+export const directBillDrafts = pgTable('direct_bill_drafts', {
+  id:                serial('id').primaryKey(),
+  status:            text('status').$type<'open' | 'billed' | 'discarded'>().notNull().default('open'),
+  billerId:          text('billerId').references(() => user.id, { onDelete: 'set null' }),
+  billerName:        text('billerName').notNull().default(''),
+  shopkeeperName:    text('shopkeeperName').notNull().default(''),
+  shopkeeperPhone:   text('shopkeeperPhone'),
+  shopkeeperAddress: text('shopkeeperAddress'),
+  lineDiscPct:       numeric('lineDiscPct', { precision: 5, scale: 2 }).notNull().default('30'),
+  manualLines:       jsonb('manualLines').$type<DraftManualLine[]>().notNull().default([]),
+  orderId:           integer('orderId').references(() => orders.id, { onDelete: 'set null' }),
+  createdAt:         timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:         timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+  closedAt:          timestamp('closedAt', { withTimezone: true }),
+})
+
+export type BillStockSource = 'scanned' | 'unscanned' | 'unscanned_dispatch'
+
+/** One physical box on a bill. A box can be on one active bill only. */
+export const billScans = pgTable('bill_scans', {
+  id:               bigserial('id', { mode: 'number' }).primaryKey(),
+  clientEventId:    uuid('clientEventId').notNull().unique(),
+  draftId:          integer('draftId').references(() => directBillDrafts.id),
+  orderId:          integer('orderId').references(() => orders.id, { onDelete: 'restrict' }),
+  orderNumber:      text('orderNumber'),
+  rawInput:         text('rawInput').notNull(),
+  dedupeKey:        text('dedupeKey').notNull(),
+  articleCode:      text('articleCode'),
+  colourCode:       text('colourCode'),
+  sizeLabel:        text('sizeLabel'),
+  mrp:              numeric('mrp', { precision: 10, scale: 2 }),
+  skuId:            integer('skuId').references(() => articleSizes.id, { onDelete: 'restrict' }),
+  stockSource:      text('stockSource').$type<BillStockSource>(),
+  stockScanEventId: bigint('stockScanEventId', { mode: 'number' }).references(() => scanEvents.id),
+  movementId:       bigint('movementId', { mode: 'number' }).references(() => stockMovements.id),
+  status:           text('status').$type<'active' | 'released'>().notNull().default('active'),
+  userId:           text('userId').references(() => user.id, { onDelete: 'set null' }),
+  userName:         text('userName').notNull().default(''),
+  createdAt:        timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  postedAt:         timestamp('postedAt', { withTimezone: true }),
+  releasedAt:       timestamp('releasedAt', { withTimezone: true }),
+  releasedReason:   text('releasedReason'),
+}, (t) => [
+  uniqueIndex('bill_scans_active_box').on(t.dedupeKey).where(sql`status = 'active'`),
+])

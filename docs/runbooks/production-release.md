@@ -44,13 +44,13 @@ including deployment and smoke tests. `W` = path of the Sparx workbook.
 | 2 | Start tracking [3 s] | `npm run db:migrate -- --env-file .env --to 0000 --confirm ep-royal-tooth-b3ub6jie` → 0000 is **adopted** (nothing changes, `schema_migrations` is created). |
 | 3 | Reset, dry run [6 s] | `npx tsx scripts/release/reset-article-master.ts --env-file .env` — must list `scans 0`, `article_sizes 15398`, `article_colors 2759`, `articles 2759` and no refusal. Stop if different (e.g. someone scanned or booked an order). |
 | 4 | Reset [5 s] | same command `--apply --confirm ep-royal-tooth-b3ub6jie --actor-name "<your name>"`. One transaction. Writes a record to `backups/ep-royal-tooth-b3ub6jie/reset-*.json`. |
-| 5 | Migrations [5 s] | `npm run db:migrate -- --env-file .env --confirm ep-royal-tooth-b3ub6jie` → 0001 … 0005, each in its own transaction. |
+| 5 | Migrations [5 s] | `npm run db:migrate -- --env-file .env --confirm ep-royal-tooth-b3ub6jie` → 0001 … 0006, each in its own transaction. |
 | 6 | Article master, dry run [4 s] | `npm run catalog:import-sparx -- --file "$W" --env-file .env --trust-source --report-dir docs/release/prod-import` — expect **651 new, 0 matched, 0 retired, SKUs +3120, 0 review items**. Stop if different. |
 | 7 | Article master [7 s] | same command `--apply --confirm ep-royal-tooth-b3ub6jie --actor <admin email>`. Re-running must report NO CHANGES. |
 | 8 | Assortments [3 s] | `npx tsx scripts/catalog/import-assortments.ts --file docs/catalog/eva/flite-eva-assortments.xlsx --env-file .env --apply --confirm ep-royal-tooth-b3ub6jie` → 32 new. (Or upload it in Master → Assortments after deployment.) |
 | 9 | Verify [5 s] | `npm run db:verify -- --env-file .env --against <backup folder> --after-reset` — every line PASS (articles 651, sizes 3120, colours 651; users and orders unchanged). Then `npx tsx scripts/catalog/validate.ts --env-file .env --out docs/release/prod-validation.md`. |
 | 10 | Deploy | Deploy the approved `development` commit to Vercel production (owner approval). |
-| 11 | Smoke test | Admin account: Master → Articles shows 651 Sparx articles; search "SK-1016" → sizes 11 12 13 1 2 3 4 5; Master → Assortments shows 32 Flite EVA rows, Download Excel works; scan one Sparx box (stock +1), scan it again (duplicate warning), undo with a reason (stock −1); scan a Flite box → saved under Missing Articles; Orders → book screen lists SS-/SFG-/SM- articles; Dashboard opens. |
+| 11 | Smoke test | Admin account: Master → Articles shows 651 Sparx articles; search "SK-1016" → sizes 11 12 13 1 2 3 4 5; Master → Assortments shows 32 Flite EVA rows, Download Excel works; Orders → Biller → Direct Billing: scan the same Sparx box (shows in stock), leave the page, come back → draft is listed, Resume, Generate → Inventory shows −1 and a Billed movement; delete that bill → stock back; scan one Sparx box (stock +1), scan it again (duplicate warning), undo with a reason (stock −1); scan a Flite box → saved under Missing Articles; Orders → book screen lists SS-/SFG-/SM- articles; Dashboard opens. |
 | 12 | Roles | Assign roles to the two accounts that have none, if they are staff. |
 
 ## Rollback

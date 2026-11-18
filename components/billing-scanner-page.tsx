@@ -16,6 +16,20 @@ import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { isValidWarehouseQr, parseQr } from '@/lib/qr-parser'
 import { signOut } from '@/lib/auth-client'
+import {
+  discardDirectBillDraft, generateDirectBillFromDraft, getOpenDirectBillDrafts, openDirectBillDraft,
+  removeFromDirectBill, saveDirectBillDraft, scanIntoDirectBill, startDirectBillDraft,
+} from '@/app/actions/billing'
+import type { DraftHeader, DraftSummary, GeneratedBill } from '@/lib/billing/bill-stock'
+
+function newUuid(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80
+  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+const errMsg = (e: unknown) => (e instanceof Error && e.message ? e.message : 'Network problem.')
 
 // ── Vendor type ────────────────────────────────────────────────────────────────
 
@@ -37,6 +51,8 @@ interface BillLine {
   division: string
   qty: number
   boxCodes: string[]
+  /** Boxes on this line that the warehouse never scanned into stock (Direct Billing). */
+  notInStock: number
 }
 
 function lineKey(art: string, mrp: number) {
@@ -205,27 +221,29 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
 
 // ── Props ──────────────────────────────────────────────────────────────────────
 
-export interface EmergencyBillSaved {
+export type DirectBillGenerated = GeneratedBill & {
   shopkeeperName: string
   shopkeeperPhone: string | null
   shopkeeperAddress: string | null
-  lines: { artNumber: string; mrp: number; qty: number }[]
-  lineDiscPct: number
 }
 
 interface Props {
   vendors: BillingVendor[]
   /** Article numbers for manual-entry search combobox */
   articles?: string[]
-  /** When set, "Generate & Print Bill" also persists to DB via this callback */
-  onBillSaved?: (data: EmergencyBillSaved) => Promise<void>
+  /**
+   * Direct Billing mode (biller dashboard): every scan is saved to a server draft at once, so a
+   * bill left by mistake stays as a draft. "Generate" creates the bill and takes its boxes out of
+   * stock, then calls this.
+   */
+  onBillGenerated?: (data: DirectBillGenerated) => void
   /** Suppress the full-page chrome (header, sign-out) when embedded */
   embedded?: boolean
 }
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export function BillingScannerPage({ vendors, articles = [], onBillSaved, embedded }: Props) {
+export function BillingScannerPage({ vendors, articles = [], onBillGenerated, embedded }: Props) {
   const router = useRouter()
 
   // Guard: vendors may briefly be undefined during SSR/hydration
@@ -246,6 +264,117 @@ export function BillingScannerPage({ vendors, articles = [], onBillSaved, embedd
 
   // ── Bill lines ─────────────────────────────────────────────────────────────
   const [billLines, setBillLines] = useState<BillLine[]>([])
+  // Synchronous copy, so rapid scans see each other before React re-renders.
+  const billLinesRef = useRef<BillLine[]>([])
+  function commitLines(next: BillLine[]) { billLinesRef.current = next; setBillLines(next) }
+
+  // ── Direct Billing drafts (server) ─────────────────────────────────────────
+  const directBill = !!onBillGenerated
+  const [draftId, setDraftId] = useState<number | null>(null)
+  const draftIdRef = useRef<number | null>(null)
+  const draftPromiseRef = useRef<Promise<number> | null>(null)
+  const [drafts, setDrafts] = useState<DraftSummary[]>([])
+  const [pendingScans, setPendingScans] = useState(0)
+
+  function refreshDrafts() {
+    if (!directBill) return
+    getOpenDirectBillDrafts().then(setDrafts).catch(() => {})
+  }
+  useEffect(() => {
+    refreshDrafts()
+  }, [])
+
+  /** The server draft for this bill, created on first need (one request even if called twice). */
+  function ensureDraft(): Promise<number> {
+    if (draftIdRef.current) return Promise.resolve(draftIdRef.current)
+    if (!draftPromiseRef.current) {
+      draftPromiseRef.current = startDirectBillDraft({})
+        .then((id) => { draftIdRef.current = id; setDraftId(id); return id })
+        .catch((e) => { draftPromiseRef.current = null; throw e })
+    }
+    return draftPromiseRef.current
+  }
+
+  function dropBox(key: string, raw: string) {
+    commitLines(billLinesRef.current
+      .map((l) => (l.key === key ? { ...l, qty: l.qty - 1, boxCodes: l.boxCodes.filter((c) => c !== raw) } : l))
+      .filter((l) => l.qty > 0))
+  }
+
+  async function persistScan(key: string, raw: string, art: string) {
+    setPendingScans((n) => n + 1)
+    try {
+      const id = await ensureDraft()
+      const out = await scanIntoDirectBill(id, raw, newUuid())
+      if (out.status === 'added') {
+        if (!out.inStock) {
+          commitLines(billLinesRef.current.map((l) => (l.key === key ? { ...l, notInStock: l.notInStock + 1 } : l)))
+          showWarning(`${art}: this box was not scanned into stock — it will go out as Unscanned dispatch.`)
+        }
+      } else {
+        dropBox(key, raw)
+        showWarning(out.message)
+      }
+    } catch (e) {
+      dropBox(key, raw)
+      showError(`Scan not saved (${errMsg(e)}) — scan the box again.`)
+    } finally {
+      setPendingScans((n) => n - 1)
+    }
+  }
+
+  function resetLocal() {
+    commitLines([])
+    setSelectedVendor(null)
+    setSkQuery('')
+    setLineDiscPct(30)
+    draftIdRef.current = null
+    draftPromiseRef.current = null
+    setDraftId(null)
+    refreshDrafts()
+  }
+
+  async function resumeDraft(id: number) {
+    if (pendingScans > 0) { showWarning('Still saving scans — try again in a moment.'); return }
+    try {
+      const d = await openDirectBillDraft(id)
+      const lines: BillLine[] = []
+      const put = (art: string, mrp: number, division: string, qty: number, raw: string | null, inStock: boolean) => {
+        const key = lineKey(art, mrp)
+        let l = lines.find((x) => x.key === key)
+        if (!l) { l = { key, artNumber: art, mrp, division, qty: 0, boxCodes: [], notInStock: 0 }; lines.push(l) }
+        l.qty += qty
+        if (raw) { l.boxCodes.push(raw); if (!inStock) l.notInStock++ }
+      }
+      for (const sc of d.scans) {
+        const p = isValidWarehouseQr(sc.raw) ? parseQr(sc.raw) : null
+        put(p?.articleCode || sc.articleCode, p?.mrp ?? sc.mrp ?? 0, p?.division ?? '', 1, sc.raw, sc.inStock)
+      }
+      for (const m of d.manualLines) put(m.artNumber, m.mrp, '', m.qty, null, true)
+      draftIdRef.current = id
+      draftPromiseRef.current = Promise.resolve(id)
+      setDraftId(id)
+      commitLines(lines)
+      const v = safeVendors.find((x) => x.name === d.shopkeeperName)
+        ?? (d.shopkeeperName ? { id: `draft-${id}`, name: d.shopkeeperName, code: null, phone: d.shopkeeperPhone, address: d.shopkeeperAddress } : null)
+      setSelectedVendor(v)
+      setSkQuery(v?.name ?? '')
+      setLineDiscPct(d.lineDiscPct)
+      showSuccess(`Draft resumed: ${d.scans.length} boxes`)
+    } catch (e) {
+      showError(errMsg(e))
+      refreshDrafts()
+    }
+  }
+
+  async function discardDraftById(id: number) {
+    if (!window.confirm('Discard this draft? Its boxes are freed; nothing is billed.')) return
+    try {
+      await discardDirectBillDraft(id)
+      if (draftIdRef.current === id) resetLocal()
+      else refreshDrafts()
+    } catch (e) { showError(errMsg(e)) }
+  }
 
   // ── Camera / scan refs ─────────────────────────────────────────────────────
   const videoRef            = useRef<HTMLVideoElement>(null)
@@ -366,45 +495,51 @@ export function BillingScannerPage({ vendors, articles = [], onBillSaved, embedd
 
   function addScannedBox(art: string, mrp: number, division: string, rawQr: string) {
     const key = lineKey(art, mrp)
-    setBillLines(prev => {
-      const existing = prev.find(l => l.key === key)
-      if (existing) {
-        const boxCode = rawQr.split('-').pop() ?? rawQr
-        if (existing.boxCodes.some(c => (c.split('-').pop() ?? c) === boxCode)) {
-          showWarning(`Box already scanned: ${art}`)
-          return prev
-        }
-        showSuccess(`+1 box: ${art}`)
-        triggerFeedback()
-        return prev.map(l => l.key === key
-          ? { ...l, qty: l.qty + 1, boxCodes: [...l.boxCodes, rawQr] }
-          : l
-        )
-      }
-      showSuccess(`Added: ${art} @ ₹${mrp.toFixed(2)}`)
-      triggerFeedback()
-      return [...prev, { key, artNumber: art, mrp, division, qty: 1, boxCodes: [rawQr] }]
-    })
+    const boxCode = rawQr.split('-').pop() ?? rawQr
+    const prev = billLinesRef.current
+    if (prev.some(l => l.boxCodes.some(c => (c.split('-').pop() ?? c) === boxCode))) {
+      showWarning(`Box already scanned: ${art}`)
+      return
+    }
+    const existing = prev.find(l => l.key === key)
+    commitLines(existing
+      ? prev.map(l => l.key === key ? { ...l, qty: l.qty + 1, boxCodes: [...l.boxCodes, rawQr] } : l)
+      : [...prev, { key, artNumber: art, mrp, division, qty: 1, boxCodes: [rawQr], notInStock: 0 }])
+    showSuccess(existing ? `+1 box: ${art}` : `Added: ${art} @ ₹${mrp.toFixed(2)}`)
+    triggerFeedback()
+    if (directBill) void persistScan(key, rawQr, art)
   }
 
   function addManualLine(art: string, mrp: number, division: string, qty: number) {
     const key = lineKey(art, mrp)
-    setBillLines(prev => {
-      const existing = prev.find(l => l.key === key)
-      if (existing) return prev.map(l => l.key === key ? { ...l, qty: l.qty + qty } : l)
-      return [...prev, { key, artNumber: art, mrp, division, qty, boxCodes: [] }]
-    })
+    const prev = billLinesRef.current
+    const existing = prev.find(l => l.key === key)
+    commitLines(existing
+      ? prev.map(l => l.key === key ? { ...l, qty: l.qty + qty } : l)
+      : [...prev, { key, artNumber: art, mrp, division, qty, boxCodes: [], notInStock: 0 }])
     showSuccess(`Added ${qty}× ${art} @ ₹${mrp.toFixed(2)}`)
   }
 
-  function removeLine(key: string) {
-    setBillLines(prev => prev.filter(l => l.key !== key))
+  async function removeLine(key: string) {
     setDeleteTarget(null)
+    const line = billLinesRef.current.find(l => l.key === key)
+    if (directBill && draftIdRef.current && line && line.boxCodes.length) {
+      try { await removeFromDirectBill(draftIdRef.current, line.boxCodes) }
+      catch (e) { showError(`Could not remove: ${errMsg(e)}`); return }
+    }
+    commitLines(billLinesRef.current.filter(l => l.key !== key))
   }
 
-  function clearBill() {
-    setBillLines([])
+  async function clearBill() {
     setDeleteTarget(null)
+    // Direct Billing: "Clear All" discards the saved draft and frees its boxes.
+    if (directBill && draftIdRef.current) {
+      try { await discardDirectBillDraft(draftIdRef.current) }
+      catch (e) { showError(`Could not clear: ${errMsg(e)}`); return }
+      resetLocal()
+      return
+    }
+    commitLines([])
   }
 
   // ── QR decode → bill ───────────────────────────────────────────────────────
@@ -563,23 +698,19 @@ export function BillingScannerPage({ vendors, articles = [], onBillSaved, embedd
     // Build MrpLine[] from billLines (each BillLine already has artNumber + mrp + qty)
     const lines = billLines.map(l => ({ artNumber: l.artNumber, mrp: l.mrp, qty: l.qty }))
 
-    // When embedded (Emergency tab), save to DB then navigate to Receipts — print from there
-    if (onBillSaved) {
+    // Direct Billing: generate from the saved draft (takes the boxes out of stock), then Receipts.
+    if (onBillGenerated) {
+      if (pendingScans > 0) { showWarning('Still saving scans — try again in a moment.'); return }
       setIsSaving(true)
       try {
-        await onBillSaved({
-          shopkeeperName:    selectedVendor.name,
-          shopkeeperPhone:   selectedVendor.phone,
-          shopkeeperAddress: selectedVendor.address,
-          lines,
-          lineDiscPct: LINE_DISC_PCT,
-        })
-        // Clear scanner ready for next bill (tab switch happens inside onBillSaved)
-        clearBill()
-        setSelectedVendor(null)
-        setSkQuery('')
-      } catch {
-        showError('Could not save to Receipts. Please try again.')
+        const id = await ensureDraft()
+        const header = draftHeader()
+        const res = await generateDirectBillFromDraft(id, header)
+        onBillGenerated({ ...res, shopkeeperName: header.shopkeeperName, shopkeeperPhone: header.shopkeeperPhone, shopkeeperAddress: header.shopkeeperAddress })
+        resetLocal()
+        if (res.stock.unscanned_dispatch > 0) showWarning(`Bill ${res.orderNumber} saved. ${res.stock.unscanned_dispatch} box(es) went out as Unscanned dispatch.`)
+      } catch (e) {
+        showError(`Bill not generated: ${errMsg(e)} It is still saved as a draft.`)
       } finally {
         setIsSaving(false)
       }
@@ -613,6 +744,31 @@ export function BillingScannerPage({ vendors, articles = [], onBillSaved, embedd
   // Per-unit column discount — user-configurable via the Bill tab input
   const [lineDiscPct, setLineDiscPct] = useState<number | ''>(30)
   const LINE_DISC_PCT = lineDiscPct === '' ? 30 : Number(lineDiscPct)
+
+  // ── Direct Billing: keep the draft's retailer, discount and hand-typed lines saved ──
+  const manualLinesForServer = useMemo(
+    () => billLines.map(l => ({ artNumber: l.artNumber, mrp: l.mrp, qty: l.qty - l.boxCodes.length })).filter(l => l.qty > 0),
+    [billLines],
+  )
+  function draftHeader(): DraftHeader {
+    return {
+      shopkeeperName: selectedVendor?.name ?? '',
+      shopkeeperPhone: selectedVendor?.phone ?? null,
+      shopkeeperAddress: selectedVendor?.address ?? null,
+      lineDiscPct: LINE_DISC_PCT,
+      manualLines: manualLinesForServer,
+    }
+  }
+  const headerKey = JSON.stringify(draftHeader())
+  useEffect(() => {
+    if (!directBill) return
+    if (!draftIdRef.current && !selectedVendor && manualLinesForServer.length === 0) return
+    const header = JSON.parse(headerKey) as DraftHeader
+    const t = setTimeout(() => {
+      ensureDraft().then((id) => saveDirectBillDraft(id, header)).catch(() => { /* retried on the next change; generate reports errors */ })
+    }, 700)
+    return () => clearTimeout(t)
+  }, [headerKey])
 
   const totalQty   = billLines.reduce((s, l) => s + l.qty, 0)
   // Sub Total uses the discounted rate (same formula as printed invoice)
@@ -649,6 +805,44 @@ export function BillingScannerPage({ vendors, articles = [], onBillSaved, embedd
               <Button variant="outline" size="sm" className="text-xs px-2 sm:px-3" onClick={async () => { await signOut(); router.push('/sign-in') }}>Sign Out</Button>
             </div>
           </div>
+        )}
+
+        {/* ── Direct Billing: saved drafts ── */}
+        {directBill && (draftId != null || drafts.some(d => d.id !== draftId)) && (
+          <section aria-label="Saved drafts" className="rounded-2xl border border-border bg-card p-3 space-y-2">
+            {draftId != null && (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">
+                  Saved automatically as draft #{draftId}{pendingScans > 0 ? ' · saving…' : ''}
+                </p>
+                {billLines.length > 0 && (
+                  <button type="button" onClick={resetLocal} disabled={pendingScans > 0}
+                    className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50">
+                    Start a new bill (keep this as draft)
+                  </button>
+                )}
+              </div>
+            )}
+            {drafts.filter(d => d.id !== draftId).length > 0 && (
+              <>
+                <p className="text-sm font-semibold text-foreground">Saved drafts</p>
+                <ul className="divide-y divide-border rounded-xl border border-border">
+                  {drafts.filter(d => d.id !== draftId).map(d => (
+                    <li key={d.id} className="flex items-center gap-2 px-3 py-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-foreground truncate">{d.shopkeeperName || 'No retailer yet'} <span className="text-muted-foreground">· #{d.id}</span></p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {d.boxes} box{d.boxes === 1 ? '' : 'es'}{d.manualPairs ? ` + ${d.manualPairs} typed` : ''} · {d.billerName || '—'} · {new Date(d.updatedAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
+                      <button type="button" onClick={() => resumeDraft(d.id)} className="rounded-lg bg-foreground text-background px-2.5 py-1 text-xs font-semibold">Resume</button>
+                      <button type="button" onClick={() => discardDraftById(d.id)} className="rounded-lg border border-border px-2.5 py-1 text-xs text-destructive hover:bg-muted">Discard</button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </section>
         )}
 
         {/* ── Vendor — identical card style as salesman dashboard ── */}
@@ -976,6 +1170,11 @@ export function BillingScannerPage({ vendors, articles = [], onBillSaved, embedd
                                 </td>
                                 <td className="px-3 py-2.5 align-middle border-r border-border/40 text-right">
                                   <span className="font-bold text-sm text-foreground">{line.qty}</span>
+                                  {line.notInStock > 0 && (
+                                    <span className="block text-[10px] text-amber-700 dark:text-amber-400 whitespace-nowrap" title="Not scanned into stock: goes out as Unscanned dispatch">
+                                      {line.notInStock} not in stock
+                                    </span>
+                                  )}
                                 </td>
                                 <td className="px-3 py-2.5 align-middle text-right text-xs text-foreground whitespace-nowrap">
                                   ₹{(Math.ceil(line.mrp * (1 - LINE_DISC_PCT / 100)) * line.qty).toFixed(2)}
@@ -1028,8 +1227,8 @@ export function BillingScannerPage({ vendors, articles = [], onBillSaved, embedd
                         </p>
                       )}
                       <Button className="w-full bg-purple-600 hover:bg-purple-700 text-white"
-                        onClick={handlePrint} disabled={!selectedVendor || isSaving}>
-                        {isSaving ? 'Saving…' : onBillSaved ? 'Generate Bill → Receipts' : 'Generate & Print Bill'}
+                        onClick={handlePrint} disabled={!selectedVendor || isSaving || pendingScans > 0}>
+                        {isSaving ? 'Saving…' : pendingScans > 0 ? 'Saving scans…' : onBillGenerated ? 'Generate Bill → Receipts' : 'Generate & Print Bill'}
                       </Button>
                     </div>
                   </>
@@ -1048,7 +1247,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillSaved, embedd
               </h3>
               <p className="text-sm text-muted-foreground">
                 {deleteTarget === '__all__'
-                  ? 'All scanned items will be removed from the bill.'
+                  ? directBill ? 'The draft is discarded and its boxes are freed. Nothing is billed.' : 'All scanned items will be removed from the bill.'
                   : 'This line item will be removed from the bill.'}
               </p>
               <div className="flex gap-2 pt-1">

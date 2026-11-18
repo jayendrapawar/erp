@@ -3,7 +3,8 @@
 import { useState, useTransition, useRef, useCallback, useEffect } from 'react'
 import jsQR from 'jsqr'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
-import { markBilled, getOrderWithItems, saveBillLines, getBillLines, createEmergencyBill, deleteEmergencyBill } from '@/app/actions/orders'
+import { getOrderWithItems, getBillLines, deleteEmergencyBill } from '@/app/actions/orders'
+import { billOrder } from '@/app/actions/billing'
 import { PageNav } from '@/components/page-nav'
 import { parseQr, isValidWarehouseQr, normalizeQr } from '@/lib/qr-parser'
 import { SCAN_INTERVAL_MS } from '@/components/scanner/constants'
@@ -749,12 +750,18 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     setMrpLinesMap(prev => ({ ...prev, [orderId]: builtLines }))
 
     const discPct = typeof lineDiscPct === 'number' ? lineDiscPct : 30
-    closeScanner()
     setActiveId(orderId)
     startTransition(async () => {
-      await markBilled(orderId)
-      // Persist bill lines to DB so they survive across sessions and devices
-      await saveBillLines(orderId, builtLines, discPct)
+      // Bills the order, saves its lines and takes the scanned boxes out of stock (one transaction).
+      // On failure (e.g. a box is already on another bill) the scanner stays open with its scans.
+      try {
+        await billOrder(orderId, qrsCopy, builtLines, discPct)
+      } catch (e) {
+        setActiveId(null)
+        showMsg('err', e instanceof Error ? e.message : 'Could not save the bill. Try again.')
+        return
+      }
+      closeScanner()
       setOrders(prev =>
         prev.map(o => o.id === orderId ? { ...o, status: 'billed', billerId: currentBillerId, billedAt: new Date() } : o)
       )
@@ -967,7 +974,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              {tab === 'verify' ? 'Invoices' : tab === 'emergency' ? '🚨 Emergency' : 'Receipts'}
+              {tab === 'verify' ? 'Invoices' : tab === 'emergency' ? 'Direct Billing' : 'Receipts'}
               {tab !== 'emergency' && (
                 <span className={`inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums ${
                   activeTab === tab ? 'bg-foreground text-background' : 'bg-muted-foreground/20 text-muted-foreground'
@@ -1021,7 +1028,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
           </div>
         )}
 
-        {/* ── Emergency Bill tab — always mounted to preserve scan state across tab switches ── */}
+        {/* ── Direct Billing tab (formerly Emergency) — always mounted to preserve scan state across tab switches ── */}
         <div className={activeTab === 'emergency' ? '' : 'hidden'}>
           <div className="rounded-xl border border-red-200 dark:border-red-800">
             <div className="p-4">
@@ -1029,29 +1036,25 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                 vendors={vendors}
                 articles={articles}
                 embedded
-                onBillSaved={async (data) => {
-                  const result = await createEmergencyBill(data)
+                onBillGenerated={(data) => {
                   const newOrder: BillerOrder = {
-                    id:                result.id,
-                    orderNumber:       result.orderNumber,
+                    id:                data.id,
+                    orderNumber:       data.orderNumber,
                     shopkeeperName:    data.shopkeeperName,
                     shopkeeperPhone:   data.shopkeeperPhone,
                     shopkeeperAddress: data.shopkeeperAddress,
                     status:            'billed',
                     packedAt:          null,
-                    billedAt:          new Date(),
+                    billedAt:          new Date(data.billedAt),
                     billerId:          currentBillerId,
                     salesmanId:        null,
                     isEmergency:       true,
                   }
                   setOrders(prev => [newOrder, ...prev])
-                  setMrpLinesMap(prev => ({
-                    ...prev,
-                    [result.id]: data.lines.map(l => ({ artNumber: l.artNumber, mrp: l.mrp, qty: l.qty })),
-                  }))
-                  // Pre-mark as loaded (no orderItems for emergency bills) and auto-select for print
-                  setPrintItemsMap(prev => ({ ...prev, [result.id]: [] }))
-                  setPrintSelectedIds(prev => new Set([...prev, result.id]))
+                  setMrpLinesMap(prev => ({ ...prev, [data.id]: data.lines }))
+                  // Pre-mark as loaded (no orderItems for Direct Bills) and auto-select for print
+                  setPrintItemsMap(prev => ({ ...prev, [data.id]: [] }))
+                  setPrintSelectedIds(prev => new Set([...prev, data.id]))
                   setActiveTab('generated')
                 }}
               />
@@ -1158,7 +1161,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                               <p className="text-sm font-medium text-foreground truncate leading-snug">{order.shopkeeperName}</p>
                               {order.isEmergency && (
                                 <span className="shrink-0 inline-flex items-center rounded-full bg-red-100 dark:bg-red-900/30 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-red-700 dark:text-red-400">
-                                  🚨 Emergency
+                                  Direct Bill
                                 </span>
                               )}
                             </div>
@@ -1252,7 +1255,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   <StatusPill status={detailOrder.status} />
                   {detailOrder.isEmergency && (
                     <span className="inline-flex items-center rounded-full bg-red-100 dark:bg-red-900/30 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-700 dark:text-red-400">
-                      🚨 Emergency Bill
+                      Direct Bill
                     </span>
                   )}
                 </div>
@@ -1559,7 +1562,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   }}
                   className="w-full rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/20 px-4 py-2.5 text-sm font-semibold text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-950/40 disabled:opacity-50 transition-colors"
                 >
-                  {isPending ? 'Deleting…' : 'Delete Emergency Bill'}
+                  {isPending ? 'Deleting…' : 'Delete Direct Bill (boxes go back to stock)'}
                 </button>
               )}
             </div>
