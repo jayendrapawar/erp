@@ -15,8 +15,9 @@ stock at once (as 'carton' stock); bills not received 5 days after the bill date
   joined. The bill is refused unless Σ cartons and Σ pairs equal the bill's Total row and every
   line has cartons × pairs/ctn = pairs. Checked on the four sample bills (Aug–Sep 2026): all match.
 - **Expected on** = bill date + 5 days. Overdue = not fully received after that.
-- **Division** is not printed on the bill: suggested from the article codes (PU → Flite PU),
-  changeable on the bill.
+- **Division** is not printed on the bill: suggested from the article codes by majority, with the
+  owner's rule (19 Nov 2026, "mostly"): S… → Sparx, P… → Flite PU, F… → Flite EVA, anything else
+  (BH, CU Cushion, HL Hi-Lite …) → Bahamas (`lib/qr-config.ts`). Changeable on the bill.
 - **Carton assortment per line**: the single active assortment with the bill's division, the
   line's pairs per carton and size range (code 0810 → `810`) is chosen automatically; if several
   fit (Gents / Ladies …) the bill shows them to choose; if none, it says to add one in
@@ -37,7 +38,10 @@ PDFs exactly like an upload (`lib/purchases/mail.ts`, `POST /api/purchases/check
 - Attachments are fetched whole in one request: chunked downloads from Yahoo sometimes arrived cut
   short (48 KB of a 519 KB PDF) and were unreadable.
 - Settings (env, never committed): `BILL_MAIL_IMAP_HOST`, `BILL_MAIL_USER`, `BILL_MAIL_PASSWORD` (a Yahoo
-  **app password**), `BILL_MAIL_FROM`. Production needs the same four in Vercel. On demand only — no polling.
+  **app password**), `BILL_MAIL_FROM`, and **`BILL_MAIL_START`** (yyyy-mm-dd). Without `BILL_MAIL_START` Check
+  mail is off and hidden; mails before it are never imported (not even with an earlier date chosen).
+  **Live site:** set `BILL_MAIL_START` only when the owner says — after the stocktake of the whole
+  warehouse (owner, 19 Nov 2026). Development uses 2026-08-01. On demand only — no polling.
 - Checked 19 Nov 2026 on development: 7 bill mails of the last week → 7 bills (Sparx and Bahamas),
   matching the PDFs in Downloads byte for byte.
 

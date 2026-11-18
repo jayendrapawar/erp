@@ -1,6 +1,7 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { addDays, parseRelaxoBill, rangeCode, suggestDivision } from '../../lib/purchases/relaxo-bill'
+import { divisionForArticleCode } from '../../lib/qr-config'
 
 // Shape of the text pdf.js extracts from a Relaxo proforma invoice (synthetic values; no
 // customer address or GSTIN). Line 2 wraps over three lines like long descriptions do.
@@ -105,6 +106,9 @@ describe('Relaxo bill reader', () => {
     assert.equal(rangeCode('06', '08'), '608')
     assert.equal(addDays('2026-08-27', 5), '2026-09-01')
     assert.equal(addDays('2026-12-30', 5), '2027-01-04')
-    assert.equal(suggestDivision([{ articleCode: 'PUG186G' }, { articleCode: 'PUL0A5L' }, { articleCode: 'SS0702B' }], { PU: 'Flite PU', SS: 'Sparx' }), 'Flite PU')
+    assert.equal(suggestDivision([{ articleCode: 'PUG186G' }, { articleCode: 'PUL0A5L' }, { articleCode: 'SS0702B' }], divisionForArticleCode), 'Flite PU')
+    // Owner rule: S → Sparx, P → Flite PU, F → Flite EVA, anything else → Bahamas.
+    assert.deepEqual(['SS0810G', 'SN1167G', 'PXG001G', 'PUG186G', 'FLN115G', 'FL0366L', 'BH0001G', 'CU0025G', 'HL0005G', ''].map(divisionForArticleCode),
+      ['Sparx', 'Sparx', 'Flite PU', 'Flite PU', 'Flite EVA', 'Flite EVA', 'Bahamas', 'Bahamas', 'Bahamas', ''])
   })
 })

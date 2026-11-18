@@ -2,7 +2,9 @@
 // read-only: nothing is moved, flagged or deleted) and imports each attached PDF like an upload.
 //
 // Settings (env): BILL_MAIL_IMAP_HOST, BILL_MAIL_USER, BILL_MAIL_PASSWORD (Yahoo app password),
-// BILL_MAIL_FROM. Every mail looked at is recorded in bill_mail_messages, so it is imported once;
+// BILL_MAIL_FROM, and BILL_MAIL_START (yyyy-mm-dd). Without BILL_MAIL_START, Check mail is OFF; mails
+// before it are never imported. Owner (19 Nov 2026): on the live site it is set only once the
+// stocktake of the whole warehouse is complete, on the owner's word. Every mail looked at is recorded in bill_mail_messages, so it is imported once;
 // mails that failed are tried again next time. Run on demand ("Check mail"); no polling.
 
 import { ImapFlow, type MessageStructureObject } from 'imapflow'
@@ -30,11 +32,15 @@ function settings() {
   const pass = process.env.BILL_MAIL_PASSWORD
   const from = process.env.BILL_MAIL_FROM
   if (!user || !pass || !from) throw new Error('Bill mail is not set up (BILL_MAIL_USER, BILL_MAIL_PASSWORD, BILL_MAIL_FROM).')
-  return { host, user, pass, from }
+  const start = mailStartDate()
+  if (!start) throw new Error('Reading bills from mail is not switched on yet (it starts after the warehouse stocktake).')
+  return { host, user, pass, from, start }
 }
 
-export function mailConfigured(): boolean {
-  return Boolean(process.env.BILL_MAIL_USER && process.env.BILL_MAIL_PASSWORD && process.env.BILL_MAIL_FROM)
+/** The first day mails are imported from (BILL_MAIL_START), or null while mail import is off. */
+export function mailStartDate(env: Record<string, string | undefined> = process.env): Date | null {
+  const s = (env.BILL_MAIL_START ?? '').trim()
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T00:00:00+05:30`) : null
 }
 
 function pdfParts(node: MessageStructureObject | undefined, out: { part: string; name: string; encoding: string }[] = []) {
@@ -71,6 +77,7 @@ export async function checkBillMail(db: Db, actor: Actor, opts: { since?: string
     const last = r.rows[0]?.last
     since = last ? new Date(new Date(last).getTime() - 86_400_000) : new Date(Date.now() - DEFAULT_LOOKBACK_DAYS * 86_400_000)
   }
+  if (since < cfg.start) since = cfg.start // never before the start date
 
   const client = new ImapFlow({ host: cfg.host, port: 993, secure: true, auth: { user: cfg.user, pass: cfg.pass }, logger: false })
   const result: MailCheckResult = { since: since.toISOString(), found: 0, alreadyDone: 0, processed: 0, remaining: 0, files: [] }
@@ -88,7 +95,8 @@ export async function checkBillMail(db: Db, actor: Actor, opts: { since?: string
         const found = (await client.search({ from: cfg.from, since }, { uid: true })) || []
         // Mails that failed before are retried even when they are older than the window.
         const failed = await db.execute<{ uid: string }>(sql`
-          SELECT uid::text FROM bill_mail_messages WHERE mailbox = ${mailbox} AND "uidValidity" = ${uidValidity} AND status = 'error'`)
+          SELECT uid::text FROM bill_mail_messages WHERE mailbox = ${mailbox} AND "uidValidity" = ${uidValidity} AND status = 'error'
+            AND "receivedAt" >= ${cfg.start.toISOString()}`)
         const uids = [...new Set([...found, ...failed.rows.map((x) => Number(x.uid))])]
         result.found += found.length
         if (!uids.length) continue

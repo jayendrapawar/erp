@@ -6,7 +6,7 @@
  * QR string itself.
  */
 import { parseQr as parseFormat, type QrParseResult } from './qr/parser'
-import { DIVISION_MAP } from './qr-config'
+import { divisionForArticleCode } from './qr-config'
 
 export interface ParsedQr {
   normalized: string
@@ -35,10 +35,7 @@ export function isCartonQr(raw: string): boolean {
 }
 
 export function divisionHint(articleCode: string): string {
-  // Longest prefix wins, and it must be at the START of the code.
-  const prefixes = Object.keys(DIVISION_MAP).sort((a, b) => b.length - a.length)
-  const hit = prefixes.find((p) => articleCode.startsWith(p))
-  return hit ? DIVISION_MAP[hit] : ''
+  return divisionForArticleCode(articleCode)
 }
 
 export function toParsedQr(r: QrParseResult): ParsedQr {

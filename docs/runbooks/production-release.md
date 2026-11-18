@@ -52,6 +52,7 @@ including deployment and smoke tests. `W` = path of the Sparx workbook.
 | 10 | Deploy | Deploy the approved `development` commit to Vercel production (owner approval). |
 | 11 | Smoke test | Admin account: Master → Articles shows 651 Sparx articles; search "SK-1016" → sizes 11 12 13 1 2 3 4 5; Master → Assortments shows 32 Flite EVA rows, Download Excel works; Orders → Biller → Direct Billing: scan the same Sparx box (shows in stock), leave the page, come back → draft is listed, Resume, Generate → Inventory shows −1 and a Billed movement; delete that bill → stock back; scan one Sparx box (stock +1), scan it again (duplicate warning), undo with a reason (stock −1); scan a Flite box → saved under Missing Articles; Orders → book screen lists SS-/SFG-/SM- articles; Dashboard opens. |
 | 12 | Roles | Assign roles to the two accounts that have none, if they are staff. |
+| 13 | Bill mail (later) | Add `BILL_MAIL_IMAP_HOST`, `BILL_MAIL_USER`, `BILL_MAIL_PASSWORD`, `BILL_MAIL_FROM` in Vercel (Production). **Do not set `BILL_MAIL_START` at release**: Check mail stays off until the owner says the warehouse stocktake is complete; then set it to that day and redeploy. |
 
 ## Rollback
 

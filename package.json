@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test": "tsx --test tests/qr/parser.test.ts tests/catalog/catalog.test.ts tests/catalog/assortments.test.ts tests/catalog/dev-login.test.ts tests/purchases/relaxo-bill.test.ts",
+    "test": "tsx --test tests/qr/parser.test.ts tests/catalog/catalog.test.ts tests/catalog/assortments.test.ts tests/catalog/dev-login.test.ts tests/purchases/relaxo-bill.test.ts tests/purchases/mail-switch.test.ts",
     "test:db": "tsx --test --test-concurrency=1 tests/db/inventory.test.ts tests/db/catalog-import.test.ts tests/db/assortments.test.ts tests/db/inventory-screen.test.ts tests/db/billing-stock.test.ts tests/db/purchases.test.ts",
     "typecheck": "tsc --noEmit -p .",
     "db:status": "tsx scripts/db/migrate.ts status",

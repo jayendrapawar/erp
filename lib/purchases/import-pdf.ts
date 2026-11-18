@@ -3,7 +3,7 @@
 import crypto from 'node:crypto'
 import { extractText, getDocumentProxy } from 'unpdf'
 import type { Actor, Db } from '@/lib/db/types'
-import { DIVISION_MAP } from '@/lib/qr-config'
+import { divisionForArticleCode } from '@/lib/qr-config'
 import { parseRelaxoBill, suggestDivision } from './relaxo-bill'
 import { saveBill } from './store'
 
@@ -40,7 +40,7 @@ export async function importBillPdf(db: Db, actor: Actor, file: { name: string; 
   if (!pages.join('').trim()) return { file: name, status: 'error', errors: ['The PDF has no text (scanned image).'] }
   const parsed = parseRelaxoBill(pages)
   if (!parsed.ok) return { file: name, status: 'error', errors: parsed.errors, warnings: parsed.warnings }
-  const division = suggestDivision(parsed.bill.lines, DIVISION_MAP)
+  const division = suggestDivision(parsed.bill.lines, divisionForArticleCode)
   const saved = await saveBill(db, actor, parsed.bill, { name, sha256, source: file.source }, division)
   return saved.status === 'duplicate'
     ? { file: name, status: 'duplicate', billId: saved.id, refNo: saved.refNo }

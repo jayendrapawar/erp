@@ -1,15 +1,14 @@
-// Division HINTS by article-code prefix (longest prefix at the start of the code wins).
-// Used only to suggest a division in the new-article dialog. The article master's
-// `division` column is the source of truth; never store this hint as fact.
-export const DIVISION_MAP: Record<string, string> = {
-  FL: 'Flite EVA',
-  PU: 'Flite PU',
-  PF: 'Flite PU',
-  SF: 'Sparx',
-  SS: 'Sparx',
-  SX: 'Sparx',
-  SD: 'Sparx',
-  SC: 'Sparx',
-  SN: 'Sparx',
-  BH: 'Bahamas',
+// Division SUGGESTION from an article code (owner rule, 19 Nov 2026: "mostly"):
+//   S… → Sparx, P… → Flite PU, F… → Flite EVA, anything else → Bahamas.
+// Used to suggest a division (new-article dialog, purchase bills). The article master's `division`
+// and a bill's division chosen on screen win; never store this hint as fact.
+export function divisionForArticleCode(articleCode: string): string {
+  const c = (articleCode ?? '').trim().toUpperCase()
+  if (!c) return ''
+  switch (c[0]) {
+    case 'S': return 'Sparx'
+    case 'P': return 'Flite PU'
+    case 'F': return 'Flite EVA'
+    default: return 'Bahamas'
+  }
 }

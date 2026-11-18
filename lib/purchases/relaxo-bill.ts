@@ -135,13 +135,12 @@ export function parseRelaxoBill(pages: string[]): BillParseResult {
   }
 }
 
-/** Division suggested from the article codes (hint only; the user can change it on the bill). */
-export function suggestDivision(lines: { articleCode: string }[], prefixMap: Record<string, string>): string {
+/** Division suggested from the article codes, by majority (hint only; changeable on the bill). */
+export function suggestDivision(lines: { articleCode: string }[], divisionOf: (articleCode: string) => string): string {
   const votes = new Map<string, number>()
-  const prefixes = Object.keys(prefixMap).sort((a, b) => b.length - a.length)
   for (const l of lines) {
-    const p = prefixes.find((x) => l.articleCode.startsWith(x))
-    if (p) votes.set(prefixMap[p], (votes.get(prefixMap[p]) ?? 0) + 1)
+    const d = divisionOf(l.articleCode)
+    if (d) votes.set(d, (votes.get(d) ?? 0) + 1)
   }
   return [...votes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? ''
 }
