@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation'
 import { ScanBarcode, ShoppingCart, Receipt, Package, BookOpen, BarChart2 } from 'lucide-react'
-import type { AppRole } from '@/app/actions/users'
+import { hasPermission, parseRoles, type Permission } from '@/lib/permissions'
 import { PageNav } from '@/components/page-nav'
 
 interface MenuItem {
@@ -13,10 +13,10 @@ interface MenuItem {
   color: string
   border: string
   badge?: string
-  roles: AppRole[]
+  /** Shown when the user holds this permission (lib/permissions.ts). */
+  permission: Permission
 }
 
-// roles: which roles can see this tile. Empty = all roles.
 const MENU_ITEMS: MenuItem[] = [
   {
     label: 'Scanner',
@@ -25,7 +25,7 @@ const MENU_ITEMS: MenuItem[] = [
     icon: ScanBarcode,
     color: 'bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-400',
     border: 'border-blue-200 dark:border-blue-800',
-    roles: ['admin', 'accountant', 'salesman', 'picker', 'dispatcher', 'user'],
+    permission: 'scan.record',
   },
   {
     label: 'Orders',
@@ -35,7 +35,7 @@ const MENU_ITEMS: MenuItem[] = [
     color: 'bg-green-50 text-green-600 dark:bg-green-950 dark:text-green-400',
     border: 'border-green-200 dark:border-green-800',
     badge: 'New',
-    roles: ['admin', 'accountant', 'salesman', 'picker', 'biller', 'dispatcher'],
+    permission: 'orders.view',
   },
   {
     label: 'Billing',
@@ -44,7 +44,7 @@ const MENU_ITEMS: MenuItem[] = [
     icon: Receipt,
     color: 'bg-purple-50 text-purple-600 dark:bg-purple-950 dark:text-purple-400',
     border: 'border-purple-200 dark:border-purple-800',
-    roles: ['admin', 'accountant'],
+    permission: 'users.view',
   },
   {
     label: 'Purchases',
@@ -53,7 +53,7 @@ const MENU_ITEMS: MenuItem[] = [
     icon: Package,
     color: 'bg-orange-50 text-orange-600 dark:bg-orange-950 dark:text-orange-400',
     border: 'border-orange-200 dark:border-orange-800',
-    roles: ['admin', 'accountant'],
+    permission: 'suppliers.view',
   },
   {
     label: 'Master',
@@ -62,7 +62,7 @@ const MENU_ITEMS: MenuItem[] = [
     icon: BookOpen,
     color: 'bg-teal-50 text-teal-600 dark:bg-teal-950 dark:text-teal-400',
     border: 'border-teal-200 dark:border-teal-800',
-    roles: ['admin', 'accountant'],
+    permission: 'users.view',
   },
   {
     label: 'Reports',
@@ -71,14 +71,14 @@ const MENU_ITEMS: MenuItem[] = [
     icon: BarChart2,
     color: 'bg-rose-50 text-rose-600 dark:bg-rose-950 dark:text-rose-400',
     border: 'border-rose-200 dark:border-rose-800',
-    roles: ['admin', 'accountant'],
+    permission: 'users.view',
   },
 ]
 
 export function HomeMenuPage({ role }: { role: string }) {
   const router = useRouter()
-  const userRoles = role.split(',').map(r => r.trim())
-  const visible = MENU_ITEMS.filter(item => item.roles.some(r => userRoles.includes(r)))
+  const userRoles = parseRoles(role)
+  const visible = MENU_ITEMS.filter(item => hasPermission(userRoles, item.permission))
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4 py-12">
@@ -91,6 +91,12 @@ export function HomeMenuPage({ role }: { role: string }) {
           <h1 className="text-2xl font-bold text-foreground tracking-tight">Shayona Inventory</h1>
           <p className="mt-1 text-sm text-muted-foreground">Select a module to get started</p>
         </div>
+
+        {visible.length === 0 && (
+          <div className="rounded-2xl border border-border bg-card p-6 text-center text-sm text-muted-foreground">
+            Your account is signed in but has no role yet. Ask an admin to assign your role in Master → Users.
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           {visible.map(({ label, description, href, icon: Icon, color, border, badge }) => {

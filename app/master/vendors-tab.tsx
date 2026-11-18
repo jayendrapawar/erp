@@ -199,7 +199,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
       <div className="mb-2">
         <input
           type="search"
-          placeholder="Search vendors…"
+          placeholder="Search retailers…"
           value={search}
           onChange={e => setSearch(e.target.value)}
           className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
@@ -228,7 +228,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
           onClick={openAdd}
           className="ml-auto rounded-lg bg-foreground text-background px-4 py-2 text-sm font-semibold hover:opacity-90 transition-opacity"
         >
-          + Add Vendor
+          + Add Retailer
         </button>
       </div>
 
@@ -244,7 +244,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
       )}
 
       {filtered.length === 0 && (
-        <p className="text-center py-10 text-sm text-muted-foreground">No vendors found</p>
+        <p className="text-center py-10 text-sm text-muted-foreground">No retailers found</p>
       )}
 
       {/* ── Mobile: card list ── */}
@@ -376,7 +376,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
             </div>
 
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-              <p className="font-semibold text-base text-foreground">{modalMode === 'add' ? 'Add Vendor' : 'Edit Vendor'}</p>
+              <p className="font-semibold text-base text-foreground">{modalMode === 'add' ? 'Add Retailer' : 'Edit Retailer'}</p>
               <button onClick={() => setModalMode(null)} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-muted transition-colors">
                 <svg className="w-4 h-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
@@ -437,7 +437,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
                 Cancel
               </button>
               <button onClick={handleSave} disabled={isSaving} className="flex-1 rounded-xl bg-foreground text-background px-3 py-3 text-sm font-semibold hover:opacity-90 active:scale-95 transition-all disabled:opacity-60">
-                {isSaving ? 'Saving…' : modalMode === 'add' ? 'Add Vendor' : 'Save Changes'}
+                {isSaving ? 'Saving…' : modalMode === 'add' ? 'Add Retailer' : 'Save Changes'}
               </button>
             </div>
           </div>

@@ -117,7 +117,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
       )
     } else {
       setFilteredStock(
-        fuzzyFilter(stockItems, query, item => [item.artNumber, item.colorNumber, item.sizeNumber])
+        fuzzyFilter(stockItems, query, item => [item.artNumber, item.artName, item.colorNumber, item.colorName, item.sizeNumber])
       )
     }
   }, [activeTab, inventory, stockItems])
@@ -271,28 +271,28 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
           iconBg="bg-blue-50"
           title={t('totalStockItems')}
           value={stockStats.totalStockItems.toLocaleString()}
-          subtitle={t('totalUnits')}
+          subtitle={`${stockStats.uniqueSKUs.toLocaleString()} ${t('differentSKUs')}`}
         />
         <KpiCard
-          icon={<Package className="h-5 w-5 text-green-600" />}
+          icon={<QrCode className="h-5 w-5 text-green-600" />}
           iconBg="bg-green-50"
-          title={t('uniqueSKUs')}
-          value={stockStats.uniqueSKUs.toLocaleString()}
-          subtitle={t('differentSKUs')}
+          title={t('scannedStock')}
+          value={stockStats.scannedStockItems.toLocaleString()}
+          subtitle={t('scannedStockHint')}
         />
         <KpiCard
-          icon={<Tag className="h-5 w-5 text-purple-600" />}
-          iconBg="bg-purple-50"
-          title={t('totalLocations')}
-          value={stockStats.totalLocations}
-          subtitle={t('storageLocations')}
+          icon={<Tag className="h-5 w-5 text-amber-600" />}
+          iconBg="bg-amber-50"
+          title={t('unscannedStock')}
+          value={stockStats.unscannedStockItems.toLocaleString()}
+          subtitle={t('unscannedStockHint')}
         />
         <KpiCard
-          icon={<BarChart3 className="h-5 w-5 text-orange-500" />}
-          iconBg="bg-orange-50"
-          title={t('lowStockItems')}
-          value={stockStats.lowStockItems}
-          subtitle={t('itemsBelowThreshold')}
+          icon={<BarChart3 className="h-5 w-5 text-red-500" />}
+          iconBg="bg-red-50"
+          title={t('awaitingArticleLink')}
+          value={stockStats.awaitingArticleLink.toLocaleString()}
+          subtitle={stockStats.negativeSKUs > 0 ? `${stockStats.negativeSKUs} ${t('negativeSkus')}` : t('awaitingArticleLinkHint')}
         />
       </div>
     )
@@ -420,57 +420,35 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4">{t('entryTypeCol')}</TableHead>
                     <TableHead className="text-xs sm:text-sm px-3 sm:px-4">{t('artNumberCol')}</TableHead>
                     <TableHead className="text-xs sm:text-sm px-3 sm:px-4">{t('colorCol')}</TableHead>
                     <TableHead className="text-xs sm:text-sm px-3 sm:px-4">{t('sizeCol')}</TableHead>
                     <TableHead className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell">{t('divisionCol')}</TableHead>
-                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell text-right">{t('mrpCol')}</TableHead>
-                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4 hidden md:table-cell">{t('mfgCol')}</TableHead>
-                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4 hidden md:table-cell">{t('scannedByCol')}</TableHead>
+                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4 text-right">{t('scannedStock')}</TableHead>
+                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4 text-right">{t('unscannedStock')}</TableHead>
                     <TableHead className="text-xs sm:text-sm px-3 sm:px-4 text-right">{t('totalQuantityCol')}</TableHead>
-                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4 text-right hidden sm:table-cell">{t('totalScansCol')}</TableHead>
                     <TableHead className="text-xs sm:text-sm px-3 sm:px-4 hidden md:table-cell">{t('lastUpdatedCol')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredStock.map((item, idx) => (
-                    <TableRow key={idx}>
+                  {filteredStock.map((item) => (
+                    <TableRow key={item.skuId}>
                       <TableCell className="px-3 sm:px-4">
-                        <Badge variant={item.entryType === 'scan' ? 'default' : 'secondary'} className="text-xs">
-                          {item.entryType}
-                        </Badge>
+                        <div className="font-mono text-xs sm:text-sm font-semibold">{item.artNumber || '-'}</div>
+                        <div className="text-[10px] text-muted-foreground">{item.artName}</div>
                       </TableCell>
-                      <TableCell className="font-mono text-xs sm:text-sm font-semibold px-3 sm:px-4">
-                        {item.artNumber || '-'}
+                      <TableCell className="px-3 sm:px-4">
+                        <div className="font-mono text-xs sm:text-sm">{item.colorNumber || '-'}</div>
+                        <div className="text-[10px] text-muted-foreground">{item.colorName}</div>
                       </TableCell>
-                      <TableCell className="font-mono text-xs sm:text-sm px-3 sm:px-4">
-                        {item.colorNumber || '-'}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs sm:text-sm px-3 sm:px-4">
-                        {item.sizeNumber || '-'}
-                      </TableCell>
-                      <TableCell className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell">
-                        {item.division || '-'}
-                      </TableCell>
-                      <TableCell className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell text-right">
-                        {item.mrp != null ? `₹${item.mrp.toFixed(2)}` : '-'}
-                      </TableCell>
-                      <TableCell className="text-xs sm:text-sm px-3 sm:px-4 hidden md:table-cell">
-                        {item.mfgMonth && item.mfgYear
-                          ? `${String(item.mfgMonth).padStart(2, '0')}/${item.mfgYear}`
-                          : '-'}
-                      </TableCell>
-                      <TableCell className="text-xs sm:text-sm px-3 sm:px-4 hidden md:table-cell">
-                        {item.scannedByName || '-'}
-                      </TableCell>
+                      <TableCell className="font-mono text-xs sm:text-sm px-3 sm:px-4">{item.sizeNumber}</TableCell>
+                      <TableCell className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell">{item.division || '-'}</TableCell>
+                      <TableCell className="text-right text-xs sm:text-sm px-3 sm:px-4 tabular-nums">{item.scannedQuantity}</TableCell>
+                      <TableCell className="text-right text-xs sm:text-sm px-3 sm:px-4 tabular-nums">{item.unscannedQuantity || '-'}</TableCell>
                       <TableCell className="text-right px-3 sm:px-4">
-                        <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+                        <Badge className={item.totalQuantity < 0 ? 'bg-red-100 text-red-800 hover:bg-red-100' : 'bg-green-100 text-green-800 hover:bg-green-100'}>
                           {item.totalQuantity}
                         </Badge>
-                      </TableCell>
-                      <TableCell className="text-right text-xs sm:text-sm text-muted-foreground px-3 sm:px-4 hidden sm:table-cell">
-                        {item.totalScans}
                       </TableCell>
                       <TableCell className="text-xs sm:text-sm text-muted-foreground px-3 sm:px-4 hidden md:table-cell">
                         {new Date(item.lastUpdated).toLocaleDateString(undefined, {

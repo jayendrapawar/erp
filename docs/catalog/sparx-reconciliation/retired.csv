@@ -1,0 +1,285 @@
+id,artName,artCode,colorCode,color,scans,stockPairs,scanLinks
+987,SS-839,,,Black S.Green,0,0,0
+990,SS-839,,,Brown G.Yellow,0,0,0
+1004,SS-820,,,Bluish Grey Sulphur Green,0,0,0
+1010,SS-818,,,D.Grey N.Green,0,0,0
+1013,SS-817,,,L.Sage Green G.Yellow,0,0,0
+1020,SS-814,,,D.Grey Copper,0,0,0
+1021,SS-814,,,M.Blue N.Green,0,0,0
+1040,SS-703,,,O.Green G.Yellow,0,0,0
+1043,SS-697,,,D.Grey Copper,0,0,0
+1045,SS-702s,,,Olive G.Yellow,0,0,0
+1046,SS-702s,,,Black Red,0,0,0
+1047,SS-702s,,,N.Blue Orange,0,0,0
+1057,SS-694,,,D.Grey Copper,0,0,0
+1068,SS-685,,,D.Grey S.Green,0,0,0
+1071,SS-684,,,D.Grey N.Green,0,0,0
+1072,SS-673,,,Black S.Green,0,0,0
+1074,SS-673,,,D.Grey N.Green,0,0,0
+1078,SS-624,,,M.Blue Gold,0,0,0
+1081,SS-624,,,D.Grey N.Green,0,0,0
+1090,SS-607,,,Forest Columbia Green,0,0,0
+1097,SS-502,,,O.Green Yellow,0,0,0
+1098,SS-473s,,,Black F.Green,0,0,0
+1099,SS-473s,,,Grey Orange,0,0,0
+1100,SS-473s,,,N.Blue Red,0,0,0
+1101,SS-473,,,Black F.Green,0,0,0
+1104,SS-473,,,Black F.Green,0,0,0
+1107,SS-481,,,Camel Brown,0,0,0
+1109,SS-481,,,Olive Beige,0,0,0
+1110,SS-453,,,N.Blue Grey,0,0,0
+1112,SS-453,,,N.Blue Grey,0,0,0
+1117,SS-106,,,O.Green Camel,0,0,0
+1120,SS-106,,,O.Green Camel,0,0,0
+1123,SS-109G,,,Black Red,0,0,0
+1124,SS-109G,,,N.Blue Yellow,0,0,0
+1125,SS-109G,,,Olive Camel,0,0,0
+1126,SS-109G,,,Black Red,0,0,0
+1127,SS-109G,,,N.Blue Yellow,0,0,0
+1128,SS-109G,,,Olive Camel,0,0,0
+1129,SS-109G,,,Black Red,0,0,0
+1130,SS-109G,,,N.Blue Yellow,0,0,0
+1131,SS-109G,,,Olive Camel,0,0,0
+1134,SS-103,,,O.Green Camel,0,0,0
+1137,SS-103,,,O.Green Camel,0,0,0
+1140,SS-103,,,O.Green Camel,0,0,0
+1141,SS-101s,,,Camel,0,0,0
+1142,SS-101s,,,N.Blue,0,0,0
+1143,SS-101s,,,Black,0,0,0
+1144,SS-101m,,,Camel,0,0,0
+1145,SS-101m,,,N.Blue,0,0,0
+1146,SS-101m,,,Black,0,0,0
+1154,SS-833,,,Tulip Purple Pearl White,0,0,0
+1155,SS-833,,,L.Sage Green Pearl White,0,0,0
+1158,SS-848,,,Soft Moss Mint Green,0,0,0
+1162,SS-809,,,Black S.Green,0,0,0
+1164,SS-809,,,Black Green,0,0,0
+1165,SS-109L,,,N.Blue Magenta,0,0,0
+1166,SS-109L,,,Black Green,0,0,0
+1167,SS-803,,,Tulip Purple L.Pink,0,0,0
+1118,SS-106,SS0106C,NBGY,N.Blue Grey,0,0,0
+1270,SFG-241,SF0241G,,D.Grey N.Green,0,0,0
+1273,SFG-239,SF0239G,,Black N.Orange,0,0,0
+1274,SFG-239,SF0239G,,S.Grey Moon Light,0,0,0
+1294,SFG-229,SF0229G,,D.Grey S.Green,0,0,0
+1297,SFG-5002,SF5002G,,O.White Ivory,0,0,0
+1303,SFG-228,SF0228G,,N.Blue Tan,0,0,0
+1304,SFG-5001,SF5001G,,Cobalt Blue,0,0,0
+1305,SFG-5001,SF5001G,,Sage Green Mint Candy,0,0,0
+1307,SFG-5001,SF5001G,,Light Camel Cream,0,0,0
+1318,SFG-4034,SF4034G,,Grey N.Blue,0,0,0
+1344,SFG-549,SF0549G,,Brown Beige,0,0,0
+1347,SFG-549,SF0549G,,Brown Beige,0,0,0
+1356,SFG-214,,,Tan Brown,0,0,0
+1357,SFG-214,,,D.Grey S.Green,0,0,0
+1358,SFG-214,,,Black Copper,0,0,0
+1371,SFG-205,SF0205G,,D.Grey S.Green,0,0,0
+1374,SFG-200,SF0200G,,D.Grey S.Green,0,0,0
+1377,SFG-198,,,Black D.Grey,0,0,0
+1378,SFG-198,,,N.Blue Red,0,0,0
+1379,SFG-198,,,D.Grey Grey,0,0,0
+1385,SFG-196,SF0196G,,D.Grey Grey,0,0,0
+1413,SFG-144,SF0144G,,D.Grey N.Green,0,0,0
+1415,SFG-144,SF0144G,,Black N.Orange,0,0,0
+1421,SFG-143,SF0143G,,Forest Green S.Green,0,0,0
+1422,SFG-132,SF0132G,,D.Grey Red,0,0,0
+1432,SFG-49,SF0049G,,N.Blue F.Green,0,0,0
+1435,SFG-49,SF0049G,,N.Blue F.Green,0,0,0
+1438,SFG-49,SF0049G,,N.Blue F.Green,0,0,0
+1440,SFG-57,,,Black Yellow,0,0,0
+1441,SFG-57,,,Brown Tan,0,0,0
+1442,SFG-57,,,D.Grey F.Orange,0,0,0
+1443,SFG-48,SF0048G,,Beige,0,0,0
+1444,SFG-48,SF0048G,,Black,0,0,0
+1445,SFG-48,SF0048G,,Olive,0,0,0
+1446,SFG-48,SF0048G,,Beige,0,0,0
+1447,SFG-48,SF0048G,,Black,0,0,0
+1448,SFG-48,SF0048G,,Olive,0,0,0
+1452,SFG-14,SF0014G,,Olive Black,0,0,0
+1453,SFG-14,SF0014G,,N.Blue Grey,0,0,0
+1458,SFL-252,SF0252L,,Tulip Purple Pearl White,0,0,0
+1459,SFL-252,SF0252L,,Georgia Peach Pearl White,0,0,0
+1492,SM-1150,SX1150G,,Mouse Brown,0,0,0
+1506,SM-1119,SX1119G,,S.Green Rust,0,0,0
+1512,SM-1120,SX1120G,,D.Grey Bottle Green,0,0,0
+1520,SM-1102,SX1102G,,Black D.Grey,0,0,0
+1525,SM-1103,SX1103G,,Pearl White T.Blue,0,0,0
+1528,SM-1093,SX1093G,,B.Grey Copper,0,0,0
+1531,SM-1093,SX1093G,,B.Grey Copper,0,0,0
+1535,SM-1087,SX1087G,,Black S.Green,0,0,0
+1545,SM-1084,SX1084G,,M.Grey Honey,0,0,0
+1476,SFL-19,SF0019L,,Blue Black,0,0,0
+1547,SM-1084,SX1084G,,Black Grey,0,0,0
+1550,SM-1079,SX1079G,,Bluish Grey Copper,0,0,0
+1552,SM-1080,SX1080G,,F.Green Pista,0,0,0
+1558,SM-1073,SX1073G,,N.Blue S.Green,0,0,0
+1561,SM-1071,SX1071G,,Black S.Green,0,0,0
+1564,SM-1071,SX1071G,,Pearl White Bluish Grey,0,0,0
+1576,SM-1060,SX1060G,,F.Green Pista,0,0,0
+1579,SM-1060,SX1060G,,N.Blue S.Green,0,0,0
+1580,SM-1060,SX1060G,,F.Green Pista,0,0,0
+1583,SM-1060,SX1060G,,N.Blue S.Green,0,0,0
+1586,SM-1034,SX1034G,,L.Grey S.Green,0,0,0
+1592,SM-1029,SX1029G,,L.Grey S.Green,0,0,0
+1595,SM-1029,SX1029G,,L.Grey S.Green,0,0,0
+1597,SM-1031,SX1031G,,D.Grey N.Green,0,0,0
+1600,SM-1031,SX1031G,,D.Grey N.Green,0,0,0
+1603,SM-992,SX0992G,,D.Grey Red,0,0,0
+1605,SM-980,SX0980G,,D.Grey Red,0,0,0
+1610,SM-950,SX0950G,,Bluish Grey N.Blue,0,0,0
+1613,SM-950,SX0950G,,Bluish Grey N.Blue,0,0,0
+1619,SM-905,SX0905G,,L.Grey Silver Green,0,0,0
+1622,SM-905,SX0905G,,L.Grey Silver Green,0,0,0
+1625,SM-871,SX0871G,,Marlin Blue N.Orange,0,0,0
+1628,SM-871,SX0871G,,Marlin Blue N.Orange,0,0,0
+1629,SM-814,SX0814G,,F.Green Yellow,0,0,0
+1633,SM-814,SX0814G,,F.Green Yellow,0,0,0
+1642,SM-812,SX0812G,,Black N.Orange,0,0,0
+1645,SM-803,SX0803G,,Bluish Grey N.Orange,0,0,0
+1647,SM-722,SX0722G,,Grey N.Orange,0,0,0
+1649,SM-722,SX0722G,,Grey N.Orange,0,0,0
+1653,SM-766,SX0766G,,Olive Pista,0,0,0
+1663,SM-379,SX0379G,,Grey F.Green,0,0,0
+1666,SM-379,SX0379G,,Grey F.Green,0,0,0
+1669,SM-472,SX0472G,,Grey N.Orange,0,0,0
+1672,SM-472,SX0472G,,Grey N.Orange,0,0,0
+1675,SM-375,SX0375G,,D.Grey F.Orange,0,0,0
+1678,SM-375,SX0375G,,D.Grey F.Orange,0,0,0
+1683,SM-1135,,,P.White D.Green,0,0,0
+1684,SM-1135,,,N.Blue Pearl White,0,0,0
+1692,SM-1107,,,Pearl White Bluish Grey,0,0,0
+1693,SM-1107,,,Pearl White Grey,0,0,0
+1697,SM-1097,,,Pearl White L.Grey,0,0,0
+1698,SM-1104,,,Pearl White G.Yellow,0,0,0
+1712,SM-1021,,,Black Gold,0,0,0
+1713,SM-1021,,,N.Blue Red,0,0,0
+1714,SM-1021,,,O.Green Pearl White,0,0,0
+1715,SM-1018,,,Black S.Green,0,0,0
+1716,SM-1018,,,N.Blue N.Orange,0,0,0
+1717,SM-1018,,,Forest Green Copper,0,0,0
+1718,SM-960,,,Black P.White,0,0,0
+1725,SM-952,,,N.Blue Pearl White,0,0,0
+1727,SM-850,,,P.White N.Blue,0,0,0
+1729,SM-850,,,Pearl White Bottle Green,0,0,0
+1733,SM-323,,,N.Blue White,0,0,0
+1736,SM-323,,,N.Blue White,0,0,0
+1738,SM-734,,,Black N.Orange,0,0,0
+1741,SM-734,,,Black N.Orange,0,0,0
+1747,SL-345,SX0345L,,Moon Light Blue,0,0,0
+1749,SL-345,SX0345L,,L.Tulip Purple Pink,0,0,0
+1751,SL-342,,,Pearl White L.Grey,0,0,0
+1753,SL-344,SX0344L,,Tulip Purple L.Pink,0,0,0
+1758,SL-330,SX0330L,,L.Tulip Purple Tulip Purple,0,0,0
+1759,SL-329,SX0329L,,Tulip Purple L.Tulip Purple,0,0,0
+1762,SL-327,SX0327L,,Black M.Green,0,0,0
+1763,SL-327,SX0327L,,L.Sage Green Fusion Green,0,0,0
+1765,SL-328,SX0328L,,D.Tulip Purple L.Pink,0,0,0
+1766,SL-328,SX0328L,,T.Blue S.Blue,0,0,0
+1769,SL-326,,,L.Grey Tulip Purple,0,0,0
+1770,SL-326,,,Tulip Purple D.Tulip Purple,0,0,0
+1772,SL-323,SX0323L,,Sage Green L.Peach,0,0,0
+1773,SL-323,SX0323L,,Bluish Grey Aqua Green,0,0,0
+1776,SL-321,SX0321L,,L.Sage Green Sulphur Green,0,0,0
+1780,SL-322,,,N.Blue,0,0,0
+1781,SL-320,,,Black L.Peach,0,0,0
+1782,SL-320,,,Smoke Blue L.Grey,0,0,0
+1783,SL-320,,,Tulip Purple L.Pink,0,0,0
+1786,SL-319,SX0319L,,Coral Red Bluish Grey,0,0,0
+1787,SL-309,SX0309L,,S.Green T.Purple,0,0,0
+1788,SL-309,SX0309L,,D.Tulip Tulip Purple,0,0,0
+1790,SL-309,SX0309L,,Grey Pink,0,0,0
+1791,SL-316,SX0316L,,L.Grey Georgia Peach,0,0,0
+1794,SL-304,SX0304L,,Tulip Purple Black,0,0,0
+1797,SL-303,SX0303L,,N.Blue Pink,0,0,0
+1802,SL-296,SX0296L,,L.Tulip Purple Tulip Purple,0,0,0
+1805,SL-293,,,Sage Green G.Peach,0,0,0
+1806,SL-293,,,L.Pink Peach,0,0,0
+1807,SL-293,,,L.Tulip Purple Peach,0,0,0
+1808,SL-276,,,D.Tulip Purple Pearl White,0,0,0
+1811,SL-268,,,Smoke Blue M.Green,0,0,0
+1812,SL-268,,,Black D.Grey,0,0,0
+1813,SL-265,SX0265L,,Tulip Purple Pink,0,0,0
+1815,SL-265,SX0265L,,Lavender Marlin Blue,0,0,0
+1818,SL-256,,,Marlin Blue Aqua Green,0,0,0
+1819,SL-248,SX0248L,,Black Peach,0,0,0
+1820,SL-248,SX0248L,,Tulip Purple Silver,0,0,0
+1823,SL-246,SX0246L,,N.Blue Pink,0,0,0
+1824,SL-246,SX0246L,,Smoke Blue Aqua Green,0,0,0
+1825,SL-247,SX0247L,,Tulip Purple Peach,0,0,0
+1830,SL-238,,,Tulip Purple White,0,0,0
+1831,SL-237,,,T.Blue M.Green,0,0,0
+1832,SL-237,,,Purple L.Pink,0,0,0
+1834,SL-167,SX0167L,,Black L.Pink,0,0,0
+1835,SL-167,SX0167L,,D.Grey M.Green,0,0,0
+1883,SFG-179,SF0179G,,OLIVE,0,0,0
+1884,SFG-179,SF0179G,,Black,0,0,0
+1148,SS-101,,,N.Blue,0,0,0
+1185,SS-672,,,Navy Yellow,0,0,0
+1186,SS-672,,,Mallard Grey M.Green,0,0,0
+1188,SS-672,,,Navy Yellow,0,0,0
+1189,SS-672,,,Mallard Grey M.Green,0,0,0
+1191,SS-672,,,Navy Yellow,0,0,0
+1192,SS-672,,,Mallard Grey M.Green,0,0,0
+1194,SS-670,,,Navy Yellow,0,0,0
+1195,SS-670,,,Black S.Green,0,0,0
+1197,SS-670,,,Navy Yellow,0,0,0
+1198,SS-670,,,Black S.Green,0,0,0
+1200,SS-670,,,Navy Yellow,0,0,0
+1201,SS-670,,,Black S.Green,0,0,0
+1202,SS-109,,,O.Green F.Green,0,0,0
+1205,SS-641,,,Black N.Orange,0,0,0
+1208,SS-109,,,O.Green F.Green,0,0,0
+1211,SS-641,,,Black N.Orange,0,0,0
+1214,SS-641,,,Black N.Orange,0,0,0
+1218,SS-106,,,N.Blue Grey Yellow,0,0,0
+1219,SS-106,,,O.Green Camel Orange,0,0,0
+1220,SS-105,,,N.Blue I.Blue,0,0,0
+1225,SS-101,,,N.Blue,0,0,0
+1227,SS-106,,,N.Blue Grey Yellow,0,0,0
+1228,SS-106,,,O.Green Camel Orange,0,0,0
+1229,SS-105,,,N.Blue I.Blue,0,0,0
+1234,SS-101,,,N.Blue,0,0,0
+1478,SFL-19,SF0019L,,Red Black,0,0,0
+1842,SK-1015,,,Forest Green Gold,0,0,0
+1843,SK-1015,,,T.Blue N.Green,0,0,0
+1844,SK-1015,,,Black N.Orange,0,0,0
+1845,SK-1016,,,Pearl White M.Orange,0,0,0
+1847,SK-1015,,,Forest Green Gold,0,0,0
+1848,SK-1015,,,T.Blue N.Green,0,0,0
+1849,SK-1015,,,Black N.Orange,0,0,0
+1850,SK-1016,,,Pearl White M.Orange,0,0,0
+1852,SK-1016,,,Pearl White M.Orange,0,0,0
+1858,SM-950,SX0950G,,Bluish Grey N.Blue,0,0,0
+1859,SK-560,,,White Peach,0,0,0
+1860,SK-560,,,White S.Blue,0,0,0
+1861,SK-560,,,White Black,0,0,0
+1862,SK-560,,,White Peach,0,0,0
+1863,SK-560,,,White S.Blue,0,0,0
+1864,SK-560,,,White Black,0,0,0
+1865,SK-560,,,White Peach,0,0,0
+1866,SK-560,,,White S.Blue,0,0,0
+1867,SK-560,,,White Black,0,0,0
+1868,SK-850,,,White N.Blue,0,0,0
+1871,SK-107,,,Pearl White Black,0,0,0
+1872,SK-107,,,Black S.Blue,0,0,0
+1873,SK-107,,,Pearl White L.Grey,0,0,0
+1874,SK-107,,,Pearl White Black,0,0,0
+1875,SK-107,,,Black S.Blue,0,0,0
+1876,SK-107,,,Pearl White L.Grey,0,0,0
+1877,SK-97,,,S.Blue Red,0,0,0
+1878,SK-97,,,Black Yellow,0,0,0
+1879,SK-97,,,White R.Blue,0,0,0
+1880,SK-97,,,S.Blue Red,0,0,0
+1881,SK-97,,,Black Yellow,0,0,0
+1882,SK-97,,,White R.Blue,0,0,0
+2761,SM-991,SX0991G,BKRD,BLACK RED,1,1,0
+2762,SM-991,SX0991G,NBGY,N.Blue Grey,1,1,0
+2763,SM-999,SX0999G,BKRD,BLACK RED,1,1,0
+2764,SM-999,SX0999G,NBGY,NBGY,1,1,0
+2765,SM-998,SX0998G,BKRD,BLACK RED,0,0,0
+2766,SM-995,SX0996G,GYBK,grey black,1,1,0
+2767,SM-999,SC0999G,BKRD,BLACK RED,1,1,0
+2768,SM-999,SX0999S,BKRD,BLACK RED,1,1,1
+2770,SM990,SX0990G,BKRD,BLACK RED,1,1,1
+2771,SM-999,SD0999G,BKRD,BLACK RED,1,1,1
+2772,sm-997,SX0997G,GYBK,grey black,1,1,1

@@ -1,105 +1,67 @@
-import { ARTICLE_TYPE_PREFIXES, DIVISION_MAP, DEFAULT_DIVISION } from './qr-config'
+/**
+ * Compatibility adapter over the format-based parser in lib/qr/parser.ts.
+ *
+ * Older screens (billing scanner, biller verification, Feature 01 dialog) use this
+ * simple shape. All parsing now happens in lib/qr/parser.ts; nothing here reads the
+ * QR string itself.
+ */
+import { parseQr as parseFormat, type QrParseResult } from './qr/parser'
+import { DIVISION_MAP } from './qr-config'
 
 export interface ParsedQr {
-  normalized: string    // URL-stripped, uppercased
-  articleCode: string   // e.g. "FL0548L"
-  colorCode: string     // e.g. "SASA"  (first 4 chars of field 1)
-  size: string          // e.g. "6"     (last 2 digits of field 1 remainder)
-  division: string      // e.g. "Flite EVA"
-  mrp: number           // e.g. 289.50  (field 3)
-  mfgMonth: number      // e.g. 4       (first 2 chars of field 2 MMYY)
-  mfgYear: number       // e.g. 2026    (last 2 chars of field 2 MMYY + 2000)
+  normalized: string
+  articleCode: string
+  colorCode: string
+  size: string
+  /** Hint from the article-code prefix only. Not stored; the article master decides the division. */
+  division: string
+  codePrefix: string
+  mrp: number
+  mfgMonth: number
+  mfgYear: number
+  /** Duplicate key for individual boxes; '' when the label has no unique id. */
+  identity: string
+  formatId: string
 }
 
-/**
- * Returns true only if the QR string matches our expected warehouse format:
- *   FIELD0-FIELD1-FIELD2-FIELD3
- * where:
- *   - FIELD0 contains a known article-type prefix (FL, P, S, …)
- *   - FIELD1 has at least 4 chars (colorCode) and a numeric size suffix
- *   - At least 4 dash-separated fields are present
- *
- * Anything that fails this check is NOT our QR and should be rejected
- * before touching the DB or offline queue.
- */
+/** True for an individual-box label that can be counted (fully or partly understood). */
 export function isValidWarehouseQr(raw: string): boolean {
-  const normalized = normalizeQr(raw)
-  const fields = normalized.split('-')
-
-  // Must have at least 4 dash-separated fields
-  if (fields.length < 4) return false
-
-  // Field 0 must contain a known article prefix
-  const field0 = fields[0] ?? ''
-  const hasPrefix = ARTICLE_TYPE_PREFIXES.some((p) => field0.includes(p))
-  if (!hasPrefix) return false
-
-  // Field 1 must have a non-empty colorCode (≥4 chars) and a numeric size
-  const field1 = fields[1] ?? ''
-  if (field1.length < 4) return false
-  const digitRun = field1.slice(4).replace(/\D/g, '')
-  if (!digitRun) return false
-
-  // Field 3 must be a positive MRP number
-  const mrp = parseFloat(fields[3] ?? '0')
-  if (!mrp || mrp <= 0) return false
-
-  return true
+  const r = parseFormat(raw)
+  return r.kind === 'box' && (r.status === 'parsed' || r.status === 'partial') && Boolean(r.fields.articleCode && r.fields.size)
 }
 
-/**
- * Normalize a raw QR string:
- *   - strip leading https?://
- *   - strip trailing /
- *   - uppercase
- */
-export function normalizeQr(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^https?:\/\//i, '')
-    .replace(/\/$/, '')
-    .toUpperCase()
+export function isCartonQr(raw: string): boolean {
+  return parseFormat(raw).kind === 'carton'
 }
 
-/**
- * Parse a raw QR string into its structured fields.
- * The normalized form is stored alongside raw in the DB.
- */
-export function parseQr(raw: string): ParsedQr {
-  const normalized = normalizeQr(raw)
-  const fields = normalized.split('-')
+export function divisionHint(articleCode: string): string {
+  // Longest prefix wins, and it must be at the START of the code.
+  const prefixes = Object.keys(DIVISION_MAP).sort((a, b) => b.length - a.length)
+  const hit = prefixes.find((p) => articleCode.startsWith(p))
+  return hit ? DIVISION_MAP[hit] : ''
+}
 
-  // --- Field 0: find first known article-type prefix (longest-first) --------
-  const sortedPrefixes = [...ARTICLE_TYPE_PREFIXES].sort((a, b) => b.length - a.length)
-  const field0 = fields[0] ?? ''
-  let articleCode = field0
-  let division = DEFAULT_DIVISION
-  for (const prefix of sortedPrefixes) {
-    const idx = field0.indexOf(prefix)
-    if (idx !== -1) {
-      articleCode = field0.slice(idx)
-      division = DIVISION_MAP[prefix] ?? DEFAULT_DIVISION
-      break
-    }
+export function toParsedQr(r: QrParseResult): ParsedQr {
+  const articleCode = r.fields.articleCode?.value ?? ''
+  return {
+    normalized: r.payload,
+    articleCode,
+    colorCode: r.fields.colourCode?.value ?? '',
+    size: r.fields.size?.value ?? '',
+    division: divisionHint(articleCode),
+    codePrefix: r.codePrefix ?? '',
+    mrp: r.fields.mrp?.value ?? 0,
+    mfgMonth: r.fields.mfgMonth?.value ?? 0,
+    mfgYear: r.fields.mfgYear?.value ?? 0,
+    identity: r.dedupeKey ?? '',
+    formatId: r.formatId ?? '',
   }
+}
 
-  // --- Field 1: colorCode (first 4 chars) + size (last 2 digits of rest) ----
-  const field1 = fields[1] ?? ''
-  const colorCode = field1.slice(0, 4)
-  const digitRun = field1.slice(4).replace(/\D/g, '')
-  const size =
-    digitRun.length >= 2
-      ? String(parseInt(digitRun.slice(-2), 10))
-      : digitRun || '0'
+export function parseQr(raw: string): ParsedQr {
+  return toParsedQr(parseFormat(raw))
+}
 
-  // --- Field 2: MMYY (first 4 chars) ----------------------------------------
-  const field2 = fields[2] ?? ''
-  const mmyy = field2.slice(0, 4)
-  const mfgMonth = mmyy.length >= 2 ? parseInt(mmyy.slice(0, 2), 10) || 0 : 0
-  const mfgYear = mmyy.length === 4 ? 2000 + (parseInt(mmyy.slice(2, 4), 10) || 0) : 0
-
-  // --- Field 3: MRP ----------------------------------------------------------
-  const mrp = parseFloat(fields[3] ?? '0') || 0
-
-  return { normalized, articleCode, colorCode, size, division, mrp, mfgMonth, mfgYear }
+export function normalizeQr(raw: string): string {
+  return parseFormat(raw).payload
 }

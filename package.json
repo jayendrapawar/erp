@@ -6,7 +6,18 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "tsx --test tests/qr/parser.test.ts tests/catalog/catalog.test.ts",
+    "test:db": "tsx --test --test-concurrency=1 tests/db/inventory.test.ts tests/db/catalog-import.test.ts",
+    "typecheck": "tsc --noEmit -p .",
+    "db:status": "tsx scripts/db/migrate.ts status",
+    "db:migrate": "tsx scripts/db/migrate.ts up",
+    "db:backup": "tsx scripts/db/backup.ts",
+    "db:restore": "tsx scripts/db/restore.ts",
+    "db:verify": "tsx scripts/db/verify.ts",
+    "db:import-legacy-scans": "tsx scripts/db/import-legacy-scans.ts",
+    "qr:report": "tsx scripts/qr-report.ts",
+    "catalog:import-sparx": "tsx scripts/catalog/import-sparx.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
@@ -42,6 +53,7 @@
     "eslint-config-next": "^16.3.0",
     "postcss": "^8.5",
     "tailwindcss": "^4.3.3",
+    "tsx": "4.23.11",
     "typescript": "5.7.3",
     "typescript-eslint": "^8.66.0"
   },

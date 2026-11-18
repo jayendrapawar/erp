@@ -1,0 +1,193 @@
+{
+  "sources": {
+    "priceList": {
+      "file": "EVA.pdf (transcribed)",
+      "rows": 195,
+      "articles": 144,
+      "sha256": "372546af8384fbf32d70bf776e83edaa81ad12e14b8bc755069c3032dd9408a3"
+    },
+    "assortments": {
+      "file": "eva assortment.xlsx",
+      "rows": 32,
+      "sha256": "6f7ec99a30af9cc368448493dee9696a94caa997401d2d652cef12151d146875"
+    }
+  },
+  "priceList": {
+    "collections": [
+      "EVA COLLECTION",
+      "AIR COLLECTION",
+      "URBAN BASIC COLLECTION",
+      "KIDS COLLECTION"
+    ],
+    "packings": {
+      "24": 67,
+      "30": 57,
+      "36": 57,
+      "48": 10,
+      "60": 4
+    },
+    "ranges": {
+      "11": 5,
+      "6-10": 67,
+      "4-5": 11,
+      "1-3": 9,
+      "11-13": 5,
+      "11-12": 5,
+      "4-7": 1,
+      "3-8": 68,
+      "11-1": 8,
+      "2-5": 6,
+      "7-10": 6,
+      "8-10": 3,
+      "5-7": 1
+    },
+    "articlesWithSeveralSizeRows": 23,
+    "articlesWithDifferentPackingBySize": [
+      "FL-02",
+      "FL-07",
+      "FL-59",
+      "FL-65",
+      "FL-132",
+      "FL-185",
+      "FL-330",
+      "FL-370",
+      "FL-430",
+      "FL-453",
+      "FL-454",
+      "FL-2020",
+      "FL-K 53",
+      "FL-K 72",
+      "FL-K 78",
+      "FL-K-2035",
+      "FL-K-2036",
+      "FL-K-2045",
+      "FL-K-2071"
+    ],
+    "colourNamesPerArticle": {
+      "min": 1,
+      "max": 4
+    }
+  },
+  "assortments": {
+    "ignoredRows": {
+      "44": "Owner, 18 Nov 2026: same as row 21 (Ladies 36/405); ignore."
+    },
+    "bySegment": {
+      "GENTS": 11,
+      "LADIES": 17,
+      "BABY": 1,
+      "KIDS": 3
+    },
+    "issues": [
+      {
+        "kind": "segment_needed",
+        "ref": "packing/code 30/608",
+        "message": "GENTS and LADIES both have packing 30 code 608 with different size quantities (GENTS: 6×12 7×10 8×8; LADIES: 6×10 7×10 8×10). The article's segment must come from the article master; it cannot be guessed from the carton."
+      },
+      {
+        "kind": "segment_needed",
+        "ref": "packing/code 24/608",
+        "message": "GENTS and LADIES both have packing 24 code 608 with different size quantities (GENTS: 6×10 7×8 8×6; LADIES: 6×8 7×8 8×8). The article's segment must come from the article master; it cannot be guessed from the carton."
+      }
+    ]
+  },
+  "coverage": {
+    "rows": 195,
+    "withAnyAssortment": 163,
+    "withFullRangeAssortment": 90,
+    "uncoveredRangePackings": [
+      "11 @ 30",
+      "4-5 @ 30",
+      "11-13 @ 48",
+      "1-3 @ 30",
+      "11-12 @ 24",
+      "11 @ 36",
+      "11 @ 24",
+      "11-12 @ 30",
+      "11-13 @ 36",
+      "11-1 @ 48",
+      "11-1 @ 24",
+      "8-10 @ 36",
+      "5-7 @ 36",
+      "11-1 @ 60",
+      "8-10 @ 60",
+      "11-13 @ 60"
+    ]
+  },
+  "labelChecks": [
+    {
+      "label": "box",
+      "code": "FL0020L",
+      "sizes": "4",
+      "mrp": 239.5,
+      "matches": [
+        "FL-20 4-5 MRP 239.50 pack 30 ✓"
+      ]
+    },
+    {
+      "label": "box",
+      "code": "FL0020L",
+      "sizes": "5",
+      "mrp": 239.5,
+      "matches": [
+        "FL-20 4-5 MRP 239.50 pack 30 ✓"
+      ]
+    },
+    {
+      "label": "box",
+      "code": "FL0548L",
+      "sizes": "6",
+      "mrp": 289.5,
+      "matches": [
+        "FL-548 3-8 MRP 289.50 pack 36 ✓"
+      ]
+    },
+    {
+      "label": "box",
+      "code": "FL0291L",
+      "sizes": "4",
+      "mrp": 249.5,
+      "matches": [
+        "FL-291 3-8 MRP 249.50 pack 30 ✓"
+      ]
+    },
+    {
+      "label": "box",
+      "code": "FL0532L",
+      "sizes": "6",
+      "mrp": 219.5,
+      "matches": [
+        "FL-532 3-8 MRP 219.50 pack 36 ✓"
+      ]
+    },
+    {
+      "label": "box",
+      "code": "FL2020G",
+      "sizes": "8",
+      "mrp": 549.5,
+      "matches": [
+        "FL-2020 6-10 MRP 599.50 pack 24 ≠",
+        "FL-2020 11-1 MRP 449.50 pack 24 ≠",
+        "FL-2020 7-10 MRP 399.50 pack 48 ≠"
+      ]
+    },
+    {
+      "label": "carton",
+      "code": "FL0020L",
+      "sizes": "4-5",
+      "mrp": 239.5,
+      "matches": [
+        "FL-20 4-5 MRP 239.50 pack 30 ✓"
+      ]
+    },
+    {
+      "label": "carton",
+      "code": "FLN115G",
+      "sizes": "6-10",
+      "mrp": 229.5,
+      "matches": [
+        "FL-115 6-10 MRP 229.50 pack 36 ✓"
+      ]
+    }
+  ]
+}

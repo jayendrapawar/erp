@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
-import { headers } from 'next/headers'
-import { auth } from '@/lib/auth'
 import { loadCatalogue } from '@/app/actions/catalogue'
+import { AuthError } from '@/lib/authz'
 
 // GET /api/catalogue
 // Returns the full catalogue (vendors + articles) as JSON.
@@ -14,20 +13,18 @@ import { loadCatalogue } from '@/app/actions/catalogue'
 // its own 30-min stale-while-revalidate on top.
 export async function GET() {
   try {
-    const session = await auth.api.getSession({ headers: await headers() })
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const catalogue = await loadCatalogue()
+    const catalogue = await loadCatalogue() // checks the signed-in user's permission
 
     return NextResponse.json(catalogue, {
       headers: {
-        // Allow browser + CDN to cache for 5 min; SW will serve stale for 30 min
-        'Cache-Control': 'public, max-age=300, stale-while-revalidate=1800',
+        // Contains retailer phone numbers and addresses: browser-only cache, never a shared/CDN cache.
+        'Cache-Control': 'private, max-age=300, stale-while-revalidate=1800',
       },
     })
   } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: err.code === 'UNAUTHENTICATED' ? 401 : 403 })
+    }
     console.error('[/api/catalogue]', err)
     return NextResponse.json({ error: 'Failed to load catalogue' }, { status: 500 })
   }

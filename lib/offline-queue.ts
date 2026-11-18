@@ -9,7 +9,7 @@ export type OfflineEntryType = 'scan' | 'manual'
 export type OfflineStatus    = 'pending' | 'syncing' | 'error'
 
 export interface OfflineEntry {
-  tempId:       string              // client-only UUID; never reaches the server
+  tempId:       string              // UUID created on the device; sent as the scan event id so retries are idempotent
   entryType:    OfflineEntryType
   // scan-only
   rawQrCode?:   string
@@ -23,6 +23,7 @@ export interface OfflineEntry {
   mfgYear?:     number
   quantity:     number
   notes?:       string
+  flag?:        string
   // meta
   scannedByName: string             // persisted from session so sync labels rows correctly
   savedAt:       number             // Date.now()

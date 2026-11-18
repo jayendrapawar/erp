@@ -5,7 +5,7 @@ import jsQR from 'jsqr'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
 import { markBilled, getOrderWithItems, saveBillLines, getBillLines, createEmergencyBill, deleteEmergencyBill } from '@/app/actions/orders'
 import { PageNav } from '@/components/page-nav'
-import { parseQr, isValidWarehouseQr } from '@/lib/qr-parser'
+import { parseQr, isValidWarehouseQr, normalizeQr } from '@/lib/qr-parser'
 import { SCAN_INTERVAL_MS } from '@/components/scanner/constants'
 import { articlesMatch } from '@/lib/billing-verification'
 import { printInvoices, type MrpLine, type PageSize, type BillType, type PrintConfig } from '@/lib/bill-html'
@@ -312,9 +312,10 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
     // Duplicate QR check — compare full normalized QR string to avoid false
     // positives from boxes that share a common last segment suffix.
-    const normalizedRaw = raw.trim().toUpperCase()
+    // Normalised payload: a URL-wrapped phone scan and a plain scan of one box are the same box.
+    const normalizedRaw = parsed.normalized
     const alreadyScanned = scannedQrsRef.current.some(
-      q => q.trim().toUpperCase() === normalizedRaw
+      q => normalizeQr(q) === normalizedRaw
     )
     if (alreadyScanned) {
       showMsg('warn', `${art} Sz ${size} — Duplicate QR, already scanned` + devSuffix)

@@ -1,46 +1,23 @@
 'use server'
 
-import { db, pool } from '@/lib/db'
-import { orderSets, user } from '@/lib/db/schema'
+import { db } from '@/lib/db'
+import { orderSets } from '@/lib/db/schema'
 import { asc, eq, sql } from 'drizzle-orm'
-import { auth } from '@/lib/auth'
-import { headers } from 'next/headers'
+import { requirePermission } from '@/lib/authz'
 
 export type OrderSet = typeof orderSets.$inferSelect
 
 async function requireAuth() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
+  await requirePermission('sets.view')
 }
 
 async function requireAdmin() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-  // Role is stored in the DB, not on the session object — must query
-  const [u] = await db.select({ role: user.role }).from(user).where(eq(user.id, session.user.id)).limit(1)
-  const roles = (u?.role ?? '').split(',').map((r: string) => r.trim())
-  if (!roles.includes('admin')) throw new Error('Forbidden')
+  await requirePermission('sets.edit')
 }
 
-// ── Auto-migrate: create the table if it doesn't exist yet ───────────────────
-// Runs once on first call; subsequent calls are no-ops (IF NOT EXISTS).
-async function ensureTable() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS "order_sets" (
-      "id"         SERIAL PRIMARY KEY,
-      "name"       TEXT NOT NULL,
-      "quantities" JSONB NOT NULL DEFAULT '{}',
-      "createdAt"  TIMESTAMP NOT NULL DEFAULT NOW(),
-      "updatedAt"  TIMESTAMP NOT NULL DEFAULT NOW()
-    )
-  `)
-  await pool.query(`
-    DO $$ BEGIN
-      ALTER TABLE "order_sets" ADD CONSTRAINT "order_sets_name_unique" UNIQUE ("name");
-    EXCEPTION WHEN duplicate_table OR duplicate_object THEN NULL;
-    END $$
-  `)
-}
+// The order_sets table is created by migrations (db/migrations/0000_baseline.sql);
+// it is no longer created at runtime on every request.
+async function ensureTable() {}
 
 // ── Fetch all sets ────────────────────────────────────────────────────────────
 export async function getSets(): Promise<OrderSet[]> {

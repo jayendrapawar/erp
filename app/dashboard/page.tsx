@@ -1,8 +1,7 @@
-import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
-import { auth } from '@/lib/auth'
+import { getSessionUser } from '@/lib/authz'
+import { hasPermission } from '@/lib/permissions'
 import { DashboardPage } from '@/components/dashboard-page'
-import { isRedirectError } from 'next/dist/client/components/redirect-error'
 
 export const metadata = {
   title: 'Dashboard - Shayona Inventory',
@@ -10,13 +9,10 @@ export const metadata = {
 }
 
 export default async function Dashboard() {
-  try {
-    const session = await auth.api.getSession({ headers: await headers() })
-    if (!session?.user) redirect('/sign-in')
-  } catch (err) {
-    if (isRedirectError(err)) throw err
-    redirect('/sign-in')
-  }
+  // Signed in is not enough: the account needs a role that allows this page.
+  const u = await getSessionUser()
+  if (!u) redirect('/sign-in')
+  if (!hasPermission(u.roles, 'inventory.view')) redirect('/home')
 
   return <DashboardPage />
 }

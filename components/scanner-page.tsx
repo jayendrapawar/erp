@@ -4,9 +4,8 @@ import jsQR from 'jsqr'
 import { User } from 'lucide-react'
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { addManualEntry } from '@/app/actions/dashboard'
 import { createFlag } from '@/app/actions/flags'
-import { checkScanAgainstMaster, deleteScan, getCurrentUserName, getRecentScans, recordScan } from '@/app/actions/scan'
+import { addManualEntry, checkScanAgainstMaster, deleteScan, getRecentScans, getScannerContext, recordScan, type ScannerContext } from '@/app/actions/scan'
 import { NewArticleDialog } from '@/components/scanner/new-article-dialog'
 import { LanguageToggle } from '@/components/language-toggle'
 import { DashboardPage } from '@/components/dashboard-page'
@@ -22,13 +21,16 @@ import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { signOut } from '@/lib/auth-client'
-import { DUPLICATE_ENTRY_ERROR, DUPLICATE_QR_ERROR, INVALID_QR_ERROR } from '@/lib/errors'
+import { DUPLICATE_QR_ERROR } from '@/lib/errors'
 import { useLanguage } from '@/lib/language-context'
 import { cacheFlags, enqueuePendingFlag, getCachedFlags } from '@/lib/offline-flags'
 import { enqueue, getQueue, removeFromQueue, type OfflineEntry } from '@/lib/offline-queue'
-import { isValidWarehouseQr, parseQr, type ParsedQr } from '@/lib/qr-parser'
+import { isCartonQr, isValidWarehouseQr, parseQr, type ParsedQr } from '@/lib/qr-parser'
 import { syncFlags, syncQueue, type SyncResult } from '@/lib/sync-engine'
 import { useOnline } from '@/lib/use-online'
+
+const CARTON_MESSAGE = 'This is an outer-carton label. Scan the individual footwear boxes instead.'
+const MISSING_MESSAGE = 'Saved. This article or size is not in the master yet; an admin will link it.'
 
 export function ScannerPage() {
   const router = useRouter()
@@ -55,12 +57,16 @@ export function ScannerPage() {
   const articleDialogOpenRef = useRef(false)
   const scanDecisionPendingRef = useRef(false)
   const [qrDetected, setQrDetected] = useState(false)
+  const [scannerCtx, setScannerCtx] = useState<ScannerContext | null>(null)
+  const [deleteReason, setDeleteReason] = useState('')
+  const [removeCreatedArticle, setRemoveCreatedArticle] = useState(false)
   const [newArticleDialog, setNewArticleDialog] = useState<{
     rawQr: string
+    clientEventId: string
     parsed: ParsedQr
     mode: 'unknown' | 'new_colour'
     existingName?: string
-    notes?: string
+    flag?: string
   } | null>(null)
 
   const [flags, setFlags]             = useState<string[]>([])
@@ -172,12 +178,13 @@ export function ScannerPage() {
 
     refreshFlags(navigator.onLine)
 
-    getCurrentUserName()
-      .then((name) => {
-        if (name) {
-          setUserName(name)
-          setCachedUser(name)
+    getScannerContext()
+      .then((ctx) => {
+        if (ctx.name) {
+          setUserName(ctx.name)
+          setCachedUser(ctx.name)
         }
+        setScannerCtx(ctx)
       })
       .catch(() => {})
 
@@ -478,25 +485,30 @@ export function ScannerPage() {
   }
 
   async function handleCameraScan(qrCode: string) {
+    if (isCartonQr(qrCode)) {
+      showWarning(CARTON_MESSAGE)
+      return
+    }
     if (!isValidWarehouseQr(qrCode)) {
       showWarning('QR code format not recognised.')
       return
     }
+    // One id per physical scan, created on the device: retries can never add the box twice.
+    const clientEventId = crypto.randomUUID()
 
     if (!navigator.onLine) {
       const parsed = parseQr(qrCode)
-      const boxCode = qrCode.split('-').pop() ?? qrCode
       const queue = await getQueue()
-      const dup = queue.find(
-        (e) => (e.rawQrCode?.split('-').pop() ?? '') === boxCode
-      )
+      const dup = parsed.identity
+        ? queue.find((e) => e.rawQrCode && parseQr(e.rawQrCode).identity === parsed.identity)
+        : undefined
       if (dup) {
         showWarning(dup.scannedByName ? `${t('duplicateByUser')} ${dup.scannedByName}` : t('duplicateQR'))
         return
       }
       triggerScanFeedback()
       const entry: OfflineEntry = {
-        tempId:        crypto.randomUUID(),
+        tempId:        clientEventId,
         entryType:     'scan',
         rawQrCode:     qrCode,
         artNumber:     parsed.articleCode,
@@ -507,7 +519,7 @@ export function ScannerPage() {
         mfgMonth:      parsed.mfgMonth || undefined,
         mfgYear:       parsed.mfgYear || undefined,
         quantity:      1,
-        notes:         activeFlagRef.current ? `[Flag: ${activeFlagRef.current}]` : undefined,
+        flag:          activeFlagRef.current || undefined,
         scannedByName: userNameRef.current || getCachedUser(),
         savedAt:       Date.now(),
         status:        'pending',
@@ -527,8 +539,20 @@ export function ScannerPage() {
         masterCheck = await checkScanAgainstMaster(qrCode)
       } catch (error) {
         console.error('Article check unavailable:', error)
-        showWarning('Article check unavailable. Scan saved.')
-        await saveCameraScanNormally(qrCode)
+        await saveCameraScanNormally(qrCode, clientEventId)
+        return
+      }
+      if (masterCheck.status === 'duplicate') {
+        showWarning(masterCheck.scannedByName ? t('duplicateByUser') + ' ' + masterCheck.scannedByName : t('duplicateQR'))
+        return
+      }
+      if (masterCheck.status === 'carton' || masterCheck.status === 'invalid') {
+        showWarning(masterCheck.status === 'carton' ? CARTON_MESSAGE : masterCheck.message)
+        return
+      }
+      if ((masterCheck.status === 'unknown' || masterCheck.status === 'new_colour') && !masterCheck.canCreate) {
+        // Only admins create master data. Everyone else's scan is kept as a missing article.
+        await saveCameraScanNormally(qrCode, clientEventId, MISSING_MESSAGE)
         return
       }
       if (masterCheck.status === 'unknown' || masterCheck.status === 'new_colour') {
@@ -536,14 +560,15 @@ export function ScannerPage() {
         articleDialogOpenRef.current = true
         setNewArticleDialog({
           rawQr: qrCode,
+          clientEventId,
           parsed,
           mode: masterCheck.status,
-          notes: activeFlagRef.current ? `[Flag: ${activeFlagRef.current}]` : undefined,
+          flag: activeFlagRef.current || undefined,
           ...(masterCheck.status === 'new_colour' ? { existingName: masterCheck.artName } : {}),
         })
         return
       }
-      await saveCameraScanNormally(qrCode)
+      await saveCameraScanNormally(qrCode, clientEventId)
     } finally {
       scanDecisionPendingRef.current = false
       if (!articleDialogOpenRef.current) setTimeout(() => {
@@ -555,18 +580,18 @@ export function ScannerPage() {
     }
   }
 
-  async function saveCameraScanNormally(qrCode: string): Promise<boolean> {
+  async function saveCameraScanNormally(qrCode: string, clientEventId: string, successMessage?: string): Promise<boolean> {
     try {
-      const res = await recordScan(qrCode, activeFlagRef.current ? `[Flag: ${activeFlagRef.current}]` : undefined)
+      const res = await recordScan(qrCode, { clientEventId, flag: activeFlagRef.current || null, deviceAt: new Date().toISOString() })
       if (!res.ok) {
-        if (res.error === INVALID_QR_ERROR) showWarning('QR code format not recognised. Only warehouse QR codes can be scanned.')
-        else if (res.error === DUPLICATE_QR_ERROR) {
+        if (res.error === DUPLICATE_QR_ERROR) {
           const who = res.scannedByName
           showWarning(who ? `${t('duplicateByUser')} ${who}` : t('duplicateQR'))
-        } else showError(t('scanRecordError'))
+        } else if (res.error === 'ERROR') showError(t('scanRecordError'))
+        else showWarning(res.message)
         return false
       }
-      completeCameraScan(res.data, t('cameraScanSuccess'))
+      completeCameraScan(res.data, successMessage ?? (res.data.resolution === 'resolved' ? t('cameraScanSuccess') : MISSING_MESSAGE))
       return true
     } catch {
       showError(t('scanRecordError'))
@@ -595,9 +620,9 @@ export function ScannerPage() {
     }, 2000)
   }
 
-  async function savePendingScanForLater(qrCode: string): Promise<boolean> {
+  async function savePendingScanForLater(qrCode: string, clientEventId: string): Promise<boolean> {
     try {
-      const result = await recordScan(qrCode, activeFlagRef.current ? `[Flag: ${activeFlagRef.current}]` : undefined)
+      const result = await recordScan(qrCode, { clientEventId, flag: activeFlagRef.current || null })
       if (!result.ok) {
         if (result.error === DUPLICATE_QR_ERROR) {
           const who = result.scannedByName
@@ -622,7 +647,7 @@ export function ScannerPage() {
     try {
       const recent = await getRecentScans(50)
       setRecentScans(recent)
-      savedScan = recent.find((scan) => scan.rawQrCode === qrCode || scan.boxCodes?.includes(qrCode))
+      savedScan = recent.find((scan) => scan.rawQrCode === qrCode)
     } catch {
       // The link action already saved the scan; recent history can refresh later.
     }
@@ -654,6 +679,7 @@ export function ScannerPage() {
         const queue = await getQueue()
         const dup = queue.find(
           (e) =>
+            e.status     === 'pending' &&
             e.entryType  === 'manual' &&
             e.artNumber  === art   && e.colorNumber === color && e.sizeNumber === size &&
             e.division   === divVal &&
@@ -669,9 +695,6 @@ export function ScannerPage() {
           return
         }
 
-        const flagNote = activeFlag ? `[Flag: ${activeFlag}]` : ''
-        const userNote = manualForm.notes.trim()
-        const combinedNotes = [flagNote, userNote].filter(Boolean).join(' ') || undefined
         const entry: OfflineEntry = {
           tempId:        crypto.randomUUID(),
           entryType:     'manual',
@@ -680,7 +703,8 @@ export function ScannerPage() {
           sizeNumber:    size,
           quantity:      qty,
           mrp:           mrpVal,
-          notes:         combinedNotes,
+          notes:         manualForm.notes.trim() || undefined,
+          flag:          activeFlag || undefined,
           division:      divVal,
           mfgMonth:      monthVal,
           mfgYear:       yearVal,
@@ -696,27 +720,21 @@ export function ScannerPage() {
         return
       }
 
-      const flagNote = activeFlag ? `[Flag: ${activeFlag}]` : ''
-      const userNote = manualForm.notes.trim()
-      const combinedNotes = [flagNote, userNote].filter(Boolean).join(' ') || undefined
-      const res = await addManualEntry(
-        manualForm.artNumber,
-        manualForm.colorNumber,
-        manualForm.sizeNumber,
-        manualForm.quantity || 1,
-        combinedNotes,
-        manualForm.mrp ? parseFloat(manualForm.mrp) : undefined,
-        manualForm.division || undefined,
-        manualForm.mfgMonth ? parseInt(manualForm.mfgMonth) : undefined,
-        manualForm.mfgYear ? parseInt(manualForm.mfgYear) : undefined,
-      )
+      const res = await addManualEntry({
+        clientEventId: crypto.randomUUID(),
+        artNumber: manualForm.artNumber,
+        colorNumber: manualForm.colorNumber,
+        sizeNumber: manualForm.sizeNumber,
+        quantity: manualForm.quantity || 1,
+        notes: manualForm.notes.trim() || null,
+        flag: activeFlag || null,
+        mrp: manualForm.mrp ? parseFloat(manualForm.mrp) : null,
+        mfgMonth: manualForm.mfgMonth ? parseInt(manualForm.mfgMonth) : null,
+        mfgYear: manualForm.mfgYear ? parseInt(manualForm.mfgYear) : null,
+      })
       if (!res.ok) {
-        if (res.error === DUPLICATE_ENTRY_ERROR) {
-          const who = res.scannedByName
-          showWarning(who ? `${t('duplicateByUser')} ${who}` : t('duplicateQR'))
-        } else {
-          showError(t('scanRecordError'))
-        }
+        if (res.error === 'ERROR') showError(t('scanRecordError'))
+        else showWarning(res.message)
         return
       }
       setLastManualEntry(res.data)
@@ -735,21 +753,22 @@ export function ScannerPage() {
     if (!deleteTarget) return
     setDeleteLoading(true)
     try {
-      const deleteResult = await deleteScan(
-        deleteTarget.id,
-        deleteTarget.rawQrCode ?? undefined,
-      )
-      setRecentScans((prev) =>
-        prev.filter((s) => s.rawQrCode !== deleteTarget.rawQrCode)
-      )
+      const deleteResult = await deleteScan(deleteTarget.id, {
+        reason: deleteReason.trim() || 'Undone from the scanner',
+        removeCreatedArticle,
+      })
+      if (!deleteResult.ok) {
+        showWarning(deleteResult.message)
+        return
+      }
+      setRecentScans((prev) => prev.filter((s) => s.id !== deleteTarget.id))
       setDeleteTarget(null)
       setDeleteConfirmText('')
-      if (deleteResult?.undone) {
-        const { action, artCode, colorCode } = deleteResult.undone
-        showSuccess(action === 'created'
-          ? `Scan deleted. Created article ${artCode} / ${colorCode} was removed.`
-          : `Scan deleted. Article ${artCode} / ${colorCode} was unlinked.`)
-      } else showSuccess('Scan deleted.')
+      setDeleteReason('')
+      setRemoveCreatedArticle(false)
+      showSuccess(deleteResult.articleDeactivated
+        ? 'Scan undone. Article ' + deleteResult.articleDeactivated.artCode + ' / ' + deleteResult.articleDeactivated.colorCode + ' was deactivated.'
+        : 'Scan undone. The stock was reversed and the scan is kept in the history.')
     } catch {
     } finally {
       setDeleteLoading(false)
@@ -1539,9 +1558,10 @@ export function ScannerPage() {
             parsed={newArticleDialog.parsed}
             mode={newArticleDialog.mode}
             existingName={newArticleDialog.existingName}
-            notes={newArticleDialog.notes}
-            onClose={() => { void savePendingScanForLater(newArticleDialog.rawQr) }}
-            onSaveLater={() => savePendingScanForLater(newArticleDialog.rawQr)}
+            flag={newArticleDialog.flag}
+            clientEventId={newArticleDialog.clientEventId}
+            onClose={() => { void savePendingScanForLater(newArticleDialog.rawQr, newArticleDialog.clientEventId) }}
+            onSaveLater={() => savePendingScanForLater(newArticleDialog.rawQr, newArticleDialog.clientEventId)}
             onLinked={() => finishArticleLink(newArticleDialog.rawQr)}
           />
         )}
@@ -1560,17 +1580,41 @@ export function ScannerPage() {
                     <line x1="12" y1="17" x2="12.01" y2="17" />
                   </svg>
                 </div>
-                <h2 className="text-base font-semibold">Delete entry?</h2>
+                <h2 className="text-base font-semibold">Undo this scan?</h2>
               </div>
               <p className="text-sm text-muted-foreground">
-                You are about to permanently delete{' '}
+                This removes{' '}
                 <span className="font-mono font-semibold text-foreground">
                   {[deleteTarget.artNumber, deleteTarget.colorNumber, deleteTarget.sizeNumber]
                     .filter(Boolean)
                     .join(' · ') || `#${deleteTarget.id}`}
                 </span>
-                . This action <span className="font-semibold text-destructive">cannot be undone</span>.
+                {' '}from stock. The scan stays in the history, marked as undone.
               </p>
+              <div className="space-y-1.5">
+                <Label htmlFor="delete-reason-input" className="text-xs text-muted-foreground">Reason</Label>
+                <Input
+                  id="delete-reason-input"
+                  placeholder="e.g. scanned the wrong box"
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  disabled={deleteLoading}
+                  autoComplete="off"
+                />
+              </div>
+              {scannerCtx?.canCreateArticles && (
+                <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                  <input
+                    id="delete-remove-article"
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={removeCreatedArticle}
+                    onChange={(e) => setRemoveCreatedArticle(e.target.checked)}
+                    disabled={deleteLoading}
+                  />
+                  <span>Also remove the article this scan created (only allowed if nothing else uses it).</span>
+                </label>
+              )}
               <div className="space-y-1.5">
                 <Label htmlFor="delete-confirm-input" className="text-xs text-muted-foreground">
                   Type <span className="font-mono font-semibold text-foreground">DELETE</span> to confirm
@@ -1590,7 +1634,7 @@ export function ScannerPage() {
                   variant="outline"
                   size="sm"
                   disabled={deleteLoading}
-                  onClick={() => { setDeleteTarget(null); setDeleteConfirmText('') }}
+                  onClick={() => { setDeleteTarget(null); setDeleteConfirmText(''); setDeleteReason(''); setRemoveCreatedArticle(false) }}
                 >
                   Cancel
                 </Button>
@@ -1600,7 +1644,7 @@ export function ScannerPage() {
                   disabled={deleteLoading || deleteConfirmText !== 'DELETE'}
                   onClick={handleDeleteConfirm}
                 >
-                  {deleteLoading ? 'Deleting…' : 'Delete'}
+                  {deleteLoading ? 'Undoing…' : 'Undo scan'}
                 </Button>
               </div>
             </div>

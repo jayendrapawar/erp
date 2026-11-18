@@ -1,17 +1,15 @@
 'use server'
 
-import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { articles, articleColors, articleSizes } from '@/lib/db/schema'
-import { asc, eq, sql } from 'drizzle-orm'
-import { headers } from 'next/headers'
+import { and, asc, eq, sql } from 'drizzle-orm'
 import { searchVendors, getVendors } from '@/app/actions/vendors'
 import { fuzzyScore } from '@/lib/fuzzy'
 
+import { requirePermission } from '@/lib/authz'
+
 async function requireAuth() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-  return session.user
+  return requirePermission('articles.view')
 }
 
 // ── Shopkeeper search (backed by vendors DB table) ────────────────────────────
@@ -52,6 +50,7 @@ export async function searchArticles(query: string): Promise<ArticleResult[]> {
     const rows = await db.execute(sql`
       SELECT DISTINCT "artName" AS "artNumber"
       FROM articles
+      WHERE active
       ORDER BY "artName" ASC
       LIMIT 20
     `)
@@ -62,7 +61,7 @@ export async function searchArticles(query: string): Promise<ArticleResult[]> {
   const rows = await db.execute(sql`
     SELECT DISTINCT "artName" AS "artNumber"
     FROM articles
-    WHERE lower("artName") LIKE ${'%' + q.toLowerCase() + '%'}
+    WHERE active AND lower("artName") LIKE ${'%' + q.toLowerCase() + '%'}
     LIMIT 100
   `)
   const candidates = (rows.rows as unknown[]).map(r => (r as Record<string, unknown>).artNumber as string)
@@ -71,6 +70,7 @@ export async function searchArticles(query: string): Promise<ArticleResult[]> {
   const wider = await db.execute(sql`
     SELECT DISTINCT "artName" AS "artNumber"
     FROM articles
+    WHERE active
     ORDER BY "artName" ASC
     LIMIT 300
   `)
@@ -111,7 +111,7 @@ export async function getArticleDetailByName(artName: string): Promise<ArticleDe
   const artRows = await db
     .select({ id: articles.id })
     .from(articles)
-    .where(eq(articles.artName, artName))
+    .where(and(eq(articles.artName, artName), eq(articles.active, true)))
     .orderBy(asc(articles.id))
 
   if (artRows.length === 0) return null
@@ -132,7 +132,7 @@ export async function getArticleDetailByName(artName: string): Promise<ArticleDe
     db.execute(sql.raw(`
       SELECT id, "articleId", "sizeLabel", "sortOrder"
       FROM article_sizes
-      WHERE "articleId" = ANY(ARRAY[${idList}]::int[])
+      WHERE "articleId" = ANY(ARRAY[${idList}]::int[]) AND active
       ORDER BY "articleId" ASC, "sortOrder" ASC
     `)),
   ])
@@ -181,9 +181,9 @@ export async function loadCatalogue(): Promise<CatalogueData> {
   // All vendors (active) and all article data in parallel
   const [vendorRows, artRows, colorRows, sizeRows] = await Promise.all([
     getVendors(),
-    db.select({ id: articles.id, artName: articles.artName }).from(articles).orderBy(asc(articles.artName)),
+    db.select({ id: articles.id, artName: articles.artName }).from(articles).where(eq(articles.active, true)).orderBy(asc(articles.artName)),
     db.select({ id: articleColors.id, articleId: articleColors.articleId, colorName: articleColors.colorName, colorHex: articleColors.colorHex }).from(articleColors).orderBy(asc(articleColors.articleId), asc(articleColors.id)),
-    db.select({ id: articleSizes.id, articleId: articleSizes.articleId, sizeLabel: articleSizes.sizeLabel, sortOrder: articleSizes.sortOrder }).from(articleSizes).orderBy(asc(articleSizes.articleId), asc(articleSizes.sortOrder)),
+    db.select({ id: articleSizes.id, articleId: articleSizes.articleId, sizeLabel: articleSizes.sizeLabel, sortOrder: articleSizes.sortOrder }).from(articleSizes).where(eq(articleSizes.active, true)).orderBy(asc(articleSizes.articleId), asc(articleSizes.sortOrder)),
   ])
 
   // Group colors and sizes by articleId
@@ -231,14 +231,10 @@ export async function loadCatalogue(): Promise<CatalogueData> {
     }
   }
 
-  const sizeOrder = (a: string, b: string) => {
-    const numA = Number(a), numB = Number(b)
-    if (Number.isFinite(numA) && Number.isFinite(numB)) return numA - numB
-    if (Number.isFinite(numA)) return -1
-    if (Number.isFinite(numB)) return 1
-    return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+  // SKU sortOrder already encodes the size chart (children's 11, 12, 13 come before 1).
+  for (const detail of artDetailMap.values()) {
+    detail.sizes.sort((a, b) => a.sortOrder - b.sortOrder || a.sizeLabel.localeCompare(b.sizeLabel, undefined, { numeric: true }))
   }
-  for (const detail of artDetailMap.values()) detail.sizes.sort((a, b) => sizeOrder(a.sizeLabel, b.sizeLabel))
 
   const vendors: CatalogueVendor[] = vendorRows
     .filter(v => v.status === 'active')

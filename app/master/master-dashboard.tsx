@@ -9,8 +9,11 @@ import { VendorsTab } from './vendors-tab'
 import type { Vendor } from './vendors-tab'
 import { ArticlesTab } from './articles-tab'
 import type { Article } from './articles-tab'
-import type { MissingArticle } from '@/app/actions/articles'
+import type { MissingArticle, CatalogReviewItem } from '@/app/actions/articles'
 import { SetsTab } from './sets-tab'
+import { SuppliersTab } from './suppliers-tab'
+import type { Supplier } from '@/app/actions/suppliers'
+import { ROLE_LABELS, ROLES as ALL_ROLES } from '@/lib/permissions'
 import type { OrderSet } from './sets-tab'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { PageNav } from '@/components/page-nav'
@@ -139,7 +142,7 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
           style={menuStyle}
           className="overflow-y-auto rounded-md shadow-lg bg-popover border border-border z-50 p-2 space-y-1"
         >
-          {['admin', 'accountant', 'salesman', 'picker', 'dispatcher', 'user'].map(r => {
+          {[...ALL_ROLES, 'user'].map(r => {
             const isChecked = activeRoles.includes(r)
             return (
               <label
@@ -153,7 +156,7 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
                   onChange={() => handleToggleRole(r)}
                   className="rounded border-border text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer"
                 />
-                <span>{r === 'user' ? 'No Role (User)' : r.charAt(0).toUpperCase() + r.slice(1)}</span>
+                <span>{r === 'user' ? 'No role (no access)' : ROLE_LABELS[r as keyof typeof ROLE_LABELS]}</span>
               </label>
             )
           })}
@@ -169,14 +172,16 @@ interface Props {
   vendors: Vendor[]
   articles: Article[]
   missingArticles: MissingArticle[]
+  catalogReviewItems: CatalogReviewItem[]
   sets: OrderSet[]
+  suppliers: Supplier[]
   /** When true, only Vendors and Articles tabs are shown (hides Users tab) — used for accountant role */
   isAccountant?: boolean
 }
 
-const ROLES: AppRole[] = ['admin', 'accountant', 'salesman', 'picker', 'dispatcher', 'user']
+const ROLES: AppRole[] = [...ALL_ROLES, 'user']
 
-export function MasterDashboard({ users, currentUserId, vendors: initialVendors, articles: initialArticles, missingArticles, sets: initialSets, isAccountant = false }: Props) {
+export function MasterDashboard({ users, currentUserId, vendors: initialVendors, articles: initialArticles, missingArticles, catalogReviewItems, sets: initialSets, suppliers, isAccountant = false }: Props) {
   const [isPending, startTransition] = useTransition()
   const [search, setSearch] = useState('')
   const [vendorList, setVendorList] = useState<Vendor[]>(initialVendors)
@@ -203,13 +208,13 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
     <div className="min-h-screen bg-background">
       <div className="max-w-5xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-6">
-          <PageHeader title="Master" subtitle={isAccountant ? 'Vendors & articles' : 'User management, vendors & sets'} />
+          <PageHeader title="Master" subtitle={isAccountant ? 'Retailers, suppliers & articles' : 'Users, retailers, suppliers, articles & sets'} />
           <PageNav />
         </div>
 
         {/* Stats row — hidden for accountant (user management not relevant) */}
         {!isAccountant && (
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-6">
+        <div className="grid grid-cols-3 sm:grid-cols-5 gap-3 mb-6">
           {ROLES.map(r => {
             const count = users.filter(u => {
               const roles = (u.role ?? 'user').split(',').map(x => x.trim())
@@ -229,10 +234,11 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
         <Tabs defaultValue={defaultTab} className="w-full">
           <TabsList
             className="grid w-full mb-6"
-            style={{ gridTemplateColumns: isAccountant ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))' }}
+            style={{ gridTemplateColumns: isAccountant ? 'repeat(3, minmax(0, 1fr))' : 'repeat(5, minmax(0, 1fr))' }}
           >
             {!isAccountant && <TabsTrigger value="users"    className="text-xs sm:text-sm">Users ({users.length})</TabsTrigger>}
-            <TabsTrigger value="vendors"  className="text-xs sm:text-sm">Vendors ({vendorList.length})</TabsTrigger>
+            <TabsTrigger value="vendors"  className="text-xs sm:text-sm">Retailers ({vendorList.length})</TabsTrigger>
+            <TabsTrigger value="suppliers" className="text-xs sm:text-sm">Suppliers ({suppliers.length})</TabsTrigger>
             <TabsTrigger value="articles" className="text-xs sm:text-sm">Articles ({articleList.length})</TabsTrigger>
             {isAdmin && <TabsTrigger value="sets" className="text-xs sm:text-sm">Sets ({setList.length})</TabsTrigger>}
           </TabsList>
@@ -330,8 +336,12 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
           </TabsContent>
 
           {/* ── Articles tab ── */}
+          <TabsContent value="suppliers">
+            <SuppliersTab initialSuppliers={suppliers} />
+          </TabsContent>
+
           <TabsContent value="articles">
-            <ArticlesTab initialArticles={articleList} initialMissingArticles={missingArticles} onListChange={setArticleList} />
+            <ArticlesTab initialArticles={articleList} initialMissingArticles={missingArticles} initialReviewItems={catalogReviewItems} canReviewCatalog={!isAccountant} onListChange={setArticleList} />
           </TabsContent>
 
           {/* ── Sets tab (admin only) ── */}

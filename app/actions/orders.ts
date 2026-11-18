@@ -1,28 +1,27 @@
 'use server'
 
-import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { orders, orderItems, billLines, user } from '@/lib/db/schema'
+import { orders, orderItems, billLines, user, retailers } from '@/lib/db/schema'
 import type { OrderStatus } from '@/lib/db/schema'
 import { eq, desc, inArray, sql, and, ilike, gte, lte } from 'drizzle-orm'
-import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
+import { requireAnyRole } from '@/lib/authz'
+import type { Role } from '@/lib/permissions'
+import type { Tx } from '@/lib/db/types'
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
-async function getSession() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-  return session.user
+/** Shared role check (lib/authz). Returns the user with `role` as the stored comma list. */
+async function requireRole(...roles: Role[]) {
+  const u = await requireAnyRole(...roles)
+  return { ...u, role: u.roles.join(',') }
 }
 
-async function requireRole(...roles: string[]) {
-  const u = await getSession()
-  const dbUser = await db.select({ role: user.role }).from(user).where(eq(user.id, u.id)).limit(1)
-  const role = dbUser[0]?.role ?? 'user'
-  const userRoles = role.split(',').map(r => r.trim())
-  if (!roles.some(r => userRoles.includes(r))) throw new Error('Forbidden')
-  return { ...u, role }
+/** Exact (case-insensitive) retailer match for the typed party name. */
+async function retailerIdFor(tx: Tx, name: string): Promise<string | null> {
+  const [r] = await tx.select({ id: retailers.id }).from(retailers)
+    .where(sql`lower(btrim(${retailers.partyName})) = lower(btrim(${name}))`).limit(1)
+  return r?.id ?? null
 }
 
 // ── Order-number generator ────────────────────────────────────────────────────
@@ -30,7 +29,7 @@ async function requireRole(...roles: string[]) {
 function genOrderNumber() {
   const d = new Date()
   const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-  const rand = Math.floor(Math.random() * 9000) + 1000
+  const rand = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('')
   return `ORD-${ymd}-${rand}`
 }
 
@@ -56,23 +55,27 @@ export async function createOrder(input: CreateOrderInput) {
 
   if (!input.items.length) throw new Error('At least one item required')
 
-  const [order] = await db.insert(orders).values({
-    orderNumber: genOrderNumber(),
-    shopkeeperName: input.shopkeeperName,
-    salesmanId: u.id,
-    notes: input.notes,
-    status: 'pending',
-  }).returning()
-
-  await db.insert(orderItems).values(
-    input.items.map((item) => ({
-      orderId: order.id,
-      artNumber: item.artNumber.toUpperCase(),
-      colorNumber: item.colorNumber?.toUpperCase(),
-      sizeNumber: item.sizeNumber?.toUpperCase(),
-      quantityOrdered: item.quantityOrdered,
-    }))
-  )
+  // Header and lines are written together or not at all.
+  const order = await db.transaction(async (tx) => {
+    const [created] = await tx.insert(orders).values({
+      orderNumber: genOrderNumber(),
+      shopkeeperName: input.shopkeeperName,
+      retailerId: await retailerIdFor(tx, input.shopkeeperName),
+      salesmanId: u.id,
+      notes: input.notes,
+      status: 'pending',
+    }).returning()
+    await tx.insert(orderItems).values(
+      input.items.map((item) => ({
+        orderId: created.id,
+        artNumber: item.artNumber.toUpperCase(),
+        colorNumber: item.colorNumber?.toUpperCase(),
+        sizeNumber: item.sizeNumber?.toUpperCase(),
+        quantityOrdered: item.quantityOrdered,
+      }))
+    )
+    return created
+  })
 
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
@@ -103,22 +106,21 @@ export async function updateOrder(orderId: number, input: CreateOrderInput) {
     statusPatch.packedAt = null
     statusPatch.billedAt = null
   }
-  // Replace shopkeeper name + notes + reset if needed
-  await db.update(orders)
-    .set(statusPatch)
-    .where(eq(orders.id, orderId))
-
-  // Replace all items: delete old, insert new
-  await db.delete(orderItems).where(eq(orderItems.orderId, orderId))
-  await db.insert(orderItems).values(
-    input.items.map(item => ({
-      orderId,
-      artNumber: item.artNumber.toUpperCase(),
-      colorNumber: item.colorNumber?.toUpperCase(),
-      sizeNumber: item.sizeNumber?.toUpperCase(),
-      quantityOrdered: item.quantityOrdered,
-    }))
-  )
+  // Header and replacement lines are written together or not at all.
+  await db.transaction(async (tx) => {
+    statusPatch.retailerId = await retailerIdFor(tx, input.shopkeeperName)
+    await tx.update(orders).set(statusPatch).where(eq(orders.id, orderId))
+    await tx.delete(orderItems).where(eq(orderItems.orderId, orderId))
+    await tx.insert(orderItems).values(
+      input.items.map(item => ({
+        orderId,
+        artNumber: item.artNumber.toUpperCase(),
+        colorNumber: item.colorNumber?.toUpperCase(),
+        sizeNumber: item.sizeNumber?.toUpperCase(),
+        quantityOrdered: item.quantityOrdered,
+      }))
+    )
+  })
 
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
@@ -254,19 +256,21 @@ export async function saveBillLines(
   lineDiscPct: number,
 ) {
   await requireRole('biller', 'admin')
-  // Delete existing lines then re-insert (idempotent re-save)
-  await db.delete(billLines).where(eq(billLines.orderId, orderId))
-  if (lines.length > 0) {
-    await db.insert(billLines).values(
-      lines.map(l => ({
-        orderId,
-        artNumber:   l.artNumber,
-        mrp:         String(l.mrp),
-        qty:         l.qty,
-        lineDiscPct: String(lineDiscPct),
-      }))
-    )
-  }
+  // Replace the lines atomically (idempotent re-save).
+  await db.transaction(async (tx) => {
+    await tx.delete(billLines).where(eq(billLines.orderId, orderId))
+    if (lines.length > 0) {
+      await tx.insert(billLines).values(
+        lines.map(l => ({
+          orderId,
+          artNumber:   l.artNumber,
+          mrp:         String(l.mrp),
+          qty:         l.qty,
+          lineDiscPct: String(lineDiscPct),
+        }))
+      )
+    }
+  })
 }
 
 /** Fetch persisted MRP lines for a billed order. */
@@ -334,19 +338,17 @@ export async function bulkSaveAndPackOrder(
 ) {
   await requireRole('picker', 'admin')
 
-  // Update all items in parallel
-  await Promise.all(
-    items.map(item =>
-      db.update(orderItems)
+  // Item quantities and the packed status are saved together or not at all.
+  await db.transaction(async (tx) => {
+    for (const item of items) {
+      await tx.update(orderItems)
         .set({ quantityPacked: item.quantityPacked, status: item.status, updatedAt: sql`now()` })
-        .where(eq(orderItems.id, item.id))
-    )
-  )
-
-  // Mark the order packed
-  await db.update(orders)
-    .set({ status: 'packed', packedAt: sql`now()`, updatedAt: sql`now()` })
-    .where(eq(orders.id, orderId))
+        .where(and(eq(orderItems.id, item.id), eq(orderItems.orderId, orderId)))
+    }
+    await tx.update(orders)
+      .set({ status: 'packed', packedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(eq(orders.id, orderId))
+  })
 
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
@@ -409,28 +411,31 @@ export async function createEmergencyBill(input: {
 }) {
   const u = await requireRole('biller', 'admin')
   const orderNumber = genOrderNumber()
-  const [order] = await db.insert(orders).values({
-    orderNumber,
-    shopkeeperName: input.shopkeeperName,
-    shopkeeperPhone: input.shopkeeperPhone,
-    shopkeeperAddress: input.shopkeeperAddress,
-    billerId: u.id,
-    status: 'billed',
-    isEmergency: true,
-    billedAt: sql`now()`,
-  }).returning()
-
-  if (input.lines.length > 0) {
-    await db.insert(billLines).values(
-      input.lines.map(l => ({
-        orderId: order.id,
-        artNumber: l.artNumber,
-        mrp: String(l.mrp),
-        qty: l.qty,
-        lineDiscPct: String(input.lineDiscPct),
-      }))
-    )
-  }
+  const order = await db.transaction(async (tx) => {
+    const [created] = await tx.insert(orders).values({
+      orderNumber,
+      shopkeeperName: input.shopkeeperName,
+      retailerId: await retailerIdFor(tx, input.shopkeeperName),
+      shopkeeperPhone: input.shopkeeperPhone,
+      shopkeeperAddress: input.shopkeeperAddress,
+      billerId: u.id,
+      status: 'billed',
+      isEmergency: true,
+      billedAt: sql`now()`,
+    }).returning()
+    if (input.lines.length > 0) {
+      await tx.insert(billLines).values(
+        input.lines.map(l => ({
+          orderId: created.id,
+          artNumber: l.artNumber,
+          mrp: String(l.mrp),
+          qty: l.qty,
+          lineDiscPct: String(input.lineDiscPct),
+        }))
+      )
+    }
+    return created
+  })
 
   revalidatePath('/orders/biller')
   revalidatePath('/orders/admin')

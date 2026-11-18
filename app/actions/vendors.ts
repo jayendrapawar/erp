@@ -1,16 +1,13 @@
 'use server'
 
+// Retailer master (parties we sell to). Kept at this path because many screens import it;
+// the table itself is `retailers` since migration 0002.
 import { db } from '@/lib/db'
-import { vendors } from '@/lib/db/schema'
+import { retailers as vendors } from '@/lib/db/schema'
 import { eq, asc, ilike, or, sql } from 'drizzle-orm'
-import { auth } from '@/lib/auth'
-import { headers } from 'next/headers'
+import { requirePermission } from '@/lib/authz'
+import { audit } from '@/lib/audit'
 import { fuzzyScore } from '@/lib/fuzzy'
-
-async function requireAuth() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-}
 
 export type Vendor = typeof vendors.$inferSelect
 
@@ -30,7 +27,7 @@ async function genId(): Promise<string> {
 export async function importVendors(
   rows: Omit<Vendor, 'id' | 'createdAt' | 'updatedAt'>[]
 ): Promise<{ imported: number; skipped: number; list: Vendor[] }> {
-  await requireAuth()
+  const u = await requirePermission('retailers.edit')
 
   // Load existing partyNames (lowercase) to deduplicate
   const existing = await db.select({ partyName: vendors.partyName }).from(vendors)
@@ -50,10 +47,11 @@ export async function importVendors(
 
     let next = last ? parseInt(last.id.replace('V', ''), 10) + 1 : 1
 
-    for (const row of newRows) {
-      const id = `V${String(next++).padStart(3, '0')}`
-      await db.insert(vendors).values({ ...row, id })
-    }
+    await db.transaction(async (tx) => {
+      const values = newRows.map((row) => ({ ...row, id: `V${String(next++).padStart(3, '0')}` }))
+      for (let i = 0; i < values.length; i += 500) await tx.insert(vendors).values(values.slice(i, i + 500))
+      await audit(tx, { actor: { id: u.id, name: u.name }, action: 'retailer.imported', entityType: 'retailer_import', entityId: new Date().toISOString(), after: { rows: rows.length, imported: newRows.length } })
+    })
   }
 
   const list = await db.select().from(vendors).orderBy(asc(vendors.partyName))
@@ -62,7 +60,7 @@ export async function importVendors(
 
 // ── Fetch all vendors ─────────────────────────────────────────────────────────
 export async function getVendors(): Promise<Vendor[]> {
-  await requireAuth()
+  await requirePermission('retailers.view')
   return db.select().from(vendors).orderBy(asc(vendors.partyName))
 }
 
@@ -70,8 +68,9 @@ export async function getVendors(): Promise<Vendor[]> {
 export async function saveVendor(
   input: Omit<Vendor, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
 ): Promise<Vendor[]> {
-  await requireAuth()
+  const u = await requirePermission('retailers.edit')
   const id = input.id || (await genId())
+  const [before] = input.id ? await db.select().from(vendors).where(eq(vendors.id, input.id)).limit(1) : []
   await db
     .insert(vendors)
     .values({ ...input, id })
@@ -90,12 +89,13 @@ export async function saveVendor(
         updatedAt:  sql`now()`,
       },
     })
+  await audit(db, { actor: { id: u.id, name: u.name }, action: before ? 'retailer.updated' : 'retailer.created', entityType: 'retailer', entityId: id, before: before ?? undefined, after: input })
   return db.select().from(vendors).orderBy(asc(vendors.partyName))
 }
 
 // ── Search vendors (used by salesman dashboard) ───────────────────────────────
 export async function searchVendors(query: string): Promise<Vendor[]> {
-  await requireAuth()
+  await requirePermission('retailers.view')
   const q = query.trim()
 
   if (!q) {

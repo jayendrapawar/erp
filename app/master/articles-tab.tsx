@@ -2,8 +2,9 @@
 
 import { useState, useMemo, useTransition, useRef, useEffect } from 'react'
 import { fuzzyFilter } from '@/lib/fuzzy'
-import { saveArticle, importArticles, deleteArticle, getArticleSizes, getArticles, getArticleMrps, getMissingArticles } from '@/app/actions/articles'
-import type { MissingArticle } from '@/app/actions/articles'
+import { saveArticle, importArticles, deleteArticle, getArticleSizes, getArticles, getArticleMrps, getMissingArticles, addSizeToArticleFromScans, setMissingArticleReview, setCatalogReviewItemStatus } from '@/app/actions/articles'
+import type { CatalogReviewItem, MissingArticle } from '@/app/actions/articles'
+import { expandSizeRange } from '@/lib/catalog/sizes'
 import type { Article } from '@/app/actions/articles'
 import { NewArticleDialog } from '@/components/scanner/new-article-dialog'
 import { parseQr } from '@/lib/qr-parser'
@@ -36,7 +37,7 @@ function parseCsvLine(line: string): string[] {
   return cells
 }
 
-function parseCsv(text: string): (Omit<Article, 'id' | 'createdAt' | 'updatedAt'> & { customSizes?: string })[] {
+function parseCsv(text: string): Parameters<typeof importArticles>[0] {
   const lines = text.split(/\r?\n/).filter(l => l.trim())
   if (lines.length < 2) return []
 
@@ -85,17 +86,81 @@ const EMPTY_FORM: ArticleForm = {
 interface Props {
   initialArticles: Article[]
   initialMissingArticles: MissingArticle[]
+  initialReviewItems?: CatalogReviewItem[]
+  canReviewCatalog?: boolean
   onListChange?: (list: Article[]) => void
 }
 
-export function ArticlesTab({ initialArticles, initialMissingArticles, onListChange }: Props) {
+const REVIEW_KIND_LABEL: Record<string, string> = {
+  colour_name_conflict: 'Colour name conflict',
+  range_overlap: 'Overlapping size ranges',
+  code_has_several_names: 'Code has several names',
+  name_code_mismatch: 'Name does not match code',
+  same_colour_name_different_code: 'Same colour, two colour codes',
+  retired_variant_in_use: 'Retired, but has history',
+  retired_size_in_use: 'Retired size has stock',
+  brand_code_mismatch: 'Sparx code on another brand',
+  invalid_row: 'Row not imported',
+  invalid_size_range: 'Size range not valid',
+}
+
+export function ArticlesTab({ initialArticles, initialMissingArticles, initialReviewItems = [], canReviewCatalog = false, onListChange }: Props) {
   const [articleList, setArticleList] = useState<Article[]>(initialArticles)
+  const [reviewItems, setReviewItems] = useState(initialReviewItems)
+  const [showClosedReviews, setShowClosedReviews] = useState(false)
+  const [reviewBusy, setReviewBusy] = useState<number | null>(null)
+  const [reviewMsg, setReviewMsg] = useState<string | null>(null)
+  const [showRetired, setShowRetired] = useState(false)
+  const openReviews = reviewItems.filter(i => i.status === 'open')
+  const visibleReviews = showClosedReviews ? reviewItems : openReviews
+  const retiredCount = articleList.filter(a => !a.active).length
+
+  async function closeReview(item: CatalogReviewItem, status: 'resolved' | 'dismissed' | 'open') {
+    const note = status === 'open' ? '' : window.prompt(status === 'resolved' ? 'What was decided or fixed?' : 'Why is this not a problem?', item.resolution ?? '')
+    if (note === null) return
+    setReviewBusy(item.id); setReviewMsg(null)
+    try {
+      setReviewItems(await setCatalogReviewItemStatus(item.id, status, note))
+    } catch (e) {
+      setReviewMsg(e instanceof Error ? e.message : 'Could not update the review item.')
+    } finally { setReviewBusy(null) }
+  }
   const [missingArticles, setMissingArticles] = useState(initialMissingArticles)
   const [mrpsByCode, setMrpsByCode] = useState<Record<string, string[]>>({})
   const [missingDialog, setMissingDialog] = useState<MissingArticle | null>(null)
   const mrpKey = (code: string) => code.trim().toUpperCase().replace(/\s+/g, ' ')
 
   useEffect(() => { getArticleMrps().then(setMrpsByCode).catch(() => setMrpsByCode({})) }, [])
+
+  const [showIgnored, setShowIgnored] = useState(false)
+  const [missingBusy, setMissingBusy] = useState(false)
+  const [missingMsg, setMissingMsg] = useState<string | null>(null)
+  const openMissing = missingArticles.filter(m => m.reviewStatus !== 'ignored')
+  const ignoredCount = missingArticles.length - openMissing.length
+  const visibleMissing = showIgnored ? missingArticles : openMissing
+
+  async function addMissingSize(item: MissingArticle, size: string) {
+    setMissingBusy(true); setMissingMsg(null)
+    try {
+      const { resolved } = await addSizeToArticleFromScans(item.artCode, item.colorCode, size)
+      setMissingMsg(`Size ${size} added to ${item.artCode} / ${item.colorCode}. ${resolved} waiting scan(s) are now in stock.`)
+      await refreshMasterLists()
+    } catch (e) {
+      setMissingMsg(e instanceof Error ? e.message : 'Could not add the size.')
+    } finally { setMissingBusy(false) }
+  }
+
+  async function toggleIgnore(item: MissingArticle) {
+    const ignoring = item.reviewStatus !== 'ignored'
+    const note = ignoring ? (window.prompt('Why ignore these scans? (for example: test labels)') ?? '') : ''
+    setMissingBusy(true); setMissingMsg(null)
+    try {
+      await setMissingArticleReview(item.artCode, item.colorCode, ignoring ? 'ignored' : 'open', note)
+      await refreshMasterLists()
+    } catch (e) {
+      setMissingMsg(e instanceof Error ? e.message : 'Could not update the review status.')
+    } finally { setMissingBusy(false) }
+  }
 
   async function refreshMasterLists() {
     const [articles, missing, mrps] = await Promise.all([getArticles(), getMissingArticles(), getArticleMrps()])
@@ -163,8 +228,8 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, onListCha
   }
 
   const filtered = useMemo(() =>
-    fuzzyFilter(articleList, search, a => [a.artName, a.artCode, a.color, a.colorCode])
-  , [articleList, search])
+    fuzzyFilter(showRetired ? articleList : articleList.filter(a => a.active), search, a => [a.artName, a.artCode, a.color, a.colorCode])
+  , [articleList, search, showRetired])
 
   function openAdd() {
     setForm(EMPTY_FORM)
@@ -191,13 +256,10 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, onListCha
 
     try {
       const dbSizes = await getArticleSizes(a.id)
-      const min = parseInt(a.minSize, 10)
-      const max = parseInt(a.maxSize, 10)
-      const customs = dbSizes.filter(s => {
-        const n = parseInt(s, 10)
-        if (isNaN(min) || isNaN(max) || min > max) return true
-        return isNaN(n) || n < min || n > max
-      })
+      // Sizes outside the min–max run (children's runs wrap: 11–5 = 11, 12, 13, 1 … 5).
+      const range = expandSizeRange(a.minSize, a.maxSize)
+      const inRange = new Set(range.ok ? range.sizes : [])
+      const customs = dbSizes.filter(s => !inRange.has(s))
       const customSizesStr = customs.join(', ')
       setForm(f => ({ ...f, customSizes: customSizesStr }))
       setColors([{ color: a.color, colorCode: a.colorCode }])
@@ -256,8 +318,8 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, onListCha
         }
         updateArticles(updated)
         setModalMode(null)
-      } catch {
-        setFormError('Failed to save article. Please try again.')
+      } catch (e) {
+        setFormError(e instanceof Error && e.message ? e.message : 'Failed to save article. Please try again.')
       }
     })
   }
@@ -312,15 +374,71 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, onListCha
         </div>
       )}
 
+      {reviewItems.length > 0 && <section className="mb-5 rounded-xl border border-sky-500/30 p-4">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="font-semibold">Catalogue review ({openReviews.length})</h3>
+          {reviewItems.length > openReviews.length && (
+            <button onClick={() => setShowClosedReviews(v => !v)} className="text-xs text-muted-foreground underline">
+              {showClosedReviews ? 'Hide' : 'Show'} {reviewItems.length - openReviews.length} closed
+            </button>
+          )}
+        </div>
+        <p className="mb-3 text-xs text-muted-foreground">Conflicts the catalogue import found and did not guess about. Fix the article in the editor if needed, then close the item with a note.</p>
+        {reviewMsg && <p className="mb-2 rounded-lg bg-muted px-3 py-2 text-xs">{reviewMsg}</p>}
+        {visibleReviews.length === 0 ? <p className="text-sm text-muted-foreground">Nothing waiting for review.</p> : <div className="max-h-96 space-y-2 overflow-y-auto">
+          {visibleReviews.map(item => <div key={item.id} className="rounded-lg bg-muted/40 p-3 text-sm">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="font-mono font-semibold">{item.artCode || '—'}{item.colorCode ? ` / ${item.colorCode}` : ''}</span>
+              <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-900 dark:bg-sky-900/30 dark:text-sky-200">{REVIEW_KIND_LABEL[item.kind] ?? item.kind}</span>
+              {item.status !== 'open' && <span className="text-xs text-muted-foreground">{item.status}{item.resolution ? `: ${item.resolution}` : ''}</span>}
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">{item.message}</p>
+            {canReviewCatalog && <div className="mt-2 flex gap-2">
+              {item.status === 'open' ? <>
+                <button disabled={reviewBusy === item.id} onClick={() => closeReview(item, 'resolved')} className="rounded-md border px-3 py-1.5 text-xs font-medium disabled:opacity-50">Resolved</button>
+                <button disabled={reviewBusy === item.id} onClick={() => closeReview(item, 'dismissed')} className="rounded-md border px-3 py-1.5 text-xs font-medium text-muted-foreground disabled:opacity-50">Not a problem</button>
+              </> : <button disabled={reviewBusy === item.id} onClick={() => closeReview(item, 'open')} className="rounded-md border px-3 py-1.5 text-xs font-medium disabled:opacity-50">Re-open</button>}
+            </div>}
+          </div>)}
+        </div>}
+      </section>}
+
+      {retiredCount > 0 && <div className="mb-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>{retiredCount} retired article{retiredCount === 1 ? '' : 's'} (not in the approved catalogue) {showRetired ? 'shown' : 'hidden'}.</span>
+        <button onClick={() => setShowRetired(v => !v)} className="underline">{showRetired ? 'Hide retired' : 'Show retired'}</button>
+      </div>}
+
       <section className="mb-5 rounded-xl border border-amber-500/30 p-4">
-        <h3 className="mb-3 font-semibold">Missing articles ({missingArticles.length})</h3>
-        {missingArticles.length === 0 ? <p className="text-sm text-muted-foreground">No scanned code and colour pairs are missing from master articles.</p> : <div className="space-y-2">
-          {missingArticles.map((item) => <div key={`${item.artCode}|${item.colorCode}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-muted/40 p-3 text-sm">
-            <span className="font-mono">{item.artCode} / {item.colorCode}</span>
-            <span>{item.boxCount} boxes</span>
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="font-semibold">Missing articles ({openMissing.length})</h3>
+          {ignoredCount > 0 && (
+            <button onClick={() => setShowIgnored(v => !v)} className="text-xs text-muted-foreground underline">
+              {showIgnored ? 'Hide' : 'Show'} {ignoredCount} ignored
+            </button>
+          )}
+        </div>
+        <p className="mb-3 text-xs text-muted-foreground">Boxes scanned during the stocktake whose article, colour or size is not in the master. They are saved but not counted in stock until linked. Linking posts all of them at once; nobody needs to rescan.</p>
+        {missingMsg && <p className="mb-2 rounded-lg bg-muted px-3 py-2 text-xs">{missingMsg}</p>}
+        {visibleMissing.length === 0 ? <p className="text-sm text-muted-foreground">No scanned boxes are waiting for the article master.</p> : <div className="space-y-2">
+          {visibleMissing.map((item) => <div key={`${item.artCode}|${item.colorCode}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-muted/40 p-3 text-sm">
+            <span className="font-mono font-semibold">{item.artCode} / {item.colorCode || '—'}</span>
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900 dark:bg-amber-900/30 dark:text-amber-200">{item.kind === 'missing_article' ? 'Unknown article or colour' : 'Size not configured'}</span>
+            <span>{item.boxCount} {item.boxCount === 1 ? 'box' : 'boxes'}</span>
             <span>Sizes: {item.sizes.join(', ') || '—'}</span>
             <span>MRPs: {item.mrps.join(', ') || '—'}</span>
-            <button disabled={!item.rawQr} onClick={() => setMissingDialog(item)} className="ml-auto rounded-md border px-3 py-1.5 text-xs font-medium disabled:opacity-50">Create / Link</button>
+            <span className="text-xs text-muted-foreground">Seen {new Date(item.firstSeen).toLocaleDateString()}–{new Date(item.lastSeen).toLocaleDateString()} by {item.scannedBy.join(', ') || '—'}</span>
+            {item.reviewStatus === 'ignored' && <span className="text-xs text-muted-foreground">Ignored{item.reviewNote ? `: ${item.reviewNote}` : ''}</span>}
+            <span className="ml-auto flex flex-wrap gap-2">
+              {item.kind === 'missing_size' && item.sizes.map(size => (
+                <button key={size} disabled={missingBusy} onClick={() => addMissingSize(item, size)} className="rounded-md border px-3 py-1.5 text-xs font-medium disabled:opacity-50">Add size {size}</button>
+              ))}
+              {item.kind === 'missing_article' && (
+                <button disabled={!item.rawQr || missingBusy} onClick={() => setMissingDialog(item)} className="rounded-md border px-3 py-1.5 text-xs font-medium disabled:opacity-50">Create / Link</button>
+              )}
+              <button disabled={missingBusy} onClick={() => toggleIgnore(item)} className="rounded-md border px-3 py-1.5 text-xs font-medium text-muted-foreground disabled:opacity-50">
+                {item.reviewStatus === 'ignored' ? 'Reopen' : 'Ignore'}
+              </button>
+            </span>
           </div>)}
         </div>}
       </section>
@@ -345,7 +463,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, onListCha
           <div key={a.id} className="rounded-2xl border border-border bg-card overflow-hidden">
             <div className="flex items-start justify-between gap-2 px-4 pt-4 pb-3">
               <div className="min-w-0">
-                <p className="font-semibold text-base text-foreground truncate">{a.artName || '—'}</p>
+                <p className="font-semibold text-base text-foreground truncate">{a.artName || '—'}<StatusBadge a={a} /></p>
                 {a.artCode && <p className="text-xs text-muted-foreground font-mono mt-0.5">{a.artCode}{mrpsByCode[mrpKey(a.artCode)]?.length ? ` · MRPs ${mrpsByCode[mrpKey(a.artCode)].join(', ')}` : ''}</p>}
               </div>
               {a.colorCode && (
@@ -411,7 +529,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, onListCha
                 <tr key={a.id} className="hover:bg-muted/30 transition-colors">
                   <td className="pl-4 pr-2 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap">{a.id}</td>
                   <td className="px-2 py-3 max-w-[160px]">
-                    <p className="font-medium text-foreground truncate text-sm" title={a.artName}>{a.artName || '—'}</p>
+                    <p className="font-medium text-foreground truncate text-sm" title={a.retiredReason ?? a.artName}>{a.artName || '—'}<StatusBadge a={a} /></p>
                   </td>
                   <td className="px-2 py-3 font-mono text-xs text-foreground whitespace-nowrap">{a.artCode || '—'}{mrpsByCode[mrpKey(a.artCode)]?.length ? <span className="block font-sans text-[10px] text-muted-foreground">MRPs: {mrpsByCode[mrpKey(a.artCode)].join(', ')}</span> : null}</td>
                   <td className="px-2 py-3 text-sm text-foreground whitespace-nowrap">{a.color || '—'}</td>
@@ -743,4 +861,10 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, onListCha
       )}
     </div>
   )
+}
+
+function StatusBadge({ a }: { a: Article }) {
+  if (!a.active) return <span title={a.retiredReason ?? undefined} className="ml-2 rounded-full bg-muted px-2 py-0.5 align-middle text-[10px] font-medium text-muted-foreground">Retired</span>
+  if (a.reviewStatus === 'needs_review') return <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 align-middle text-[10px] font-medium text-sky-900 dark:bg-sky-900/30 dark:text-sky-200">Needs review</span>
+  return null
 }

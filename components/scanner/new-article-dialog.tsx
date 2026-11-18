@@ -13,7 +13,10 @@ type Props = {
   parsed: ParsedQr
   mode: 'unknown' | 'new_colour'
   existingName?: string
-  notes?: string
+  /** Scanner flag for the saved scan. */
+  flag?: string
+  /** Device-generated id of the scan being saved (makes retries safe). */
+  clientEventId?: string
   saveScan?: boolean
   initialSizes?: string
   onClose: () => void
@@ -21,7 +24,7 @@ type Props = {
   onLinked: () => Promise<void>
 }
 
-export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, saveScan = true, initialSizes, onClose, onSaveLater, onLinked }: Props) {
+export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clientEventId, saveScan = true, initialSizes, onClose, onSaveLater, onLinked }: Props) {
   const [articleName, setArticleName] = useState(existingName ?? '')
   const [colourChoice, setColourChoice] = useState('')
   const [otherColour, setOtherColour] = useState('')
@@ -48,7 +51,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, sav
     ['Colour code', parsed.colorCode],
     ['Size', parsed.size],
     ['MRP', parsed.mrp ? String(parsed.mrp) : '—'],
-    ['Division', parsed.division || '—'],
+    ['Division hint (from code)', parsed.division || '—'],
   ], [parsed])
 
   useEffect(() => {
@@ -111,7 +114,8 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, sav
         sizesText: sizes.trim(),
         addScannedSize,
         confirmWarnings,
-        notes,
+        flag,
+        clientEventId,
         saveScan,
       })
       if (result.ok) {
