@@ -5,6 +5,7 @@
 //   1 64029990 PUG186G-DTDT0810, PUG 186 G D. TAN 0810 /1 A 1 30 30 299.50 199.65 5989.50 539.06 …
 //   no  HSN    article-colour+range, description      /cartons pack cartons pairs/ctn pairs MRP rate amount …
 // Checks: cartons × pairs/ctn = pairs; "/n" = cartons; Σ cartons and Σ pairs = the bill's Total row.
+// Size "00xx" = a single-size carton (e.g. SF0192G-GFSL0007: every pair is size 7); stored as 7–7.
 
 export interface BillLine {
   lineNo: number
@@ -97,7 +98,7 @@ export function parseRelaxoBill(pages: string[]): BillParseResult {
     seen.add(lineNo)
     const cartons = Number(m[10]), perCtn = Number(m[11]), pairs = Number(m[12])
     const line: BillLine = {
-      lineNo, hsn: m[2], articleCode: m[3], colourCode: m[4], sizeFrom: size(m[5]), sizeTo: size(m[6]),
+      lineNo, hsn: m[2], articleCode: m[3], colourCode: m[4], sizeFrom: m[5] === '00' ? size(m[6]) : size(m[5]), sizeTo: size(m[6]),
       packLetter: m[9], description: m[7].replace(/\s+/g, ' ').trim(), cartons, pairsPerCarton: perCtn, pairs,
       mrp: num(m[13]), rate: num(m[14]), amount: num(m[15]),
     }

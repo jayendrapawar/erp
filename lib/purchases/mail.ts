@@ -59,20 +59,17 @@ async function fetchPart(client: ImapFlow, uid: number, part: { part: string; en
 
 /**
  * Check the mailbox. `since` (yyyy-mm-dd) overrides the default: one day before the newest mail
- * already recorded (or the oldest mail that failed, if earlier), or the last 7 days the first time.
+ * already recorded, or the last 7 days the first time. Mails that failed before are always retried.
  */
 export async function checkBillMail(db: Db, actor: Actor, opts: { since?: string } = {}): Promise<MailCheckResult> {
   const cfg = settings()
   let since: Date
   if (opts.since && /^\d{4}-\d{2}-\d{2}$/.test(opts.since)) since = new Date(`${opts.since}T00:00:00+05:30`)
   else {
-    // One day before the newest mail seen, but far enough back to retry mails that failed.
-    const r = await db.execute<{ last: string | null; failed: string | null }>(sql`
-      SELECT max("receivedAt") AS last, min("receivedAt") FILTER (WHERE status = 'error') AS failed FROM bill_mail_messages`)
+    // One day before the newest mail seen (mails that failed are retried by their own id below).
+    const r = await db.execute<{ last: string | null }>(sql`SELECT max("receivedAt") AS last FROM bill_mail_messages`)
     const last = r.rows[0]?.last
-    const failed = r.rows[0]?.failed
     since = last ? new Date(new Date(last).getTime() - 86_400_000) : new Date(Date.now() - DEFAULT_LOOKBACK_DAYS * 86_400_000)
-    if (failed && new Date(failed) < since) since = new Date(new Date(failed).getTime() - 3_600_000)
   }
 
   const client = new ImapFlow({ host: cfg.host, port: 993, secure: true, auth: { user: cfg.user, pass: cfg.pass }, logger: false })
@@ -88,8 +85,12 @@ export async function checkBillMail(db: Db, actor: Actor, opts: { since?: string
       const lock = await client.getMailboxLock(mailbox, { readOnly: true })
       try {
         const uidValidity = Number(client.mailbox && client.mailbox.uidValidity)
-        const uids = (await client.search({ from: cfg.from, since }, { uid: true })) || []
-        result.found += uids.length
+        const found = (await client.search({ from: cfg.from, since }, { uid: true })) || []
+        // Mails that failed before are retried even when they are older than the window.
+        const failed = await db.execute<{ uid: string }>(sql`
+          SELECT uid::text FROM bill_mail_messages WHERE mailbox = ${mailbox} AND "uidValidity" = ${uidValidity} AND status = 'error'`)
+        const uids = [...new Set([...found, ...failed.rows.map((x) => Number(x.uid))])]
+        result.found += found.length
         if (!uids.length) continue
         const done = await db.execute<{ uid: string }>(sql`
           SELECT uid::text FROM bill_mail_messages

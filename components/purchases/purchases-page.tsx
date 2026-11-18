@@ -8,7 +8,7 @@ import { DIVISIONS, formatSizes } from '@/lib/catalog/assortments'
 import { useQrScanner } from '@/components/scanner/use-qr-scanner'
 import {
   cancelBillAction, getBillDetail, getExpectedStock, getOpenBills, getPurchaseOverview, getReceipts, receiveCartonAction,
-  retryPendingCartons, setBillDivisionAction, setLineAssortmentAction, voidCartonAction,
+  setBillDivisionAction, setLineAssortmentAction, voidCartonAction,
 } from '@/app/actions/purchases'
 import type { BillDetail, BillRow, ExpectedStockRow, PurchaseSummary, ReceiptRow, ReceiveOutcome } from '@/lib/purchases/store'
 import type { UploadFileResult } from '@/app/api/purchases/upload/route'
@@ -82,11 +82,11 @@ export function PurchasesPage({ initialSummary, initialBills, canUpload, mailRea
           <Tile label="Cartons to arrive" value={num.format(summary.cartonsExpected)} />
           <Tile label="Pairs to arrive" value={num.format(summary.pairsExpected)} />
         </div>
-        {(summary.unexpectedCartons > 0 || summary.cartonsWaitingForStock > 0) && (
+        {(summary.unexpectedCartons > 0 || summary.cartonsCheckedOnly > 0) && (
           <div className="mb-4 space-y-1.5 text-xs">
-            {summary.cartonsWaitingForStock > 0 && (
-              <p className="rounded-lg px-3 py-2 bg-amber-50 text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
-                {summary.cartonsWaitingForStock} received carton{summary.cartonsWaitingForStock === 1 ? ' is' : 's are'} not in stock yet: the line needs a carton assortment, or the article is not in the article master. Open the bill to see which.
+            {summary.cartonsCheckedOnly > 0 && (
+              <p className="rounded-lg px-3 py-2 bg-muted text-foreground">
+                {summary.cartonsCheckedOnly} received carton{summary.cartonsCheckedOnly === 1 ? ' was' : 's were'} checked against the bill without adding stock (no carton assortment, or the article is not in the master). Their boxes add stock when scanned with the warehouse scanner.
               </p>
             )}
             {summary.unexpectedCartons > 0 && (
@@ -246,7 +246,7 @@ function BillsTab({ bills, canUpload, mailReady, onOpen, onUploaded }: { bills: 
               </p>
               <p className="text-[11px] text-muted-foreground">
                 Bill {day(b.billDate)} · expected {day(b.expectedOn)} · {b.division || 'division?'} · {num.format(b.totalPairs)} pairs{b.grossAmount != null ? ` · ${inr.format(b.grossAmount)}` : ''}
-                {b.pendingStock > 0 ? <span className="text-amber-700 dark:text-amber-400"> · {b.pendingStock} carton(s) not in stock yet</span> : null}
+                {b.pendingStock > 0 ? <span> · {b.pendingStock} carton(s) checked only — scan their boxes</span> : null}
               </p>
             </div>
             <div className="w-28 sm:w-40 shrink-0"><Progress done={b.receivedCartons} total={b.totalCartons} /></div>
@@ -311,11 +311,8 @@ function BillDialog({ billId, canManage, onClose, onChanged }: { billId: number;
             </div>
             {error && <p className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>}
             {note && <p className="text-xs bg-muted rounded-lg px-3 py-2">{note}</p>}
-            {b.pendingStock > 0 && canManage && (
-              <button onClick={() => run(async () => { const r = await retryPendingCartons(billId); return `${r.posted} carton(s) added to stock; ${r.pending} still waiting.` })} disabled={busy}
-                className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50">
-                Add waiting cartons to stock again ({b.pendingStock})
-              </button>
+            {b.pendingStock > 0 && (
+              <p className="text-xs text-muted-foreground">{b.pendingStock} received carton(s) were checked against this bill without adding stock: scan their boxes with the warehouse scanner.</p>
             )}
 
             <div className="rounded-xl border border-border divide-y divide-border">
@@ -326,26 +323,28 @@ function BillDialog({ billId, canManage, onClose, onChanged }: { billId: number;
                     <div className="flex flex-wrap items-baseline gap-x-2">
                       <span className="text-[11px] text-muted-foreground w-5">{l.lineNo}</span>
                       <span className="font-medium">{l.articleName ?? l.articleCode}</span>
-                      <span className="text-muted-foreground font-mono text-xs">{l.articleCode} {l.colourCode} · {l.sizeFrom}–{l.sizeTo}{l.packLetter ? ` ${l.packLetter}` : ''}</span>
+                      <span className="text-muted-foreground font-mono text-xs">{l.articleCode} {l.colourCode} · {l.sizeFrom === l.sizeTo ? `size ${l.sizeTo}` : `${l.sizeFrom}–${l.sizeTo}`}{l.packLetter ? ` ${l.packLetter}` : ''}</span>
                       <span className="text-xs text-muted-foreground">· {l.pairsPerCarton}/ctn · MRP ₹{l.mrp}</span>
                       <span className={`ml-auto text-xs tabular-nums font-semibold ${complete ? 'text-green-700 dark:text-green-400' : ''}`}>{l.receivedCartons}/{l.cartons} ctn</span>
                     </div>
                     <div className="pl-7 mt-1 text-[11px] text-muted-foreground space-y-0.5">
-                      {!l.articleName && <p className="text-amber-700 dark:text-amber-400">Article not in the article master yet — its cartons are recorded but not added to stock.</p>}
-                      {l.assortment ? (
-                        <p>Assortment: {l.assortment.segment} v{l.assortment.version} · <span className="font-mono">{formatSizes(l.assortment.sizes)}</span>{l.receivedCartons ? ` · ${l.postedCartons}/${l.receivedCartons} received in stock` : ''}</p>
+                      {!l.articleName && <p className="text-amber-700 dark:text-amber-400">Article not in the article master — cartons are checked against the bill; stock comes from scanning their boxes.</p>}
+                      {l.sizeFrom === l.sizeTo ? (
+                        <p>Single-size carton: {l.pairsPerCarton} pairs of size {l.sizeTo}{l.receivedCartons ? ` · ${l.postedCartons} of ${l.receivedCartons} received carton(s) added stock` : ''}</p>
+                      ) : l.assortment ? (
+                        <p>Assortment: {l.assortment.segment} v{l.assortment.version} · <span className="font-mono">{formatSizes(l.assortment.sizes)}</span>{l.receivedCartons ? ` · ${l.postedCartons} of ${l.receivedCartons} received carton(s) added stock` : ''}</p>
                       ) : l.options.length ? (
                         <p className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-amber-700 dark:text-amber-400">Choose the carton assortment:</span>
+                          <span className="text-amber-700 dark:text-amber-400">Choose the carton assortment (for cartons received from now on):</span>
                           {l.options.map((o) => (
-                            <button key={o.id} disabled={!canManage || busy} onClick={() => run(async () => { const r = await setLineAssortmentAction(l.id, o.id); return r.posted ? `${r.posted} carton(s) added to stock.` : 'Assortment saved.' })}
+                            <button key={o.id} disabled={!canManage || busy} onClick={() => run(async () => { await setLineAssortmentAction(l.id, o.id); return 'Assortment saved. Cartons received from now on add stock.' })}
                               className="rounded-md border border-border px-1.5 py-0.5 hover:bg-muted disabled:opacity-60">
                               {o.segment}: <span className="font-mono">{formatSizes(o.sizes)}</span>
                             </button>
                           ))}
                         </p>
                       ) : (
-                        <p className="text-amber-700 dark:text-amber-400">No carton assortment for {b.division || 'this division'} · {l.pairsPerCarton} pairs · code {l.sizeFrom}{l.sizeTo.padStart(2, '0')}. Add it in Master → Assortments.</p>
+                        <p className="text-amber-700 dark:text-amber-400">No carton assortment for {b.division || 'this division'} · {l.pairsPerCarton} pairs · code {l.sizeFrom}{l.sizeTo.padStart(2, '0')} — cartons are checked against the bill and stock comes from scanning their boxes. Add the assortment in Master → Assortments to add stock from the carton itself.</p>
                       )}
                     </div>
                   </div>
@@ -392,7 +391,7 @@ function ReceiptRows({ rows, canManage, busy, voiding, setVoiding, reason, setRe
             <span className="font-mono flex-1 min-w-0 truncate">{r.articleCode} {r.colourCode} {r.sizeFrom}–{r.sizeTo}{r.packLetter ? ` ${r.packLetter}` : ''}{r.mrp != null ? ` · ₹${r.mrp}` : ''}</span>
             <span className="text-muted-foreground hidden sm:inline">{r.userName}</span>
             {r.match === 'matched'
-              ? <span className={r.posted ? 'text-green-700 dark:text-green-400' : 'text-amber-700 dark:text-amber-400'}>{r.posted ? `+${r.postedPairs} in stock` : 'not in stock yet'}</span>
+              ? <span className={r.posted ? 'text-green-700 dark:text-green-400' : 'text-muted-foreground'}>{r.posted ? `+${r.postedPairs} in stock` : 'checked · scan boxes'}</span>
               : <span className="text-red-600">unexpected</span>}
             {canManage && <button onClick={() => { setVoiding(voiding === r.id ? null : r.id); setReason('') }} className="rounded-md border border-border px-1.5 py-0.5 hover:bg-muted">Undo</button>}
           </div>
@@ -476,7 +475,7 @@ function describe(x: LogItem): { tone: 'ok' | 'warn' | 'err' | 'wait'; title: st
   if (o.status === 'duplicate') return { tone: 'warn', title: `Already received · ${o.label}`, detail: o.message }
   if (o.match === 'unexpected') return { tone: 'err', title: `Unexpected carton · ${o.label}`, detail: o.reason }
   return {
-    tone: o.posted && !o.warnings.length ? 'ok' : 'warn',
+    tone: o.warnings.length ? 'warn' : 'ok',
     title: `${o.label} · bill ${o.refNo} line ${o.lineNo} · ${o.lineReceived}/${o.lineCartons}`,
     detail: [o.posted ? `+${o.postedPairs} pairs in stock.` : o.pendingReason, ...o.warnings].filter(Boolean).join(' '),
   }

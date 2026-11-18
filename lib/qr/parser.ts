@@ -362,9 +362,11 @@ function buildCarton(
   const from = Number(p.from), to = Number(p.to)
   // Children's ranges wrap from 11–13 back to 1 (11–1 = 11, 12, 13, 1), as in the article master.
   const wraps = from >= 11 && from <= 13 && to >= 1 && to < from
-  if (!from || !to || (from > to && !wraps)) issues.push(issue('size_range_invalid', 'error', `Size range ${p.from}–${p.to} is not valid.`))
+  // "00" + size = a single-size carton (bills list e.g. SF0192G-GFSL0007 = size 7 only).
+  const single = from === 0 && to > 0
+  if (!to || (!from && !single) || (from > to && !wraps)) issues.push(issue('size_range_invalid', 'error', `Size range ${p.from}–${p.to} is not valid.`))
   else {
-    fields.sizeFrom = f(String(from), p.from, 'verified', 'Every matching box size falls inside this range.')
+    fields.sizeFrom = f(String(single ? to : from), p.from, single ? 'probable' : 'verified', single ? 'Single-size carton ("00" + size), as on Relaxo bills.' : 'Every matching box size falls inside this range.')
     fields.sizeTo = f(String(to), p.to, 'verified')
   }
   const mrp = parseMrp(p.mrp, issues, 'verified')

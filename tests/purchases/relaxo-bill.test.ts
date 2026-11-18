@@ -74,6 +74,19 @@ describe('Relaxo bill reader', () => {
     ])
   })
 
+  test('single-size carton lines ("00" + size)', () => {
+    const page = [
+      'PERFORMA INVOICE', 'RELAXO FOOTWEARS LIMITED', '12345678', 'RV0626000002', '28.10.2026', '502200000,', '28.10.2026,', '0520413957/1083',
+      '1 64022090 SF0192G-GFSL0007, SFG 192 G, GFSL0007 /1 A 1 24 24 499.50 333.00 7992.00 719.28',
+      '2 64022090 SF0192G-GFSL0810, SFG 192 G, GFSL0810 /2 A 2 24 48 499.50 333.00 15984.00 1438.56',
+      'Total 3 72 23,976.00 2,157.84 0.00 0.00 21818.16 0 0 1090.91 0.00 22909.07',
+    ].join('\n')
+    const r = parseRelaxoBill([page])
+    assert.ok(r.ok, JSON.stringify(r))
+    if (!r.ok) return
+    assert.deepEqual(r.bill.lines.map((l) => [l.sizeFrom, l.sizeTo, l.pairsPerCarton]), [['7', '7', 24], ['8', '10', 24]])
+  })
+
   test('refuses a bill whose lines do not add up to its total', () => {
     const r = parseRelaxoBill([page1, page2.replace('Total 5 186', 'Total 6 186')])
     assert.equal(r.ok, false)

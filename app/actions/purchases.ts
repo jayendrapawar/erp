@@ -47,11 +47,9 @@ export async function voidCartonAction(receiptId: number, reason: string): Promi
   revalidatePath('/inventory')
 }
 
-export async function setLineAssortmentAction(lineId: number, assortmentId: number): Promise<{ posted: number }> {
+export async function setLineAssortmentAction(lineId: number, assortmentId: number): Promise<void> {
   const u = await requirePermission('purchases.manage')
-  const r = await store.setLineAssortment(db, actorOf(u), lineId, assortmentId)
-  revalidatePath('/inventory')
-  return r
+  await store.setLineAssortment(db, actorOf(u), lineId, assortmentId)
 }
 
 export async function setBillDivisionAction(billId: number, division: string): Promise<void> {
@@ -64,10 +62,3 @@ export async function cancelBillAction(billId: number, reason: string): Promise<
   await store.cancelBill(db, actorOf(u), billId, reason)
 }
 
-/** Post cartons waiting for stock (after articles or assortments were added elsewhere). */
-export async function retryPendingCartons(billId?: number): Promise<{ posted: number; pending: number }> {
-  const u = await requirePermission('purchases.manage')
-  const r = await db.transaction((tx) => store.postPendingCartons(tx, actorOf(u), billId ? { billId } : {}))
-  revalidatePath('/inventory')
-  return r
-}

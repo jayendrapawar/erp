@@ -6,6 +6,7 @@ import { createHarness, harnessEnabled, type Harness } from './_harness'
 import { recordBoxScan, voidScanEvent } from '../../lib/inventory/scan-service'
 import { addDraftScan, createDraft, generateDirectBill } from '../../lib/billing/bill-stock'
 import { billDetail, cancelBill, expectedStock, listBills, purchaseSummary, receiveCarton, saveBill, setLineAssortment, voidCartonReceipt } from '../../lib/purchases/store'
+// Rule under test: a carton adds stock only when received; otherwise it is checked against the bill only.
 import type { ParsedBill } from '../../lib/purchases/relaxo-bill'
 import type { Actor } from '../../lib/db/types'
 
@@ -72,7 +73,7 @@ describe('purchases: expected stock, carton receiving (integration)', { skip: !h
     const r2 = await receive(carton('PUG999G', 'BKBK', '0608', '1000000003', '299.50'))
     assert.ok(r2.status === 'received' && r2.match === 'matched' && !r2.posted && /assortment/.test(r2.pendingReason ?? ''))
     const sum = await purchaseSummary(h.db)
-    assert.deepEqual([sum.unexpectedCartons, sum.cartonsWaitingForStock, sum.cartonsExpected], [1, 1, 1])
+    assert.deepEqual([sum.unexpectedCartons, sum.cartonsCheckedOnly, sum.cartonsExpected], [1, 1, 1])
     // Line 1 second carton, then a third one is more than the bill lists → unexpected.
     assert.ok((await receive(carton('PUG105G', 'BRBR', '0610', '1000000004'))).status === 'received')
     const over = await receive(carton('PUG105G', 'BRBR', '0610', '1000000005'))
@@ -83,6 +84,17 @@ describe('purchases: expected stock, carton receiving (integration)', { skip: !h
     assert.equal((await expectedStock(h.db)).length, 0)
     await assert.rejects(cancelBill(h.db, admin, billId, 'not coming'), /already received/)
     assert.equal(await mismatches(), 0)
+  })
+
+  test('a single-size carton adds its pairs without any assortment', async () => {
+    const single: ParsedBill = { ...bill, refNo: '0520999998/1062', invoiceNo: 'RV0000000010', totalCartons: 1, totalPairs: 24,
+      lines: [{ ...bill.lines[0], lineNo: 1, sizeFrom: '9', sizeTo: '9', cartons: 1, pairsPerCarton: 24, pairs: 24 }] }
+    const s = await saveBill(h.db, admin, single, { name: 'single.pdf', sha256: 'c'.repeat(64) }, 'Flite PU')
+    assert.ok(s.status === 'saved' && s.assortmentsFound === 0)
+    const before9 = await bal('9', 'carton')
+    const r = await receive(carton('PUG105G', 'BRBR', '0009', '1000000009'))
+    assert.ok(r.status === 'received' && r.match === 'matched' && r.posted && r.postedPairs === 24, JSON.stringify(r))
+    assert.equal(await bal('9', 'carton'), before9 + 24)
   })
 
   test('a box scanned from a received carton moves carton → scanned; undo moves it back', async () => {
@@ -104,18 +116,20 @@ describe('purchases: expected stock, carton receiving (integration)', { skip: !h
     assert.equal(await bal('8', 'carton'), before8 - 1)
   })
 
-  test('choosing an assortment later posts waiting cartons once the article exists; undoing a carton reverses its stock', async () => {
+  test('choosing an assortment later never posts cartons already received (their boxes may be scanned); undoing a carton reverses its stock', async () => {
     const lineId = Number((await h.db.execute<{ id: number }>(sql`SELECT id FROM purchase_bill_lines WHERE "billId" = ${billId} AND "lineNo" = 2`)).rows[0].id)
     const asg = await h.db.execute<{ id: number }>(sql`INSERT INTO carton_assortments (division, segment, packing, code, sizes) VALUES
       ('Flite PU', 'Gents', 24, '608', '[{"size":"6","pairs":8},{"size":"7","pairs":8},{"size":"8","pairs":8}]') RETURNING id`)
     await assert.rejects(setLineAssortment(h.db, admin, lineId, 999999), /does not fit/)
-    assert.deepEqual(await setLineAssortment(h.db, admin, lineId, Number(asg.rows[0].id)), { posted: 0 }) // article still missing
+    await setLineAssortment(h.db, admin, lineId, Number(asg.rows[0].id))
+    const r2 = (await h.db.execute<{ postedAt: string | null }>(sql`SELECT "postedAt" FROM carton_receipts WHERE "billLineId" = ${lineId}`)).rows
+    assert.deepEqual(r2.map((x) => x.postedAt), [null]) // still checked-only
     // Undo the first carton of line 1: 6 pairs per size go back out of carton stock.
     const first = Number((await h.db.execute<{ id: number }>(sql`SELECT id FROM carton_receipts WHERE "billId" = ${billId} AND "articleCode" = 'PUG105G' AND status = 'active' ORDER BY id LIMIT 1`)).rows[0].id)
     const c6 = await bal('6', 'carton')
     await voidCartonReceipt(h.db, admin, first, 'scanned wrong carton')
     assert.equal(await bal('6', 'carton'), c6 - 6)
-    const [b] = await listBills(h.db)
+    const b = (await listBills(h.db)).find((x) => x.id === billId)!
     assert.deepEqual([b.status, b.receivedCartons], ['partial', 2])
     await assert.rejects(voidCartonReceipt(h.db, admin, first, 'again'), /already undone/)
     assert.equal(await mismatches(), 0)

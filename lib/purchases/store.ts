@@ -1,6 +1,11 @@
 // Purchases (server only): expected stock from supplier bills, carton receiving and verification.
 // See db/migrations/0007_purchases.sql and docs/architecture/purchases.md.
 //
+// A received carton adds stock only at the moment it is received (its line has a carton
+// assortment and every size is in the article master). Otherwise it is CHECKED against the bill
+// only and its stock comes from scanning the boxes inside with the warehouse scanner. It is never
+// posted later: its boxes may already have been scanned, which would count the pairs twice.
+//
 // Every write is one transaction with an audit row. Statements per action do not grow with the
 // number of lines or cartons (set-based SQL).
 
@@ -60,7 +65,7 @@ async function resolveAssortments(tx: DbOrTx, billId: number): Promise<number> {
       JOIN purchase_bills b ON b.id = l2."billId"
       JOIN carton_assortments a ON a.active AND a.division = b.division AND a.packing = l2."pairsPerCarton"
         AND a.code = l2."sizeFrom" || lpad(l2."sizeTo", 2, '0')
-      WHERE l2."billId" = ${billId} AND l2."assortmentId" IS NULL
+      WHERE l2."billId" = ${billId} AND l2."assortmentId" IS NULL AND l2."sizeFrom" <> l2."sizeTo"
       GROUP BY l2.id
     ) x
     WHERE l.id = x."lineId" AND x.n = 1`)
@@ -108,7 +113,7 @@ export async function listBills(db: DbOrTx, opts: { open?: boolean; limit?: numb
   }))
 }
 
-export interface PurchaseSummary { openBills: number; overdueBills: number; cartonsExpected: number; pairsExpected: number; unexpectedCartons: number; cartonsWaitingForStock: number }
+export interface PurchaseSummary { openBills: number; overdueBills: number; cartonsExpected: number; pairsExpected: number; unexpectedCartons: number; cartonsCheckedOnly: number }
 
 /** Header figures. One query. */
 export async function purchaseSummary(db: DbOrTx): Promise<PurchaseSummary> {
@@ -122,11 +127,11 @@ export async function purchaseSummary(db: DbOrTx): Promise<PurchaseSummary> {
            (SELECT coalesce(sum(greatest(ctn, 0)), 0) FROM rem)::int AS cartons,
            (SELECT coalesce(sum(greatest(ctn, 0) * ppc), 0) FROM rem)::int AS pairs,
            (SELECT count(*) FROM carton_receipts WHERE status = 'active' AND match = 'unexpected')::int AS unexpected,
-           (SELECT count(*) FROM carton_receipts WHERE status = 'active' AND match = 'matched' AND "postedAt" IS NULL)::int AS waiting`)
+           (SELECT count(*) FROM carton_receipts WHERE status = 'active' AND match = 'matched' AND "postedAt" IS NULL)::int AS checked`)
   const x = r.rows[0] ?? {}
   return {
     openBills: Number(x.open ?? 0), overdueBills: Number(x.overdue ?? 0), cartonsExpected: Number(x.cartons ?? 0),
-    pairsExpected: Number(x.pairs ?? 0), unexpectedCartons: Number(x.unexpected ?? 0), cartonsWaitingForStock: Number(x.waiting ?? 0),
+    pairsExpected: Number(x.pairs ?? 0), unexpectedCartons: Number(x.unexpected ?? 0), cartonsCheckedOnly: Number(x.checked ?? 0),
   }
 }
 
@@ -280,29 +285,23 @@ export async function setBillDivision(db: Db, actor: Actor, billId: number, divi
   await db.transaction(async (tx) => {
     const r = await tx.update(purchaseBills).set({ division: d }).where(eq(purchaseBills.id, billId)).returning({ id: purchaseBills.id })
     if (!r.length) throw new Error('Bill not found.')
-    // Re-fit assortments of lines whose cartons have not entered stock yet.
-    await tx.execute(sql`UPDATE purchase_bill_lines l SET "assortmentId" = NULL WHERE l."billId" = ${billId}
-      AND NOT EXISTS (SELECT 1 FROM carton_receipts c WHERE c."billLineId" = l.id AND c.status = 'active' AND c."postedAt" IS NOT NULL)`)
+    // Re-fit assortments for cartons received from now on (received cartons keep what they used).
+    await tx.execute(sql`UPDATE purchase_bill_lines SET "assortmentId" = NULL WHERE "billId" = ${billId}`)
     await resolveAssortments(tx, billId)
-    await postPendingCartons(tx, actor, { billId })
     await audit(tx, { actor, action: 'purchase_bill.division', entityType: 'purchase_bill', entityId: billId, after: { division: d } })
   })
 }
 
-/** Choose the carton assortment of a line; cartons already received for it then enter stock. */
-export async function setLineAssortment(db: Db, actor: Actor, lineId: number, assortmentId: number): Promise<{ posted: number }> {
+/** Choose the carton assortment of a line, for cartons received from now on. */
+export async function setLineAssortment(db: Db, actor: Actor, lineId: number, assortmentId: number): Promise<void> {
   return db.transaction(async (tx) => {
     const ok = await tx.execute<{ billId: number }>(sql`
       SELECT l."billId" FROM purchase_bill_lines l JOIN purchase_bills b ON b.id = l."billId" JOIN carton_assortments a ON a.id = ${assortmentId}
       WHERE l.id = ${lineId} AND a.active AND a.division = b.division AND a.packing = l."pairsPerCarton"
         AND a.code = l."sizeFrom" || lpad(l."sizeTo", 2, '0')`)
     if (!ok.rows[0]) throw new Error('That assortment does not fit this line (division, pairs per carton and size range must match).')
-    const posted = await tx.execute(sql`SELECT 1 FROM carton_receipts WHERE "billLineId" = ${lineId} AND status = 'active' AND "postedAt" IS NOT NULL LIMIT 1`)
-    if (posted.rows.length) throw new Error('Cartons of this line are already in stock with another assortment. Undo them first.')
     await tx.update(purchaseBillLines).set({ assortmentId }).where(eq(purchaseBillLines.id, lineId))
-    const res = await postPendingCartons(tx, actor, { billId: Number(ok.rows[0].billId) })
     await audit(tx, { actor, action: 'purchase_bill.line_assortment', entityType: 'purchase_bill_line', entityId: lineId, after: { assortmentId } })
-    return { posted: res.posted }
   })
 }
 
@@ -385,7 +384,7 @@ export async function receiveCarton(db: Db, actor: Actor, input: { rawInput: str
     const receiptId = Number(ins.rows[0].id)
     if (line) {
       await refreshBillStatus(tx, Number(line.billId))
-      await postPendingCartons(tx, actor, { receiptIds: [receiptId] })
+      await postReceivedCartons(tx, actor, [receiptId])
     }
     await audit(tx, { actor, action: 'carton.received', entityType: 'carton_receipt', entityId: receiptId, after: { label, match: line ? 'matched' : 'unexpected', billId: line?.billId ?? null } })
     return outcomeFor(tx, receiptId, label, warnings)
@@ -394,7 +393,7 @@ export async function receiveCarton(db: Db, actor: Actor, input: { rawInput: str
 
 async function outcomeFor(tx: DbOrTx, receiptId: number, label: string, warnings: string[]): Promise<ReceiveOutcome> {
   const r = await tx.execute<Record<string, unknown>>(sql`
-    SELECT c.id, c.match, c."billId", b."refNo", l."lineNo", l.cartons, c."postedAt", c."postedPairs", l."assortmentId",
+    SELECT c.id, c.match, c."billId", b."refNo", l."lineNo", l.cartons, c."postedAt", c."postedPairs", l."assortmentId", (l."sizeFrom" = l."sizeTo") AS single,
            (SELECT count(*) FROM carton_receipts x WHERE x."billLineId" = c."billLineId" AND x.status = 'active')::int AS received
     FROM carton_receipts c LEFT JOIN purchase_bills b ON b.id = c."billId" LEFT JOIN purchase_bill_lines l ON l.id = c."billLineId"
     WHERE c.id = ${receiptId}`)
@@ -404,25 +403,30 @@ async function outcomeFor(tx: DbOrTx, receiptId: number, label: string, warnings
   return {
     status: 'received', receiptId, match: 'matched', refNo: String(x.refNo), billId: Number(x.billId), lineNo: Number(x.lineNo),
     lineReceived: Number(x.received), lineCartons: Number(x.cartons), posted, postedPairs: Number(x.postedPairs ?? 0), warnings, label,
-    pendingReason: posted ? null : x.assortmentId == null ? 'No carton assortment chosen for this line yet — choose it on the bill; stock is added then.' : 'Article or size not in the article master yet — stock is added once it is.',
+    pendingReason: posted ? null : x.assortmentId == null && x.single !== true
+      ? 'Checked against the bill. No carton assortment for this line, so stock comes from scanning its boxes.'
+      : 'Checked against the bill. Article or size not in the article master, so stock comes from scanning its boxes.',
   }
 }
 
 /**
- * Post the contents of matched, not-yet-posted cartons (of some receipts, a bill, or all) to stock:
- * +pairs per size, provenance 'carton'. A carton posts only when its line has an assortment and
- * every size of it resolves to an active SKU. Set-based; safe to call repeatedly.
+ * Post the contents of just-received cartons to stock: +pairs per size, provenance 'carton'.
+ * A carton posts only when its line has an assortment and every size resolves to an active SKU;
+ * otherwise it stays checked-only (see the note at the top). Set-based.
  */
-export async function postPendingCartons(tx: Tx, actor: Actor, scope: { receiptIds?: number[]; billId?: number } = {}): Promise<{ posted: number; pending: number }> {
-  const where = scope.receiptIds ? sql`c.id IN (SELECT json_array_elements_text(${J(scope.receiptIds)}::json)::bigint)`
-    : scope.billId ? sql`c."billId" = ${scope.billId}` : sql`TRUE`
-  const rows = (await tx.execute<{ receiptId: number; assortmentId: number | null; sizes: AssortmentSize[] | null; articleCode: string; colourCode: string }>(sql`
-    SELECT c.id AS "receiptId", l."assortmentId", a.sizes, c."articleCode", c."colourCode"
+async function postReceivedCartons(tx: Tx, actor: Actor, receiptIds: number[]): Promise<{ posted: number; pending: number }> {
+  const where = sql`c.id IN (SELECT json_array_elements_text(${J(receiptIds)}::json)::bigint)`
+  const rows = (await tx.execute<{ receiptId: number; assortmentId: number | null; sizes: AssortmentSize[] | null; articleCode: string; colourCode: string; sizeFrom: string; sizeTo: string; pairsPerCarton: number }>(sql`
+    SELECT c.id AS "receiptId", l."assortmentId", a.sizes, c."articleCode", c."colourCode", l."sizeFrom", l."sizeTo", l."pairsPerCarton"
     FROM carton_receipts c JOIN purchase_bill_lines l ON l.id = c."billLineId" LEFT JOIN carton_assortments a ON a.id = l."assortmentId"
     WHERE ${where} AND c.status = 'active' AND c.match = 'matched' AND c."postedAt" IS NULL
     ORDER BY c.id`)).rows
   if (!rows.length) return { posted: 0, pending: 0 }
-  const wanted = rows.filter((r) => r.assortmentId != null && r.sizes?.length)
+  // A single-size carton needs no assortment: every pair is that size.
+  for (const r of rows) {
+    if (r.assortmentId == null && r.sizeFrom === r.sizeTo) r.sizes = [{ size: r.sizeTo, pairs: Number(r.pairsPerCarton) }]
+  }
+  const wanted = rows.filter((r) => r.sizes?.length)
   const keys = [...new Set(wanted.flatMap((r) => r.sizes!.map((s) => `${r.articleCode}|${r.colourCode}|${s.size}`)))]
   const skuOf = new Map<string, number>()
   if (keys.length) {

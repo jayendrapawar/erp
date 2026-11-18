@@ -48,14 +48,27 @@ Purchases → Receive: camera, USB/Bluetooth scanner or typed code. Each outer c
 with the same article, colour, range and pack letter that still expects cartons (a chosen bill
 first). One active receipt per carton label.
 
-- Matched + line has an assortment + every size is in the article master → contents enter stock
-  at once: +pairs per size, provenance **carton**, movement `receipt`.
-- Otherwise the carton is recorded and enters stock automatically when the assortment is chosen
-  (or with "Add waiting cartons to stock again" after the article is added).
+- Matched + its contents are known + every size is in the article master → contents enter stock
+  at once: +pairs per size, provenance **carton**, movement `receipt`. Contents are known when the
+  line has a carton assortment, or the line is a **single-size carton** (bill code `00`+size, e.g.
+  `SF0192G-GFSL0007` = 24 pairs of size 7; the carton label reads `0007` too).
+- Otherwise the carton is **checked against the bill only**; its stock comes from scanning the boxes
+  inside with the warehouse scanner. It is never added later (its boxes may already have been
+  scanned — that would count the pairs twice). Choosing an assortment affects cartons received after.
 - Not on any open bill, or more cartons than the bill lists → **Unexpected** (no stock change).
 - Label MRP different from the bill → received, with a warning.
 - Undo a carton (admin, supervisor, accountant): its stock is reversed; refused if boxes from it
   were already scanned or billed (carton stock would go below zero).
+
+## What the bills show (analysis, 19 Nov 2026, 63 bills 27 Aug – 17 Nov, 13,032 pairs)
+
+- Packing (pairs per carton) is the same for an article + size range on every bill: the bill is a
+  reliable source of packing per article. Sparx 12 or 24; Flite EVA 24/30/36; Flite PU 12–48; Bahamas 36.
+- Every line has pack letter A. Single-size cartons appear on Sparx bills (5 lines).
+- Flite EVA: 31 of 35 lines matched an assortment automatically. Sparx: no assortments yet
+  (company list awaited); 84 of 118 Sparx lines are article + colour codes already in the master.
+- One bill was Cushion (CU) and Hi-Lite (HL) articles: no division suggested.
+- The bill does not give the split by size inside a carton — that only comes from the assortment.
 
 ## Carton stock and boxes
 
