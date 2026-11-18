@@ -1,6 +1,6 @@
 # Sparx article workbook — reconciliation report
 
-Generated 2026-11-18T14:38:21.356Z against database endpoint `ep-damp-scene-b3i40jjo` (read-only comparison).
+Generated 2026-11-18T15:21:21.888Z against database endpoint `ep-damp-scene-b3i40jjo` (read-only comparison).
 
 Source: `sparx_article_list_filled (2).xlsx`, sheet `Articles`, SHA-256 `aebae679ab501f3aa304c76b52e668a9b8b351381c2a8b6a28ddb0e2b177abbd`.
 
@@ -20,7 +20,7 @@ Source: `sparx_article_list_filled (2).xlsx`, sheet `Articles`, SHA-256 `aebae67
 
 Repeated code + colour rows are **not** errors in general: most are separate size ranges of one variant (kids 11–13, 1 and 2–5; adult 6–10 and 11–12). They are stored as one variant with several ranges.
 
-Issues: 0 error, 15 for admin review, 13 informational.
+Issues: 0 error, 15 for admin review, 10 informational.
 
 ### exact duplicate row (3, info)
 
@@ -57,12 +57,6 @@ Issues: 0 error, 15 for admin review, 13 informational.
 ### same colour name different code (1, review)
 
 - SS0101C: colour "BLACK" appears under colour codes BLAK and BKBK. Kept separate; confirm whether one is a typo. _(rows 158, 215, 220)_
-
-### size segment unusual (3, info)
-
-- SS0101G ends in "G" but has children's sizes (11–13 or 1). Imported as given. _(rows 159, 161, 216, 221)_
-- SF0105G ends in "G" but has children's sizes (11–13 or 1) only. Imported as given. _(rows 213, 218)_
-- SS0105G ends in "G" but has children's sizes (11–13 or 1) only. Imported as given. _(rows 214, 219)_
 
 ### name code mismatch (4, review)
 

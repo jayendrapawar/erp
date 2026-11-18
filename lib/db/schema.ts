@@ -108,7 +108,7 @@ export const catalogArticles = pgTable('catalog_articles', {
   artCode:      text('artCode').notNull().unique('catalog_articles_code_unique'),
   artName:      text('artName').notNull(),
   brand:        text('brand'),
-  /** Last letter of the code (G, L, B, C …). A hint only. */
+  /** Unused: segment is never derived from the code. The final article list brings a Segment column. */
   segmentHint:  text('segmentHint'),
   active:       boolean('active').notNull().default(true),
   reviewStatus: text('reviewStatus').$type<ReviewStatus>().notNull().default('unverified'),

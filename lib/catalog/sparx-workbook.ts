@@ -39,7 +39,6 @@ export type IssueKind =
   | 'code_has_several_names'
   | 'name_code_mismatch'
   | 'same_colour_name_different_code'
-  | 'size_segment_unusual'
 
 export interface CatalogIssue {
   kind: IssueKind
@@ -285,15 +284,9 @@ export function buildWorkbookModel(rows: WorkbookRow[]): WorkbookModel {
           message: `${code}: colour "${n}" appears under colour codes ${codes.join(' and ')}. Kept separate; confirm whether one is a typo.` })
       }
     }
-    // Segment hint vs size chart (information only).
-    const seg = code.slice(-1)
-    const kidsOnly = vs.every(v => v.sizes.every(s => Number(s.label) >= 11 || Number(s.label) <= 5))
-    const hasKidsRun = vs.some(v => v.ranges.some(r => r.sizes.includes('13') || (r.sizes.includes('1') && r.sizes.length === 1)))
-    if (seg === 'G' && hasKidsRun) {
-      issues.push({ kind: 'size_segment_unusual', severity: 'info', artCode: code, colorCode: null, rowNumbers: an.rows,
-        message: `${code} ends in "G" but has children's sizes (11–13 or 1)${kidsOnly ? ' only' : ''}. Imported as given.` })
-    }
-    articleSpecs.push({ artCode: code, artName: name, artNames: an.names, segmentHint: /[A-Z]/.test(seg) ? seg : null, variants: vs, needsReview })
+    // Segment is never read from the code or name (owner, 18 Nov 2026): it will come from the
+    // Segment column of the final article list.
+    articleSpecs.push({ artCode: code, artName: name, artNames: an.names, segmentHint: null, variants: vs, needsReview })
   }
 
   const usable = [...rowOutcome.values()].filter(o => o.outcome !== 'rejected').length

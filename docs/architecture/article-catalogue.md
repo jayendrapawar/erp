@@ -20,9 +20,10 @@ import (e.g. the corrected four-division sheets).
 | SKU | `article_sizes` | variant + size | `SS0702B BKRD 12` |
 
 - **artName is a display / family name**, not an identity. One name can cover several codes:
-  "SS-702" is both `SS0702B` and `SS0702C`; Flite "FL-20" is `FL0020G`, `FL0020L` … The
-  code's last letter marks the size segment (G gents, L ladies, B/C children) — kept as
-  `segmentHint`, never used for logic.
+  "SS-702" is both `SS0702B` and `SS0702C`; Flite "FL-20" is `FL0020G`, `FL0020L` …
+- **Segment is never read from the code or name.** The owner (18 Nov 2026) said to ignore any
+  keyword in them (last letter G/L/B/C, "kids", "men" …). The segment (Gents / Ladies / Kids) comes only from the Segment column
+  of the final article list and links an article to its carton assortments.
 - The variant table keeps the name `articles` because scans, SKUs and the stock ledger point
   at its ids. Renaming it would be churn with no data benefit.
 - A variant may have **several size ranges**. They are kept as given and expanded to one SKU per
