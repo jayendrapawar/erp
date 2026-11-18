@@ -37,11 +37,13 @@ PDFs exactly like an upload (`lib/purchases/mail.ts`, `POST /api/purchases/check
   mails are retried. A bill already uploaded by hand is recognised (same reference) and skipped.
 - Attachments are fetched whole in one request: chunked downloads from Yahoo sometimes arrived cut
   short (48 KB of a 519 KB PDF) and were unreadable.
-- Settings (env, never committed): `BILL_MAIL_IMAP_HOST`, `BILL_MAIL_USER`, `BILL_MAIL_PASSWORD` (a Yahoo
-  **app password**), `BILL_MAIL_FROM`, and **`BILL_MAIL_START`** (yyyy-mm-dd). Without `BILL_MAIL_START` Check
-  mail is off and hidden; mails before it are never imported (not even with an earlier date chosen).
-  **Live site:** set `BILL_MAIL_START` only when the owner says — after the stocktake of the whole
-  warehouse (owner, 19 Nov 2026). Development uses 2026-08-01. On demand only — no polling.
+- Mailbox (env, never committed, set once in Vercel): `BILL_MAIL_IMAP_HOST`, `BILL_MAIL_USER`,
+  `BILL_MAIL_PASSWORD` (a Yahoo **app password**), `BILL_MAIL_FROM`.
+- **On / off + start date: an admin sets it on Purchases → Bills** (app setting `billMail.startDate`,
+  table `app_settings`, migration 0009; audited; no redeploy). Off → Check mail hidden and refused;
+  mails before the start date are never imported. Live site: switched on by the owner after the
+  warehouse stocktake (owner, 19 Nov 2026). Development: 2026-08-01. Guide for the owner:
+  `docs/guides/bill-mail.md`. On demand only — no polling.
 - Checked 19 Nov 2026 on development: 7 bill mails of the last week → 7 bills (Sparx and Bahamas),
   matching the PDFs in Downloads byte for byte.
 

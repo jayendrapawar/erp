@@ -8,7 +8,8 @@ import { DIVISIONS, formatSizes } from '@/lib/catalog/assortments'
 import { useQrScanner } from '@/components/scanner/use-qr-scanner'
 import {
   cancelBillAction, getBillDetail, getExpectedStock, getOpenBills, getPurchaseOverview, getReceipts, receiveCartonAction,
-  setBillDivisionAction, setLineAssortmentAction, voidCartonAction,
+  setBillDivisionAction, setBillMailStartAction, setLineAssortmentAction, voidCartonAction,
+  type MailStartState,
 } from '@/app/actions/purchases'
 import type { BillDetail, BillRow, ExpectedStockRow, PurchaseSummary, ReceiptRow, ReceiveOutcome } from '@/lib/purchases/store'
 import type { UploadFileResult } from '@/app/api/purchases/upload/route'
@@ -18,7 +19,9 @@ interface Props {
   initialSummary: PurchaseSummary
   initialBills: BillRow[]
   canUpload: boolean
-  mailReady: boolean
+  mailboxReady: boolean
+  mailStart: MailStartState
+  canSetMailStart: boolean
   canReceive: boolean
   canManage: boolean
 }
@@ -52,7 +55,8 @@ const STATUS: Record<string, { label: string; cls: string }> = {
 }
 
 /** Purchases: expected stock from supplier bills, receiving cartons against them. */
-export function PurchasesPage({ initialSummary, initialBills, canUpload, mailReady, canReceive, canManage }: Props) {
+export function PurchasesPage({ initialSummary, initialBills, canUpload, mailboxReady, mailStart: initialMailStart, canSetMailStart, canReceive, canManage }: Props) {
+  const [mailStart, setMailStart] = useState(initialMailStart)
   const [summary, setSummary] = useState(initialSummary)
   const [bills, setBills] = useState(initialBills)
   const [tab, setTab] = useState<string>('bills')
@@ -105,7 +109,8 @@ export function PurchasesPage({ initialSummary, initialBills, canUpload, mailRea
             <TabsTrigger value="unexpected" className="text-xs sm:text-sm">Unexpected ({summary.unexpectedCartons})</TabsTrigger>
           </TabsList>
           <TabsContent value="bills">
-            <BillsTab bills={bills} canUpload={canUpload} mailReady={mailReady} onOpen={setOpenBill} onUploaded={refresh} />
+            <MailStartPanel state={mailStart} onChange={setMailStart} canSet={canSetMailStart} mailboxReady={mailboxReady} />
+            <BillsTab bills={bills} canUpload={canUpload} mailReady={mailboxReady && mailStart.day != null} onOpen={setOpenBill} onUploaded={refresh} />
           </TabsContent>
           <TabsContent value="receive">
             {tab === 'receive' && (canReceive
@@ -141,6 +146,62 @@ function Progress({ done, total }: { done: number; total: number }) {
     <div className="flex items-center gap-2">
       <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden"><div className={`h-full ${pct >= 100 ? 'bg-green-600' : 'bg-foreground/70'}`} style={{ width: `${pct}%` }} /></div>
       <span className="text-[11px] tabular-nums text-muted-foreground whitespace-nowrap">{done}/{total} ctn</span>
+    </div>
+  )
+}
+
+// ── Reading bills from mail: on / off ─────────────────────────────────
+
+function MailStartPanel({ state, onChange, canSet, mailboxReady }: { state: MailStartState; onChange: (s: MailStartState) => void; canSet: boolean; mailboxReady: boolean }) {
+  const today = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10)
+  const [editing, setEditing] = useState(false)
+  const [day, setDay] = useState(state.day ?? today)
+  const [sure, setSure] = useState(false)
+  const [error, setError] = useState('')
+  const [busy, start] = useTransition()
+  const on = state.day != null
+  const save = (value: string | null) => start(async () => {
+    setError('')
+    try { onChange(await setBillMailStartAction(value)); setEditing(false); setSure(false) } catch (e) { setError(errText(e, 'Could not save.')) }
+  })
+
+  return (
+    <div className={`mb-3 rounded-xl border px-3 py-2.5 text-xs ${on ? 'border-green-300 bg-green-50 dark:border-green-900 dark:bg-green-950/20' : 'border-border bg-muted/40'}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="flex-1 min-w-[200px]">
+          <span className="font-semibold">Bills from mail: {on ? 'ON' : 'OFF'}</span>
+          {on
+            ? <> — bills mailed from <b>{state.day ? new Date(`${state.day}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : ''}</b> onwards are read with “Check mail”.{state.updatedByName ? ` Set by ${state.updatedByName}.` : ''}</>
+            : <> — switch it on once the stocktake of the whole warehouse is complete. Until then, bills can still be uploaded as PDFs.</>}
+        </p>
+        {canSet && !editing && (
+          <>
+            <button onClick={() => { setEditing(true); setDay(state.day ?? today) }} className="rounded-lg border border-border bg-background px-2.5 py-1 font-medium hover:bg-muted">{on ? 'Change date' : 'Turn on…'}</button>
+            {on && <button onClick={() => { if (window.confirm('Stop reading bills from mail? Bills already imported stay.')) save(null) }} disabled={busy} className="rounded-lg border border-border bg-background px-2.5 py-1 font-medium text-red-600 hover:bg-muted">Turn off</button>}
+          </>
+        )}
+      </div>
+      {canSet && !mailboxReady && (
+        <p className="mt-1.5 text-amber-700 dark:text-amber-400">The mailbox is not connected on the server yet (one-time setup in Vercel — see the guide “Bills from mail”).</p>
+      )}
+      {canSet && editing && (
+        <div className="mt-2 space-y-2">
+          <label className="flex items-center gap-2">Read bills mailed from
+            <input type="date" value={day} max={today} onChange={(e) => setDay(e.target.value)} className={`${inputCls} py-1 text-xs`} />
+          </label>
+          {!on && (
+            <label className="flex items-start gap-2">
+              <input type="checkbox" checked={sure} onChange={(e) => setSure(e.target.checked)} className="mt-0.5 accent-foreground" />
+              <span>The stocktake of the whole warehouse is complete. Bills from this date become expected stock.</span>
+            </label>
+          )}
+          <div className="flex gap-2">
+            <button onClick={() => save(day)} disabled={busy || !day || (!on && !sure)} className="rounded-lg bg-foreground text-background px-3 py-1.5 font-semibold disabled:opacity-50">{busy ? 'Saving…' : on ? 'Save date' : 'Turn on'}</button>
+            <button onClick={() => { setEditing(false); setSure(false) }} disabled={busy} className="rounded-lg border border-border bg-background px-3 py-1.5 font-medium hover:bg-muted">Cancel</button>
+          </div>
+        </div>
+      )}
+      {error && <p className="mt-1.5 text-red-600">{error}</p>}
     </div>
   )
 }

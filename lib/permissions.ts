@@ -56,6 +56,7 @@ export const PERMISSIONS = {
   'purchases.upload': ['admin', 'accountant'],
   'purchases.receive': ['admin', 'supervisor', 'warehouse'],
   'purchases.manage': ['admin', 'supervisor', 'accountant'],
+  'purchases.mail_start': ['admin'], // turn reading bills from mail on/off (start date)
   'suppliers.edit': ['admin', 'accountant'],
   'sets.view': STAFF,
   'orders.view': ['admin', 'accountant', 'salesman', 'picker', 'biller', 'dispatcher'],

@@ -20,7 +20,7 @@ export async function POST(req: Request) {
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ error: err.message }, { status: err.code === 'UNAUTHENTICATED' ? 401 : 403 })
     console.error('[/api/purchases/check-mail]', err)
-    const msg = err instanceof Error && /mailbox|not set up/.test(err.message) ? err.message : 'Checking mail failed. Try again.'
+    const msg = err instanceof Error && /mailbox|not set up|switched off/.test(err.message) ? err.message : 'Checking mail failed. Try again.'
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

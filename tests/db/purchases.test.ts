@@ -135,3 +135,23 @@ describe('purchases: expected stock, carton receiving (integration)', { skip: !h
     assert.equal(await mismatches(), 0)
   })
 })
+
+describe('bill mail start date (app setting)', { skip: !harnessEnabled() && 'set TEST_DB_ENV_FILE=.env.local to run' }, () => {
+  let h: Harness
+  before(async () => { h = await createHarness(); await h.db.execute(sql`INSERT INTO "user" (id, name, email, role) VALUES ('u-admin','Admin','a@test.local','admin')`) })
+  after(async () => { await h?.close() })
+
+  test('off until an admin sets a start date; changes are audited', async () => {
+    const { checkBillMail, getMailStart } = await import('../../lib/purchases/mail')
+    const { setSetting, SETTING_BILL_MAIL_START } = await import('../../lib/settings')
+    const admin: Actor = { id: 'u-admin', name: 'Admin' }
+    assert.equal(await getMailStart(h.db), null)
+    await assert.rejects(checkBillMail(h.db, admin), /switched off/)
+    await setSetting(h.db, admin, SETTING_BILL_MAIL_START, '2026-12-01', 'stocktake complete')
+    assert.deepEqual((await getMailStart(h.db))?.day, '2026-12-01')
+    await setSetting(h.db, admin, SETTING_BILL_MAIL_START, null)
+    assert.equal(await getMailStart(h.db), null)
+    const a = await h.db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM audit_events WHERE action = 'setting.changed'`)
+    assert.equal(Number(a.rows[0].n), 2)
+  })
+})

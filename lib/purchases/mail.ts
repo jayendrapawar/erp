@@ -1,15 +1,17 @@
 // Purchase bills by mail (server only). Reads Relaxo's bill mails from the shop's mailbox (IMAP,
 // read-only: nothing is moved, flagged or deleted) and imports each attached PDF like an upload.
 //
-// Settings (env): BILL_MAIL_IMAP_HOST, BILL_MAIL_USER, BILL_MAIL_PASSWORD (Yahoo app password),
-// BILL_MAIL_FROM, and BILL_MAIL_START (yyyy-mm-dd). Without BILL_MAIL_START, Check mail is OFF; mails
-// before it are never imported. Owner (19 Nov 2026): on the live site it is set only once the
-// stocktake of the whole warehouse is complete, on the owner's word. Every mail looked at is recorded in bill_mail_messages, so it is imported once;
+// Mailbox (env, set once in Vercel): BILL_MAIL_IMAP_HOST, BILL_MAIL_USER, BILL_MAIL_PASSWORD (Yahoo app
+// password), BILL_MAIL_FROM.
+// Start date (app setting "billMail.startDate", set by an admin on Purchases → Bills): without it
+// Check mail is OFF; mails before it are never imported. Owner (19 Nov 2026): on the live site it is
+// set once the stocktake of the whole warehouse is complete. Every mail looked at is recorded in bill_mail_messages, so it is imported once;
 // mails that failed are tried again next time. Run on demand ("Check mail"); no polling.
 
 import { ImapFlow, type MessageStructureObject } from 'imapflow'
 import { sql } from 'drizzle-orm'
-import type { Actor, Db } from '@/lib/db/types'
+import type { Actor, Db, DbOrTx } from '@/lib/db/types'
+import { SETTING_BILL_MAIL_START, getSetting } from '@/lib/settings'
 import { importBillPdf, type ImportFileResult } from './import-pdf'
 
 export const MAILBOXES = ['INBOX', 'Relaxo']
@@ -26,21 +28,26 @@ export interface MailCheckResult {
   files: (ImportFileResult & { mailbox: string; subject: string; receivedAt: string })[]
 }
 
-function settings() {
-  const host = process.env.BILL_MAIL_IMAP_HOST || 'imap.mail.yahoo.com'
-  const user = process.env.BILL_MAIL_USER
-  const pass = process.env.BILL_MAIL_PASSWORD
-  const from = process.env.BILL_MAIL_FROM
-  if (!user || !pass || !from) throw new Error('Bill mail is not set up (BILL_MAIL_USER, BILL_MAIL_PASSWORD, BILL_MAIL_FROM).')
-  const start = mailStartDate()
-  if (!start) throw new Error('Reading bills from mail is not switched on yet (it starts after the warehouse stocktake).')
-  return { host, user, pass, from, start }
+/** True when the mailbox settings exist on the server (Vercel / .env.local). */
+export function mailboxConfigured(env: Record<string, string | undefined> = process.env): boolean {
+  return Boolean(env.BILL_MAIL_USER && env.BILL_MAIL_PASSWORD && env.BILL_MAIL_FROM)
 }
 
-/** The first day mails are imported from (BILL_MAIL_START), or null while mail import is off. */
-export function mailStartDate(env: Record<string, string | undefined> = process.env): Date | null {
-  const s = (env.BILL_MAIL_START ?? '').trim()
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T00:00:00+05:30`) : null
+function mailbox() {
+  if (!mailboxConfigured()) throw new Error('The mailbox is not set up on the server (BILL_MAIL_USER, BILL_MAIL_PASSWORD, BILL_MAIL_FROM — see docs/guides/bill-mail.md).')
+  return { host: process.env.BILL_MAIL_IMAP_HOST || 'imap.mail.yahoo.com', user: process.env.BILL_MAIL_USER!, pass: process.env.BILL_MAIL_PASSWORD!, from: process.env.BILL_MAIL_FROM! }
+}
+
+/** "2026-12-01" → start of that day, India time; anything else → null. */
+export function parseStartDay(s: unknown): Date | null {
+  const v = typeof s === 'string' ? s.trim() : ''
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(`${v}T00:00:00+05:30`) : null
+}
+
+/** The day bills are read from mail from (set on screen by an admin), or null while it is off. One query. */
+export async function getMailStart(db: DbOrTx): Promise<{ day: string; updatedByName: string; updatedAt: string } | null> {
+  const s = await getSetting<string>(db, SETTING_BILL_MAIL_START)
+  return s && parseStartDay(s.value) ? { day: s.value, updatedByName: s.updatedByName, updatedAt: s.updatedAt } : null
 }
 
 function pdfParts(node: MessageStructureObject | undefined, out: { part: string; name: string; encoding: string }[] = []) {
@@ -68,7 +75,9 @@ async function fetchPart(client: ImapFlow, uid: number, part: { part: string; en
  * already recorded, or the last 7 days the first time. Mails that failed before are always retried.
  */
 export async function checkBillMail(db: Db, actor: Actor, opts: { since?: string } = {}): Promise<MailCheckResult> {
-  const cfg = settings()
+  const startSetting = await getMailStart(db)
+  if (!startSetting) throw new Error('Reading bills from mail is switched off. An admin turns it on (with a start date) on Purchases → Bills.')
+  const cfg = { ...mailbox(), start: parseStartDay(startSetting.day)! }
   let since: Date
   if (opts.since && /^\d{4}-\d{2}-\d{2}$/.test(opts.since)) since = new Date(`${opts.since}T00:00:00+05:30`)
   else {

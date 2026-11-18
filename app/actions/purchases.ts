@@ -4,6 +4,9 @@ import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
 import { requirePermission } from '@/lib/authz'
 import * as store from '@/lib/purchases/store'
+import { SETTING_BILL_MAIL_START, getSetting, setSetting } from '@/lib/settings'
+
+export interface MailStartState { day: string | null; updatedByName: string; updatedAt: string | null }
 
 // Purchases screen. Reads: one query each (bill detail: three). Writes: one transaction each.
 
@@ -55,6 +58,22 @@ export async function setLineAssortmentAction(lineId: number, assortmentId: numb
 export async function setBillDivisionAction(billId: number, division: string): Promise<void> {
   const u = await requirePermission('purchases.manage')
   await store.setBillDivision(db, actorOf(u), billId, division)
+}
+
+/**
+ * Turn reading bills from mail on from a day (yyyy-mm-dd), or off (null). Admin only, audited.
+ * Owner (19 Nov 2026): on the live site, only once the warehouse stocktake is complete.
+ */
+export async function setBillMailStartAction(day: string | null): Promise<MailStartState> {
+  const u = await requirePermission('purchases.mail_start')
+  if (day !== null) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(Date.parse(day))) throw new Error('Choose a date.')
+    const today = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10)
+    if (day > today) throw new Error('The start date cannot be in the future.')
+  }
+  await setSetting(db, actorOf(u), SETTING_BILL_MAIL_START, day, day ? 'reading bills from mail switched on' : 'reading bills from mail switched off')
+  const s = await getSetting<string>(db, SETTING_BILL_MAIL_START)
+  return { day: s?.value ?? null, updatedByName: s?.updatedByName ?? u.name, updatedAt: s?.updatedAt ?? null }
 }
 
 export async function cancelBillAction(billId: number, reason: string): Promise<void> {
