@@ -4,23 +4,25 @@ import { useRouter } from 'next/navigation'
 import { ScanBarcode, ShoppingCart, Receipt, Package, BookOpen, BarChart2, Boxes } from 'lucide-react'
 import { hasPermission, parseRoles, type Permission } from '@/lib/permissions'
 import { PageNav } from '@/components/page-nav'
+import { useLanguage } from '@/lib/language-context'
+import type { TranslationKey } from '@/lib/translations'
 
 interface MenuItem {
-  label: string
-  description: string
+  label: TranslationKey
+  description: TranslationKey
   href: string
   icon: React.ElementType
   color: string
   border: string
-  badge?: string
+  badge?: TranslationKey
   /** Shown when the user holds this permission (lib/permissions.ts). */
   permission: Permission
 }
 
 const MENU_ITEMS: MenuItem[] = [
   {
-    label: 'Scanner',
-    description: 'Scan warehouse inventory items',
+    label: 'scanner',
+    description: 'descScanner',
     href: '/scanner',
     icon: ScanBarcode,
     color: 'bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-400',
@@ -28,8 +30,8 @@ const MENU_ITEMS: MenuItem[] = [
     permission: 'scan.record',
   },
   {
-    label: 'Inventory',
-    description: 'Stock on hand, value and movements',
+    label: 'navInventory',
+    description: 'descInventory',
     href: '/inventory',
     icon: Boxes,
     color: 'bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400',
@@ -37,18 +39,18 @@ const MENU_ITEMS: MenuItem[] = [
     permission: 'inventory.view.all',
   },
   {
-    label: 'Orders',
-    description: 'Manage sales, packing & dispatch',
+    label: 'navOrders',
+    description: 'descOrders',
     href: '/orders',
     icon: ShoppingCart,
     color: 'bg-green-50 text-green-600 dark:bg-green-950 dark:text-green-400',
     border: 'border-green-200 dark:border-green-800',
-    badge: 'New',
+    badge: 'badgeNew',
     permission: 'orders.view',
   },
   {
-    label: 'Billing',
-    description: 'Coming soon',
+    label: 'navBilling',
+    description: 'descBilling',
     href: '#',
     icon: Receipt,
     color: 'bg-purple-50 text-purple-600 dark:bg-purple-950 dark:text-purple-400',
@@ -56,8 +58,8 @@ const MENU_ITEMS: MenuItem[] = [
     permission: 'users.view',
   },
   {
-    label: 'Purchases',
-    description: 'Expected stock from bills, carton receiving',
+    label: 'navPurchases',
+    description: 'descPurchases',
     href: '/purchases',
     icon: Package,
     color: 'bg-orange-50 text-orange-600 dark:bg-orange-950 dark:text-orange-400',
@@ -65,8 +67,8 @@ const MENU_ITEMS: MenuItem[] = [
     permission: 'purchases.view',
   },
   {
-    label: 'Master',
-    description: 'Manage products, categories and suppliers',
+    label: 'navMaster',
+    description: 'descMaster',
     href: '/master',
     icon: BookOpen,
     color: 'bg-teal-50 text-teal-600 dark:bg-teal-950 dark:text-teal-400',
@@ -74,8 +76,8 @@ const MENU_ITEMS: MenuItem[] = [
     permission: 'users.view',
   },
   {
-    label: 'Reports',
-    description: 'Inventory analytics and business reports',
+    label: 'navReports',
+    description: 'descReports',
     href: '/reports',
     icon: BarChart2,
     color: 'bg-rose-50 text-rose-600 dark:bg-rose-950 dark:text-rose-400',
@@ -86,6 +88,7 @@ const MENU_ITEMS: MenuItem[] = [
 
 export function HomeMenuPage({ role }: { role: string }) {
   const router = useRouter()
+  const { t } = useLanguage()
   const userRoles = parseRoles(role)
   const visible = MENU_ITEMS.filter(item => hasPermission(userRoles, item.permission))
 
@@ -97,13 +100,13 @@ export function HomeMenuPage({ role }: { role: string }) {
       </div>
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold text-foreground tracking-tight">Shayona Inventory</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Select a module to get started</p>
+          <h1 className="text-2xl font-bold text-foreground tracking-tight">{t('appName')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('homeSubtitle')}</p>
         </div>
 
         {visible.length === 0 && (
           <div className="rounded-2xl border border-border bg-card p-6 text-center text-sm text-muted-foreground">
-            Your account is signed in but has no role yet. Ask an admin to assign your role in Master → Users.
+            {t('homeNoRole')}
           </div>
         )}
 
@@ -121,19 +124,19 @@ export function HomeMenuPage({ role }: { role: string }) {
               >
                 {badge && (
                   <span className="absolute top-2.5 right-2.5 rounded-full bg-green-500 px-1.5 py-0.5 text-[10px] font-semibold text-white leading-none">
-                    {badge}
+                    {t(badge)}
                   </span>
                 )}
                 {disabled && (
                   <span className="absolute top-2.5 right-2.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground leading-none">
-                    Soon
+                    {t('badgeSoon')}
                   </span>
                 )}
                 <span className={`flex h-14 w-14 items-center justify-center rounded-xl ${color}`}>
                   <Icon className="h-7 w-7" />
                 </span>
-                <span className="font-semibold text-foreground text-sm">{label}</span>
-                <span className="text-xs text-muted-foreground leading-snug">{description}</span>
+                <span className="font-semibold text-foreground text-sm">{t(label)}</span>
+                <span className="text-xs text-muted-foreground leading-snug">{t(description)}</span>
               </button>
             )
           })}

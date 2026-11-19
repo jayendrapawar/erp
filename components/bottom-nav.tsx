@@ -18,7 +18,7 @@ const HIDDEN_ON = ['/sign-in', '/sign-up']
 export function BottomNav({ items, userName, roleLabel }: { items: NavItem[]; userName: string; roleLabel: string }) {
   const pathname = usePathname() ?? ''
   const router = useRouter()
-  const { language, setLanguage } = useLanguage()
+  const { language, setLanguage, t } = useLanguage()
   const [open, setOpen] = useState(false)
   const [signingOut, start] = useTransition()
 
@@ -48,7 +48,7 @@ export function BottomNav({ items, userName, roleLabel }: { items: NavItem[]; us
                 <Link href={i.href} aria-current={on ? 'page' : undefined}
                   className={`flex h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium transition-colors ${on ? 'text-foreground' : 'text-muted-foreground'}`}>
                   <Icon className={`h-5 w-5 ${on ? 'stroke-[2.4]' : ''}`} aria-hidden />
-                  {i.label}
+                  {t(i.label)}
                 </Link>
               </li>
             )
@@ -57,7 +57,7 @@ export function BottomNav({ items, userName, roleLabel }: { items: NavItem[]; us
             <button onClick={() => setOpen(true)} aria-haspopup="dialog" aria-expanded={open}
               className={`flex h-16 w-full flex-col items-center justify-center gap-1 text-[11px] font-medium ${moreActive || open ? 'text-foreground' : 'text-muted-foreground'}`}>
               <Menu className="h-5 w-5" aria-hidden />
-              More
+              {t('navMore')}
             </button>
           </li>
         </ul>
@@ -72,7 +72,7 @@ export function BottomNav({ items, userName, roleLabel }: { items: NavItem[]; us
                 <p className="truncate text-sm font-semibold text-foreground">{userName}</p>
                 <p className="truncate text-xs text-muted-foreground">{roleLabel}</p>
               </div>
-              <button onClick={() => setOpen(false)} aria-label="Close menu" className="rounded-lg border border-border p-1.5"><X className="h-4 w-4" /></button>
+              <button onClick={() => setOpen(false)} aria-label={t('closeMenu')} className="rounded-lg border border-border p-1.5"><X className="h-4 w-4" /></button>
             </div>
             <ul className="grid grid-cols-3 gap-2">
               {items.map((i) => {
@@ -82,7 +82,7 @@ export function BottomNav({ items, userName, roleLabel }: { items: NavItem[]; us
                   <li key={i.href}>
                     <Link href={i.href} onClick={() => setOpen(false)} className={`flex flex-col items-center gap-1.5 rounded-xl border px-2 py-3 text-xs font-medium ${on ? 'border-foreground bg-muted text-foreground' : 'border-border text-foreground'}`}>
                       <Icon className="h-5 w-5" aria-hidden />
-                      {i.label}
+                      {t(i.label)}
                     </Link>
                   </li>
                 )
@@ -94,7 +94,7 @@ export function BottomNav({ items, userName, roleLabel }: { items: NavItem[]; us
               </button>
               <button disabled={signingOut} onClick={() => start(async () => { await signOut(); router.push('/sign-in') })}
                 className="flex items-center justify-center gap-2 rounded-xl border border-border px-3 py-3 text-sm font-medium text-red-600 disabled:opacity-50">
-                <LogOut className="h-4 w-4" aria-hidden />{signingOut ? 'Signing out…' : 'Sign out'}
+                <LogOut className="h-4 w-4" aria-hidden />{signingOut ? t('signingOut') : t('signOut')}
               </button>
             </div>
           </div>
