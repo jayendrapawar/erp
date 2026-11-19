@@ -46,7 +46,7 @@ export function BottomNav({ items, userName, roleLabel }: { items: NavItem[]; us
             return (
               <li key={i.href}>
                 <Link href={i.href} aria-current={on ? 'page' : undefined}
-                  className={`flex h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium transition-colors ${on ? 'text-foreground' : 'text-muted-foreground'}`}>
+                  className={`flex h-16 flex-col items-center justify-start gap-1 px-0.5 pt-2.5 text-center text-[11px] font-medium leading-tight transition-colors ${on ? 'text-foreground' : 'text-muted-foreground'}`}>
                   <Icon className={`h-5 w-5 ${on ? 'stroke-[2.4]' : ''}`} aria-hidden />
                   {t(i.label)}
                 </Link>
@@ -55,7 +55,7 @@ export function BottomNav({ items, userName, roleLabel }: { items: NavItem[]; us
           })}
           <li>
             <button onClick={() => setOpen(true)} aria-haspopup="dialog" aria-expanded={open}
-              className={`flex h-16 w-full flex-col items-center justify-center gap-1 text-[11px] font-medium ${moreActive || open ? 'text-foreground' : 'text-muted-foreground'}`}>
+              className={`flex h-16 w-full flex-col items-center justify-start gap-1 px-0.5 pt-2.5 text-center text-[11px] font-medium leading-tight ${moreActive || open ? 'text-foreground' : 'text-muted-foreground'}`}>
               <Menu className="h-5 w-5" aria-hidden />
               {t('navMore')}
             </button>

@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { ScanBarcode, ShoppingCart, Receipt, Package, BookOpen, BarChart2, Boxes } from 'lucide-react'
+import { ScanBarcode, ShoppingCart, Package, BookOpen, BarChart2, Boxes } from 'lucide-react'
 import { hasPermission, parseRoles, type Permission } from '@/lib/permissions'
 import { PageNav } from '@/components/page-nav'
 import { useLanguage } from '@/lib/language-context'
@@ -45,17 +45,7 @@ const MENU_ITEMS: MenuItem[] = [
     icon: ShoppingCart,
     color: 'bg-green-50 text-green-600 dark:bg-green-950 dark:text-green-400',
     border: 'border-green-200 dark:border-green-800',
-    badge: 'badgeNew',
     permission: 'orders.view',
-  },
-  {
-    label: 'navBilling',
-    description: 'descBilling',
-    href: '#',
-    icon: Receipt,
-    color: 'bg-purple-50 text-purple-600 dark:bg-purple-950 dark:text-purple-400',
-    border: 'border-purple-200 dark:border-purple-800',
-    permission: 'users.view',
   },
   {
     label: 'navPurchases',

@@ -8,7 +8,7 @@ import { isRedirectError } from 'next/dist/client/components/redirect-error'
 import { getPackedOrders } from '@/app/actions/orders'
 import { DispatcherDashboard } from './dispatcher-dashboard'
 
-export const metadata = { title: 'Dispatcher — Orders | Shayona' }
+export const metadata = { title: 'Dispatcher — Orders & Billing | Shayona' }
 
 async function loadVendorMap(): Promise<Map<string, { phone: string | null; address: string | null }>> {
   const rows = await db.select({

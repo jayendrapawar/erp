@@ -136,8 +136,8 @@ export function MultiRoleOrdersHub({
         {/* Page header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-foreground">Order Hub</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Switch between your order roles</p>
+            <h1 className="text-xl font-bold tracking-tight text-foreground">Orders &amp; Billing</h1>
+            <p className="text-sm text-muted-foreground mt-0.5">Switch between your roles: orders, picking, billing, dispatch</p>
           </div>
           <PageNav />
         </div>

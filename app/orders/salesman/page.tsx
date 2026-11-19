@@ -11,7 +11,7 @@ import { getSets } from '@/app/actions/sets'
 import { getPickersList } from '@/app/actions/users'
 import { SalesmanDashboard } from './salesman-dashboard'
 
-export const metadata = { title: 'Salesman — Orders | Shayona' }
+export const metadata = { title: 'Salesman — Orders & Billing | Shayona' }
 
 export default async function SalesmanPage() {
   let sessionUser: { id: string; name?: string | null; email?: string } | null = null

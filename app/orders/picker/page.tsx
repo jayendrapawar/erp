@@ -8,7 +8,7 @@ import { isRedirectError } from 'next/dist/client/components/redirect-error'
 import { getPickerQueue } from '@/app/actions/orders'
 import { PickerDashboard } from './picker-dashboard'
 
-export const metadata = { title: 'Picker — Orders | Shayona' }
+export const metadata = { title: 'Picker — Orders & Billing | Shayona' }
 
 export default async function PickerPage() {
   let currentPickerId = ''

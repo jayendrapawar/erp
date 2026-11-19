@@ -13,8 +13,8 @@ import { MultiRoleOrdersHub } from './_components/multi-role-hub'
 import type { BillingVendor } from '@/components/billing-scanner-page'
 
 export const metadata = {
-  title: 'Orders - Shayona Inventory',
-  description: 'Order management portal',
+  title: 'Orders & Billing - Shayona Inventory',
+  description: 'Orders, picking, billing and dispatch',
 }
 
 async function loadVendorMap() {

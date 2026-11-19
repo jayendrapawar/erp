@@ -193,7 +193,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
       <div className={embedded ? '' : 'max-w-6xl mx-auto px-4 py-6'}>
         {!embedded && (
         <div className="flex items-center justify-between mb-6">
-          <PageHeader title="Orders Dashboard" subtitle="Manage and track all orders" />
+          <PageHeader title="Orders &amp; Billing" subtitle="Every order from booking to billing and dispatch" />
           <a href="/home" className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Home</a>
         </div>
         )}

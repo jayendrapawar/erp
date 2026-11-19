@@ -10,7 +10,7 @@ import { loadCatalogue } from '@/app/actions/catalogue'
 import { BillerDashboard } from './biller-dashboard'
 import type { BillingVendor } from '@/components/billing-scanner-page'
 
-export const metadata = { title: 'Biller — Orders | Shayona' }
+export const metadata = { title: 'Biller — Orders & Billing | Shayona' }
 
 export default async function BillerPage() {
   let currentBillerId = ''

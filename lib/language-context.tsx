@@ -27,6 +27,19 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { document.documentElement.lang = language }, [language])
 
+  // Hindi for every screen: the phrase book loads only when Hindi is chosen (English users never download it).
+  useEffect(() => {
+    if (language !== 'hi') return
+    let stop: (() => void) | null = null
+    let cancelled = false
+    Promise.all([import('./i18n/hi.json'), import('./i18n/translator'), import('./i18n/dom-translate')])
+      .then(([book, { createTranslator }, { startDomTranslation }]) => {
+        if (!cancelled) stop = startDomTranslation(createTranslator(book.default as Record<string, string>))
+      })
+      .catch(() => { /* offline before the phrase book loaded: stays in English */ })
+    return () => { cancelled = true; stop?.() }
+  }, [language])
+
   const setLanguage = useCallback((lang: Language) => {
     setLanguageState(lang)
     try { window.localStorage.setItem(STORAGE_KEY, lang) } catch { /* not saved; still switches now */ }
