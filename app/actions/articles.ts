@@ -12,6 +12,7 @@ import { parseSizeText, normalizeArticleValue, hasArticleNumberMismatch } from '
 import { parseQr, isValidWarehouseQr } from '@/lib/qr-parser'
 import { recordBoxScan, resolvePendingScans } from '@/lib/inventory/scan-service'
 import { expandSizeRange, sizeSortOrders, sortSizes } from '@/lib/catalog/sizes'
+import { listMissingArticles, type MissingArticle } from '@/lib/catalog/missing-articles'
 
 export type Article = typeof articles.$inferSelect
 
@@ -84,57 +85,11 @@ export async function getArticles(): Promise<Article[]> {
   return db.select().from(articles).orderBy(asc(articles.artName))
 }
 
-export type MissingArticle = {
-  artCode: string
-  colorCode: string
-  boxCount: number
-  scanCount: number
-  sizes: string[]
-  mrps: string[]
-  rawQr: string
-  /** 'missing_article': code/colour unknown. 'missing_size': article known, size not configured. */
-  kind: 'missing_article' | 'missing_size'
-  firstSeen: string
-  lastSeen: string
-  scannedBy: string[]
-  reviewStatus: 'open' | 'ignored'
-  reviewNote: string
-}
 
-/** Scanned code/colour pairs that are not (fully) in the article master. Built from scan events. */
+/** Scanned code/colour pairs not (fully) in the article master, incl. boxes billed in Direct Billing. */
 export async function getMissingArticles(): Promise<MissingArticle[]> {
   await requirePermission('articles.view')
-  const r = await db.execute<Record<string, unknown>>(sql`
-    SELECT e."articleCode", e."colourCode",
-           sum(e.quantity)::int AS boxes, count(*)::int AS scans,
-           array_remove(array_agg(DISTINCT e."sizeLabel"), NULL) AS sizes,
-           array_remove(array_agg(DISTINCT e.mrp::text), NULL) AS mrps,
-           (array_agg(e."rawInput" ORDER BY e.id DESC) FILTER (WHERE e."rawInput" IS NOT NULL))[1] AS raw,
-           bool_or(e.resolution = 'missing_article') AS "anyMissingArticle",
-           min(e."createdAt") AS first, max(e."createdAt") AS last,
-           array_agg(DISTINCT e."userName") AS users,
-           coalesce(max(r.status), 'open') AS "reviewStatus", coalesce(max(r.note), '') AS "reviewNote"
-    FROM scan_events e
-    LEFT JOIN missing_article_reviews r ON r."articleCode" = e."articleCode" AND r."colourCode" = coalesce(e."colourCode", '')
-    WHERE e.status = 'active' AND e.resolution <> 'resolved' AND e."articleCode" IS NOT NULL
-    GROUP BY e."articleCode", e."colourCode"
-    ORDER BY max(e."createdAt") DESC
-    LIMIT 500`)
-  return r.rows.map((x) => ({
-    artCode: x.articleCode as string,
-    colorCode: (x.colourCode as string) ?? '',
-    boxCount: Number(x.boxes),
-    scanCount: Number(x.scans),
-    sizes: sortSizeLabels((x.sizes as string[]) ?? []),
-    mrps: ((x.mrps as string[]) ?? []).sort((a, b) => Number(a) - Number(b)),
-    rawQr: (x.raw as string) ?? '',
-    kind: x.anyMissingArticle ? 'missing_article' : 'missing_size',
-    firstSeen: new Date(x.first as string).toISOString(),
-    lastSeen: new Date(x.last as string).toISOString(),
-    scannedBy: ((x.users as string[]) ?? []).filter(Boolean),
-    reviewStatus: x.reviewStatus as 'open' | 'ignored',
-    reviewNote: x.reviewNote as string,
-  }))
+  return listMissingArticles(db)
 }
 
 export async function getArticleMrps(): Promise<Record<string, string[]>> {

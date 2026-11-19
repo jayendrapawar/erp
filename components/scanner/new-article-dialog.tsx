@@ -19,12 +19,14 @@ type Props = {
   clientEventId?: string
   saveScan?: boolean
   initialSizes?: string
+  /** Text for the close (×) button; default says the scan is saved without details. */
+  closeLabel?: string
   onClose: () => void
   onSaveLater: () => Promise<boolean>
   onLinked: () => Promise<void>
 }
 
-export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clientEventId, saveScan = true, initialSizes, onClose, onSaveLater, onLinked }: Props) {
+export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clientEventId, saveScan = true, initialSizes, closeLabel = 'Close (scan is saved without article details)', onClose, onSaveLater, onLinked }: Props) {
   const [articleName, setArticleName] = useState(existingName ?? '')
   const [colourChoice, setColourChoice] = useState('')
   const [otherColour, setOtherColour] = useState('')
@@ -176,7 +178,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
             <h2 id="new-article-title" className="text-lg font-semibold">New Article Detected</h2>
             <p className="mt-1 text-sm text-muted-foreground">Add article details or save this scan to finish later.</p>
           </div>
-          <button type="button" aria-label="Close (scan is saved without article details)" title="Close (scan is saved without article details)" disabled={loading} onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xl hover:bg-muted disabled:opacity-50">×</button>
+          <button type="button" aria-label={closeLabel} title={closeLabel} disabled={loading} onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xl hover:bg-muted disabled:opacity-50">×</button>
         </div>
 
         <div className="mb-5 grid grid-cols-2 gap-2 rounded-lg bg-muted/50 p-3">

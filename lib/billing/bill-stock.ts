@@ -144,12 +144,18 @@ export async function saveDraftHeader(db: DbOrTx, draftId: number, header: Parti
   if (!r.length) throw new Error('This draft was already generated or discarded.')
 }
 
+/** Is the box's article (code + colour) in the active article master? Same rule as the warehouse scanner. */
+export type MasterMatch = { status: 'known' } | { status: 'unknown' } | { status: 'new_colour'; artName: string }
+
 export type AddScanOutcome =
-  | { status: 'added'; id: number; articleCode: string; mrp: number | null; inStock: boolean }
+  | { status: 'added'; id: number; articleCode: string; mrp: number | null; inStock: boolean; master: MasterMatch }
   | { status: 'on_other_bill'; message: string }
   | { status: 'rejected'; message: string }
 
-/** Reserve one box on an open draft. One statement (insert + checks); a retried clientEventId is a no-op. */
+/**
+ * Reserve one box on an open draft. One statement (insert + stock check + article-master check);
+ * a retried clientEventId is a no-op.
+ */
 export async function addDraftScan(db: DbOrTx, actor: Actor, draftId: number, rawInput: string, clientEventId: string): Promise<AddScanOutcome> {
   if (!UUID_RE.test(clientEventId)) throw new Error('Invalid request.')
   const label = readBoxLabel(rawInput)
@@ -169,12 +175,16 @@ export async function addDraftScan(db: DbOrTx, actor: Actor, draftId: number, ra
       ${b.unique} AND EXISTS (SELECT 1 FROM scan_events e WHERE e."dedupeKey" = ${b.dedupeKey} AND e.status = 'active' AND e.resolution = 'resolved') AS "inStock",
       (SELECT json_build_object('id', h.id, 'clientEventId', h."clientEventId", 'draftId', h."draftId", 'orderNumber', h."orderNumber", 'userName', h."userName")
          FROM bill_scans h WHERE h.status = 'active' AND (h."dedupeKey" = ${b.dedupeKey} OR h."clientEventId" = ${clientEventId}::uuid) LIMIT 1) AS holder,
-      (SELECT status FROM direct_bill_drafts WHERE id = ${draftId}) AS "draftStatus"`)
+      (SELECT status FROM direct_bill_drafts WHERE id = ${draftId}) AS "draftStatus",
+      (SELECT json_build_object('known', bool_or(${NORM(sql`a."colorCode"`)} = ${b.colourCode}), 'artName', min(a."artName"), 'n', count(*))
+         FROM articles a WHERE a.active AND ${NORM(sql`a."artCode"`)} = ${b.articleCode}) AS master`)
   const x = r.rows[0] ?? {}
   const inStock = Boolean(x.inStock)
-  if (x.id != null) return { status: 'added', id: Number(x.id), articleCode: b.articleCode, mrp: b.mrp, inStock }
+  const m = (x.master ?? {}) as { known: boolean | null; artName: string | null; n: number }
+  const master: MasterMatch = !Number(m.n) ? { status: 'unknown' } : m.known ? { status: 'known' } : { status: 'new_colour', artName: m.artName ?? '' }
+  if (x.id != null) return { status: 'added', id: Number(x.id), articleCode: b.articleCode, mrp: b.mrp, inStock, master }
   const holder = x.holder as { id: number; clientEventId: string; draftId: number | null; orderNumber: string | null; userName: string } | null
-  if (holder && holder.clientEventId === clientEventId) return { status: 'added', id: Number(holder.id), articleCode: b.articleCode, mrp: b.mrp, inStock }
+  if (holder && holder.clientEventId === clientEventId) return { status: 'added', id: Number(holder.id), articleCode: b.articleCode, mrp: b.mrp, inStock, master }
   if (holder) {
     const where = holder.orderNumber ? `bill ${holder.orderNumber}` : holder.draftId === draftId ? 'this bill' : `another draft (${holder.userName || 'a biller'})`
     return { status: 'on_other_bill', message: `This box is already on ${where}.` }

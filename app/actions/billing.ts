@@ -5,6 +5,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { billLines, orders } from '@/lib/db/schema'
 import { requireAnyRole } from '@/lib/authz'
+import { hasPermission } from '@/lib/permissions'
 import {
   addDraftScan, createDraft, discardDraft, generateDirectBill, listOpenDrafts, loadDraft, recordOrderScans, removeDraftScans, saveDraftHeader,
   type AddScanOutcome, type DraftDetail, type DraftHeader, type DraftSummary, type GeneratedBill, type StockOutCounts,
@@ -37,8 +38,14 @@ export async function saveDirectBillDraft(draftId: number, header: Partial<Draft
   await saveDraftHeader(db, draftId, header)
 }
 
-export async function scanIntoDirectBill(draftId: number, rawInput: string, clientEventId: string): Promise<AddScanOutcome> {
-  return addDraftScan(db, await biller(), draftId, rawInput, clientEventId)
+/**
+ * Save one scanned box on the draft. Also says whether its article is in the master and whether
+ * this user may add it there (admins get the New Article form; billers a warning).
+ */
+export async function scanIntoDirectBill(draftId: number, rawInput: string, clientEventId: string): Promise<AddScanOutcome & { canCreateArticle: boolean }> {
+  const u = await requireAnyRole('biller', 'admin')
+  const out = await addDraftScan(db, { id: u.id, name: u.name }, draftId, rawInput, clientEventId)
+  return { ...out, canCreateArticle: hasPermission(u.roles, 'articles.create_from_scan') }
 }
 
 export async function removeFromDirectBill(draftId: number, rawInputs: string[]): Promise<number> {

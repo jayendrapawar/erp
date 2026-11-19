@@ -13,13 +13,14 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { isValidWarehouseQr, parseQr } from '@/lib/qr-parser'
+import { isValidWarehouseQr, parseQr, type ParsedQr } from '@/lib/qr-parser'
 import { PageNav } from '@/components/page-nav'
+import { NewArticleDialog } from '@/components/scanner/new-article-dialog'
 import {
   discardDirectBillDraft, generateDirectBillFromDraft, getOpenDirectBillDrafts, openDirectBillDraft,
   removeFromDirectBill, saveDirectBillDraft, scanIntoDirectBill, startDirectBillDraft,
 } from '@/app/actions/billing'
-import type { DraftHeader, DraftSummary, GeneratedBill } from '@/lib/billing/bill-stock'
+import type { DraftHeader, DraftSummary, GeneratedBill, MasterMatch } from '@/lib/billing/bill-stock'
 
 function newUuid(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
@@ -307,8 +308,9 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
       if (out.status === 'added') {
         if (!out.inStock) {
           commitLines(billLinesRef.current.map((l) => (l.key === key ? { ...l, notInStock: l.notInStock + 1 } : l)))
-          showWarning(`${art}: this box was not scanned into stock — it will go out as Unscanned dispatch.`)
         }
+        if (out.master.status !== 'known') noteNewArticle(raw, art, out.master, out.canCreateArticle)
+        else if (!out.inStock) showWarning(`${art}: this box was not scanned into stock — it will go out as Unscanned dispatch.`)
       } else {
         dropBox(key, raw)
         showWarning(out.message)
@@ -321,7 +323,39 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
     }
   }
 
+  // ── New article detection (same form as the warehouse scanner) ────────────
+  // The box is already on the bill. If its article/colour is not in the master, an admin gets the
+  // New Article form (adds it to the master only; no stock scan); a biller gets a warning and the
+  // box appears in Master → Articles → Missing articles. Asked once per article/colour per bill.
+  const [articleDialog, setArticleDialog] = useState<{ rawQr: string; parsed: ParsedQr; mode: 'unknown' | 'new_colour'; existingName?: string } | null>(null)
+  const articleDialogRef = useRef(false)
+  const articleNotedRef = useRef<Set<string>>(new Set())
+
+  function noteNewArticle(raw: string, art: string, master: Exclude<MasterMatch, { status: 'known' }>, canCreate: boolean) {
+    const parsed = parseQr(raw)
+    const key = `${parsed.articleCode}|${parsed.colorCode}`
+    if (articleNotedRef.current.has(key)) return
+    articleNotedRef.current.add(key)
+    if (canCreate && !articleDialogRef.current) {
+      articleDialogRef.current = true
+      scanPausedRef.current = true
+      setArticleDialog({ rawQr: raw, parsed, mode: master.status, existingName: master.status === 'new_colour' ? master.artName : undefined })
+      return
+    }
+    showWarning(master.status === 'new_colour'
+      ? `${art}: new colour, not in the article master. It stays on the bill; an admin can add it in Master → Articles → Missing articles.`
+      : `${art}: new article, not in the article master. It stays on the bill; an admin can add it in Master → Articles → Missing articles.`)
+  }
+
+  function closeArticleDialog(linked: boolean) {
+    articleDialogRef.current = false
+    setArticleDialog(null)
+    if (linked) showSuccess('Article added to the master.')
+    setTimeout(() => { if (!articleDialogRef.current) scanPausedRef.current = false }, 800)
+  }
+
   function resetLocal() {
+    articleNotedRef.current = new Set()
     commitLines([])
     setSelectedVendor(null)
     setSkQuery('')
@@ -543,6 +577,10 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
   // ── QR decode → bill ───────────────────────────────────────────────────────
 
   function handleQrDecode(raw: string) {
+    if (articleDialogRef.current) {
+      showWarning('Finish or close the New Article form first, then scan again.')
+      return
+    }
     if (!isValidWarehouseQr(raw)) {
       showWarning('QR code format not recognised — only warehouse box QR codes are accepted.')
       return
@@ -606,7 +644,8 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
       const code = jsQR(imageData.data, imageData.width, imageData.height)
       if (code) {
         scanPausedRef.current = true; setQrDetected(true)
-        setTimeout(() => { scanPausedRef.current = false; setQrDetected(false) }, 2000)
+        // Stays paused while the New Article form is open.
+        setTimeout(() => { if (!articleDialogRef.current) scanPausedRef.current = false; setQrDetected(false) }, 2000)
         handleQrDecode(code.data)
       }
     } catch { /* ignore */ }
@@ -1232,6 +1271,20 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
             </Card>
           </TabsContent>
         </Tabs>
+
+        {articleDialog && (
+          <NewArticleDialog
+            rawQr={articleDialog.rawQr}
+            parsed={articleDialog.parsed}
+            mode={articleDialog.mode}
+            existingName={articleDialog.existingName}
+            saveScan={false}
+            closeLabel="Close (the box stays on the bill)"
+            onClose={() => closeArticleDialog(false)}
+            onSaveLater={async () => { closeArticleDialog(false); return true }}
+            onLinked={async () => closeArticleDialog(true)}
+          />
+        )}
 
         {/* ── Confirm dialog ── */}
         {deleteTarget && (

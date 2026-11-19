@@ -10,6 +10,7 @@ import {
   releaseOrderScans, removeDraftScans, saveDraftHeader,
 } from '../../lib/billing/bill-stock'
 import { listUnscannedDispatch, stockSummary } from '../../lib/inventory/stock-queries'
+import { listMissingArticles } from '../../lib/catalog/missing-articles'
 import type { Actor } from '../../lib/db/types'
 
 // Real labels (regression corpus). BOX and BOX_2: PUG-N42 White size 6, MRP 339.50.
@@ -124,5 +125,35 @@ describe('billing takes stock out (integration)', { skip: !harnessEnabled() && '
     // An order with boxes cannot be deleted before they are released.
     await assert.rejects(h.db.execute(sql`DELETE FROM orders WHERE id = ${o1}`))
     assert.equal(await mismatches(), 0)
+  })
+
+  test('Direct Billing tells whether each box\'s article is in the master (new article detection)', async () => {
+    const d = await createDraft(h.db, biller)
+    const master = async (raw: string) => {
+      const out = await add(d, raw)
+      assert.equal(out.status, 'added', raw)
+      return out.status === 'added' ? out.master : null
+    }
+    // PUG-N42 White (in the master), size 7.
+    assert.deepEqual(await master('A1PUGN42G-WHWH0007-0726R10MA0-339.50-1010-QQ7AA-1006109001'), { status: 'known' })
+    // Same article code, colour BKBK not in the master.
+    assert.deepEqual(await master('A1PUGN42G-BKBK0006-0726R10MA0-339.50-1010-QQ7AB-1006109002'), { status: 'new_colour', artName: 'PUG-N42' })
+    // Article code not in the master.
+    assert.deepEqual(await master('A1SS0999G-NBOR0007-1026R05MA0-649.00-1005-QQ7AC-1020609003'), { status: 'unknown' })
+    // A retired article counts as not in the master.
+    await h.db.execute(sql`INSERT INTO articles ("artName","artCode",color,"colorCode",active) VALUES ('OLD-1','OLD0001','Black','BKBK',false)`)
+    assert.deepEqual(await master('A1OLD0001-BKBK0006-0726R10MA0-339.50-1010-QQ7AD-1006109004'), { status: 'unknown' })
+    // Billed boxes of unknown articles/colours appear in Master → Articles → Missing articles.
+    const missing = new Map((await listMissingArticles(h.db)).map((m) => [`${m.artCode}|${m.colorCode}`, m]))
+    assert.ok(missing.has('SS0999G|NBOR'))
+    assert.ok(missing.has('PUGN42G|BKBK'))
+    assert.ok(missing.has('OLD0001|BKBK'))
+    assert.equal(missing.get('SS0999G|NBOR')?.kind, 'missing_article')
+    assert.deepEqual(missing.get('SS0999G|NBOR')?.scannedBy, ['Biller'])
+    assert.ok(!missing.has('PUGN42G|WHWH'), 'a known article is not listed')
+    // Discarding the draft frees its boxes; they leave the list.
+    await discardDraft(h.db, biller, d)
+    const after = new Set((await listMissingArticles(h.db)).map((m) => `${m.artCode}|${m.colorCode}`))
+    assert.ok(!after.has('SS0999G|NBOR'))
   })
 })

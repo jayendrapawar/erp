@@ -939,6 +939,13 @@
   "Enter colour name": "कलर का नाम लिखें",
   "For example 6-10 or 11,12,13,1": "जैसे 6-10 या 11,12,13,1",
   "is not in this article's sizes:": "इस आर्टिकल के साइज़ में नहीं है:",
+
+  "Finish or close the New Article form first, then scan again.": "पहले नया आर्टिकल फ़ॉर्म पूरा करें या बंद करें, फिर स्कैन करें।",
+  "{0}: new article, not in the article master. It stays on the bill; an admin can add it in Master → Articles → Missing articles.": "{0}: नया आर्टिकल, आर्टिकल मास्टर में नहीं है। यह बिल में रहेगा; एडमिन इसे मास्टर → आर्टिकल → मास्टर में नहीं मिले आर्टिकल में जोड़ सकते हैं।",
+  "{0}: new colour, not in the article master. It stays on the bill; an admin can add it in Master → Articles → Missing articles.": "{0}: नया कलर, आर्टिकल मास्टर में नहीं है। यह बिल में रहेगा; एडमिन इसे मास्टर → आर्टिकल → मास्टर में नहीं मिले आर्टिकल में जोड़ सकते हैं।",
+  "Article added to the master.": "आर्टिकल मास्टर में जुड़ गया।",
+  "Close (the box stays on the bill)": "बंद करें (बॉक्स बिल में रहेगा)",
+  "Add size {0} to this article": "साइज़ {0} इस आर्टिकल में जोड़ें",
   "New Article Detected": "नया आर्टिकल मिला",
   "none listed": "कोई नहीं",
   "Save scan, add details later": "स्कैन सेव करें, जानकारी बाद में",
