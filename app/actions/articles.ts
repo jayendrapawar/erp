@@ -12,6 +12,7 @@ import { parseSizeText, normalizeArticleValue, hasArticleNumberMismatch } from '
 import { parseQr, isValidWarehouseQr } from '@/lib/qr-parser'
 import { recordBoxScan, resolvePendingScans } from '@/lib/inventory/scan-service'
 import { expandSizeRange, sizeSortOrders, sortSizes } from '@/lib/catalog/sizes'
+import { SEGMENTS } from '@/lib/catalog/assortments'
 import { listMissingArticles, type MissingArticle } from '@/lib/catalog/missing-articles'
 import { applyArticleUpload, csvToCells, parseArticleSheet, planArticleUpload, summarise, xlsxToCells, type UploadSummary } from '@/lib/catalog/article-upload'
 
@@ -35,6 +36,15 @@ function isUniqueViolation(error: unknown): boolean {
 function friendlyUniqueError(error: unknown): never {
   if (isUniqueViolation(error)) throw new Error('An article with this article code and colour code already exists.')
   throw error
+}
+
+/** Gents / Ladies / Kids / Baby in the list's spelling; blank → null; anything else is refused. */
+function cleanSegment(v: string | null | undefined): string | null {
+  const t = (v ?? '').trim()
+  if (!t) return null
+  const hit = SEGMENTS.find((s) => s.toLowerCase() === t.toLowerCase())
+  if (!hit) throw new Error(`Segment must be one of: ${SEGMENTS.join(', ')}.`)
+  return hit
 }
 
 /** Footwear size order: adult charts 6…12, children's charts 11, 12, 13, 1, 2… (lib/catalog/sizes). */
@@ -142,7 +152,7 @@ export async function getColoursForName(name: string, artCode = ''): Promise<Arr
 // ── Writes from the Master screen ────────────────────────────────────────────
 
 export async function saveArticle(
-  input: Omit<Article, 'id' | 'reviewStatus' | 'active' | 'source' | 'division' | 'catalogArticleId' | 'retiredAt' | 'retiredReason'> & { id?: number; customSizes?: string; division?: string | null },
+  input: Omit<Article, 'id' | 'reviewStatus' | 'active' | 'source' | 'division' | 'segment' | 'catalogArticleId' | 'retiredAt' | 'retiredReason'> & { id?: number; customSizes?: string; division?: string | null; segment?: string | null },
 ): Promise<Article[]> {
   const u = await requirePermission('articles.edit')
   const { customSizes, id, ...fields } = input
@@ -153,7 +163,9 @@ export async function saveArticle(
     colorCode: normalizeArticleValue(fields.colorCode),
     minSize: fields.minSize,
     maxSize: fields.maxSize,
-    division: fields.division?.trim() || null,
+    // Only when given: the edit form does not send division, and must not wipe it.
+    ...(fields.division !== undefined ? { division: fields.division?.trim() || null } : {}),
+    ...(fields.segment !== undefined ? { segment: cleanSegment(fields.segment) } : {}),
   }
 
   const labels = new Set<string>(parseSizeText(customSizes ?? ''))

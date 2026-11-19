@@ -122,3 +122,7 @@ column guide in `lib/catalog/article-upload-columns.ts` (shown on screen under "
 - Boxes scanned before their article existed are posted to stock when the upload adds the code.
 
 Loaded 19 Nov 2026: `Relaxo filled Article.xlsx` (Sparx, Flite PU, Flite EVA; 3 "Test Article" rows left out).
+
+Segment (migration 0010, 20 Nov 2026): `articles.segment` (Gents / Ladies / Kids / Baby), shown and
+edited in Master → Articles; the upload's Segment column fills a blank segment and lists, but never
+overwrites, a different one. Used to choose the carton assortment when several fit.

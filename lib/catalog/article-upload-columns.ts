@@ -10,7 +10,7 @@ export const ARTICLE_UPLOAD_COLUMNS = [
   { name: 'minSize', required: true, example: '3', help: 'Smallest size. Children’s runs may wrap: minSize 11, maxSize 5 = 11, 12, 13, 1 … 5.' },
   { name: 'maxSize', required: true, example: '8', help: 'Largest size.' },
   { name: 'Stock source', required: false, example: 'PU', help: 'Division: Sparx, PU, Flite (EVA) or Bahamas.' },
-  { name: 'Segment', required: false, example: 'Gents', help: 'Gents, Ladies or Kids. You can keep this column; it is not saved yet (coming with the segment update).' },
+  { name: 'Segment', required: false, example: 'Gents', help: 'Gents, Ladies, Kids or Baby. Fills the segment of articles already in the master when theirs is blank (a different segment is listed, not changed).' },
 ] as const
 
 /** Template CSV (opens in Excel) with the expected header and two example rows. */

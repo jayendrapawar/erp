@@ -136,6 +136,8 @@ export const articles = pgTable('articles', {
   active:    boolean('active').notNull().default(true),
   source:    text('source').$type<'legacy' | 'import' | 'manual' | 'scan_dialog'>().notNull().default('legacy'),
   division:  text('division'),
+  /** Gents, Ladies, Kids or Baby (from the article list; never derived from the code). Migration 0010. */
+  segment:   text('segment'),
   catalogArticleId: integer('catalogArticleId').references(() => catalogArticles.id, { onDelete: 'restrict' }),
   retiredAt:     timestamp('retiredAt', { withTimezone: true }),
   retiredReason: text('retiredReason'),

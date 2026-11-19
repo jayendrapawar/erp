@@ -6,6 +6,7 @@ import { PageNav } from '@/components/page-nav'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DIVISIONS, formatSizes } from '@/lib/catalog/assortments'
 import { useQrScanner } from '@/components/scanner/use-qr-scanner'
+import { ManualCartonPanel } from './manual-carton-panel'
 import {
   cancelBillAction, getBillDetail, getExpectedStock, getOpenBills, getPurchaseOverview, getReceipts, receiveCartonAction,
   setBillDivisionAction, setBillMailStartAction, setLineAssortmentAction, voidCartonAction,
@@ -495,12 +496,16 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
   const [openBills, setOpenBills] = useState<BillRow[]>([])
   const [billId, setBillId] = useState<number | ''>('')
   const [log, setLog] = useState<LogItem[]>([])
-  const [manual, setManual] = useState('')
+  const [manualOpen, setManualOpen] = useState(false)
+  // While manual entry waits for a pair box, scanned codes go to it instead of carton receiving.
+  const boxHandlerRef = useRef<((raw: string) => void) | null>(null)
+  const registerBoxHandler = useCallback((fn: ((raw: string) => void) | null) => { boxHandlerRef.current = fn }, [])
   const billRef = useRef<number | ''>('')
   useEffect(() => { billRef.current = billId }, [billId])
   useEffect(() => { getOpenBills().then(setOpenBills).catch(() => {}) }, [])
 
   const submit = useCallback((raw: string) => {
+    if (boxHandlerRef.current) { boxHandlerRef.current(raw); return }
     const id = uuid()
     setLog((l) => [{ id, raw, at: Date.now(), pending: true }, ...l].slice(0, 100))
     receiveCartonAction({ rawInput: raw, clientEventId: id, billId: billRef.current || null })
@@ -515,6 +520,11 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
   const { videoRef, active, error, start, stop } = useQrScanner(submit)
   const last = log[0]
 
+  const addManualResult = useCallback((raw: string, out: ReceiveOutcome) => {
+    setLog((l) => [{ id: uuid(), raw, at: Date.now(), pending: false, out }, ...l].slice(0, 100))
+    if (out.status === 'received') onReceived()
+  }, [onReceived])
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -525,16 +535,23 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
         <button onClick={active ? stop : start} className={`rounded-lg px-3 py-2 text-xs font-semibold ${active ? 'border border-border hover:bg-muted' : 'bg-foreground text-background hover:opacity-90'}`}>
           {active ? 'Stop camera' : 'Scan with camera'}
         </button>
+        {!manualOpen && (
+          <button onClick={() => setManualOpen(true)} className="rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-muted">
+            Manual entry
+          </button>
+        )}
       </div>
-      <p className="text-[11px] text-muted-foreground">Scan the outer carton label. A USB / Bluetooth scanner works without the camera.</p>
+      <p className="text-[11px] text-muted-foreground">
+        {manualOpen ? 'Manual entry: scan one pair box from the carton.' : 'Scan the outer carton label. A USB / Bluetooth scanner works without the camera. Label damaged? Use Manual entry.'}
+      </p>
       {error && <p className="text-xs text-red-600">{error}</p>}
       <div className={`relative overflow-hidden rounded-xl border border-border bg-black ${active ? '' : 'hidden'}`}>
         <video ref={videoRef} playsInline muted className="w-full max-h-[45vh] object-cover" />
       </div>
-      <form onSubmit={(e) => { e.preventDefault(); if (manual.trim()) { submit(manual.trim()); setManual('') } }} className="flex gap-2">
-        <input value={manual} onChange={(e) => setManual(e.target.value)} placeholder="…or paste / type the carton code" aria-label="Carton code" className={`${inputCls} flex-1 text-xs font-mono`} />
-        <button type="submit" disabled={!manual.trim()} className="rounded-lg border border-border px-3 text-xs font-medium hover:bg-muted disabled:opacity-50">Add</button>
-      </form>
+      {manualOpen && (
+        <ManualCartonPanel registerBoxHandler={registerBoxHandler} cameraActive={active} onStartCamera={start}
+          onResult={addManualResult} onClose={() => setManualOpen(false)} />
+      )}
 
       {last && <ResultBanner item={last} onOpenBill={onOpenBill} />}
 

@@ -1589,8 +1589,12 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
           <div className="flex-1 overflow-y-auto">
 
             {/* ── Camera section ── */}
-            <div className="px-4 pt-4">
-              <div className="relative bg-black w-full rounded-2xl overflow-hidden" style={{ aspectRatio: '4/3', maxHeight: '44vh' }}>
+            <div className="px-4 pt-4 space-y-3">
+              <button type="button" onClick={isCameraActive ? stopCamera : startCamera}
+                  className={`w-full rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors ${isCameraActive ? 'border border-border hover:bg-muted' : 'bg-foreground text-background hover:opacity-90'}`}>
+                  {isCameraActive ? 'Stop camera' : 'Scan with camera'}
+                </button>
+              <div className={`relative bg-black w-full rounded-2xl overflow-hidden ${isCameraActive ? '' : 'hidden'}`} style={{ aspectRatio: '4/3', maxHeight: '44vh' }}>
                 <video
                   ref={videoRef}
                   autoPlay playsInline muted
@@ -1616,33 +1620,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   </div>
                 )}
 
-                {/* Idle state — camera not started */}
-                {!isCameraActive && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
-                    <svg className="w-10 h-10 text-white/30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                    <button
-                      type="button"
-                      onClick={startCamera}
-                      className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg hover:bg-blue-700 active:scale-95 transition-all"
-                    >
-                      Start Camera
-                    </button>
-                  </div>
-                )}
-
-                {/* Overlay controls — shown when camera active */}
+                {/* Flash — shown when camera active */}
                 {isCameraActive && (
-                  <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={stopCamera}
-                      className="rounded-lg border border-white/25 bg-black/55 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm hover:bg-black/70 transition-colors"
-                    >
-                      Stop
-                    </button>
+                  <div className="absolute bottom-3 right-3">
                     <button
                       type="button"
                       onClick={toggleFlashlight}
@@ -1659,11 +1639,11 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
               </div>
 
               {/* Controls row below camera */}
-              <div className="flex items-center justify-between mt-3 mb-1">
+              <div className="flex items-center justify-between mb-1">
                 <p className="text-[11px] text-muted-foreground">
                   {isCameraActive
                     ? 'Point at a warehouse box QR code'
-                    : 'Tap Start Camera or upload an image'}
+                    : 'Tap Scan with camera, use a USB / Bluetooth scanner, or upload an image'}
                 </p>
                 <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors cursor-pointer">
                   {uploadProcessing

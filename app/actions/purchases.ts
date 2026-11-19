@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
 import { requirePermission } from '@/lib/authz'
 import * as store from '@/lib/purchases/store'
+import { manualCartonOptions, receiveManualCarton, type ManualOptions, type ManualReceiveInput, type ManualReceiveOutcome } from '@/lib/purchases/manual-carton'
 import { SETTING_BILL_MAIL_START, getSetting, setSetting } from '@/lib/settings'
 
 export interface MailStartState { day: string | null; updatedByName: string; updatedAt: string | null }
@@ -42,6 +43,18 @@ export async function receiveCartonAction(input: { rawInput: string; clientEvent
   const u = await requirePermission('purchases.receive')
   const out = await store.receiveCarton(db, actorOf(u), input)
   return out
+}
+
+/** Manual carton entry, step 1: read a pair box from the carton; list the invoice lines it fits. 2 reads. */
+export async function manualCartonOptionsAction(rawBox: string): Promise<ManualOptions> {
+  await requirePermission('purchases.receive')
+  return manualCartonOptions(db, rawBox)
+}
+
+/** Manual carton entry, step 2: receive the carton against the chosen invoice line. 1 transaction. */
+export async function receiveManualCartonAction(input: ManualReceiveInput): Promise<ManualReceiveOutcome> {
+  const u = await requirePermission('purchases.receive')
+  return receiveManualCarton(db, actorOf(u), input)
 }
 
 export async function voidCartonAction(receiptId: number, reason: string): Promise<void> {

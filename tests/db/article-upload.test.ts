@@ -33,7 +33,7 @@ describe('article list upload (integration)', { skip: !harnessEnabled() && 'set 
       [null, 'PXL-05', 'PXL005L', 'Bad', 'BDBD', 20, 3, 'PU'],
     ]))
     assert.equal(parsed.rows.length, 2)
-    assert.deepEqual(parsed.rows[0], { rowNumber: 2, artName: 'PXL-05', artCode: 'PXL005L', color: 'Black', colorCode: 'BKBK', sizes: ['3', '4', '5', '6', '7', '8'], division: 'Flite PU' })
+    assert.deepEqual(parsed.rows[0], { rowNumber: 2, artName: 'PXL-05', artCode: 'PXL005L', color: 'Black', colorCode: 'BKBK', sizes: ['3', '4', '5', '6', '7', '8'], division: 'Flite PU', segment: null })
     assert.equal(parsed.problems.length, 1)
     assert.deepEqual(parseArticleSheet(csvToCells('artName,color\nA,B\n')).missingColumns, ['artCode', 'minSize', 'maxSize'])
   })
@@ -71,5 +71,28 @@ describe('article list upload (integration)', { skip: !harnessEnabled() && 'set 
     await applyArticleUpload(h.db, admin, plan, { fileName: 'fix.xlsx', rowsRead: 1 })
     const rows = await variant('FL0048G', 'Black Black')
     assert.deepEqual(rows.map(r => [r.id, r.colorCode]), [[before.id, 'BKBK']])
+  })
+
+  test('Segment: fills a blank segment, never overwrites one, refuses unknown values', async () => {
+    const bad = parseArticleSheet(sheet([[null, 'FL-48', 'FL0048G', 'Black Black', 'BKBK', 10, 6, 'Flite', 'Gent']]))
+    assert.equal(bad.rows.length, 0)
+    assert.match(bad.problems[0].message, /segment "Gent"/)
+    const first = parseArticleSheet(sheet([
+      [null, 'FL-48', 'FL0048G', 'Black Black', 'BKBK', 10, 6, 'Flite', 'gents'], // existing, blank segment → Gents
+      [null, 'FL-49', 'FL0049L', 'Red', 'RDRD', 8, 3, 'Flite', 'Ladies'],         // new, with segment
+    ]))
+    const plan = await planArticleUpload(h.db, first.rows)
+    const s = summarise(first, plan)
+    assert.deepEqual([s.added, s.segmentsSet, s.segmentDiffers.length], [1, 1, 0])
+    await applyArticleUpload(h.db, admin, plan, { fileName: 'seg.xlsx', rowsRead: 2 })
+    const seg = async (code: string) => (await h.db.execute<{ segment: string | null }>(sql`SELECT segment FROM articles WHERE "artCode" = ${code}`)).rows[0].segment
+    assert.equal(await seg('FL0048G'), 'Gents')
+    assert.equal(await seg('FL0049L'), 'Ladies')
+    const second = parseArticleSheet(sheet([[null, 'FL-48', 'FL0048G', 'Black Black', 'BKBK', 10, 6, 'Flite', 'Kids']]))
+    const p2 = await planArticleUpload(h.db, second.rows)
+    const s2 = summarise(second, p2)
+    assert.deepEqual([s2.segmentsSet, s2.segmentDiffers.length], [0, 1])
+    await applyArticleUpload(h.db, admin, p2, { fileName: 'seg2.xlsx', rowsRead: 1 })
+    assert.equal(await seg('FL0048G'), 'Gents')
   })
 })

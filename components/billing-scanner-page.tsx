@@ -937,8 +937,8 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
           defaultValue="camera"
           className="w-full"
           onValueChange={tab => {
-            if (tab === 'camera') { if (!isCameraActive) startCamera() }
-            else stopCamera()
+            // The camera starts only when "Scan with camera" is tapped.
+            if (tab !== 'camera') stopCamera()
           }}
         >
           <TabsList className="grid w-full grid-cols-3">
@@ -995,7 +995,11 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="relative bg-black rounded-lg overflow-hidden aspect-[4/3] sm:aspect-video">
+                <button type="button" onClick={isCameraActive ? stopCamera : startCamera}
+                  className={`w-full rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors ${isCameraActive ? 'border border-border hover:bg-muted' : 'bg-foreground text-background hover:opacity-90'}`}>
+                  {isCameraActive ? 'Stop camera' : 'Scan with camera'}
+                </button>
+                <div className={`relative bg-black rounded-lg overflow-hidden aspect-[4/3] sm:aspect-video ${isCameraActive ? '' : 'hidden'}`}>
                   <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
                   <canvas ref={canvasRef} className="hidden" />
                   {isCameraActive && (
@@ -1006,24 +1010,6 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
                       </div>
                     </div>
                   )}
-                  {!isCameraActive && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/60 pointer-events-none">
-                      <p className="text-white/60 text-sm font-medium">Camera not active</p>
-                    </div>
-                  )}
-                  <button type="button" aria-label={isCameraActive ? 'Stop camera' : 'Start camera'}
-                    onClick={isCameraActive ? stopCamera : startCamera}
-                    className="absolute top-2 right-2 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/75 transition-colors">
-                    {isCameraActive ? (
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
-                        <rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" />
-                      </svg>
-                    ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
-                        <polygon points="5 3 19 12 5 21 5 3" />
-                      </svg>
-                    )}
-                  </button>
                 </div>
                 <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
                 <Button variant="outline" className="w-full" disabled={uploadProcessing || isCameraActive}

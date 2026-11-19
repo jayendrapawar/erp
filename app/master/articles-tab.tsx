@@ -7,6 +7,7 @@ import type { CatalogReviewItem, ArticleUploadResult } from '@/app/actions/artic
 import { ARTICLE_UPLOAD_COLUMNS, articleTemplateCsv } from '@/lib/catalog/article-upload-columns'
 import type { MissingArticle } from '@/lib/catalog/missing-articles'
 import { expandSizeRange } from '@/lib/catalog/sizes'
+import { SEGMENTS } from '@/lib/catalog/assortments'
 import type { Article } from '@/app/actions/articles'
 import { NewArticleDialog } from '@/components/scanner/new-article-dialog'
 import { parseQr } from '@/lib/qr-parser'
@@ -21,6 +22,7 @@ type ArticleForm = {
   maxSize: string
   minSize: string
   customSizes: string
+  segment: string
 }
 
 const EMPTY_FORM: ArticleForm = {
@@ -31,6 +33,7 @@ const EMPTY_FORM: ArticleForm = {
   maxSize: '',
   minSize: '',
   customSizes: '',
+  segment: '',
 }
 
 interface Props {
@@ -161,6 +164,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
         const parts = [`Added ${s.added + s.addedPending} article colour(s).`]
         if (s.addedPending) parts.push(`${s.addedPending} of them have no colour code yet.`)
         if (s.filled) parts.push(`${s.filled} colour(s) got their colour code.`)
+        if (s.segmentsSet) parts.push(`${s.segmentsSet} got their segment.`)
         parts.push(`${s.alreadyThere} were already in the master.`)
         if (res.resolvedScans) parts.push(`${res.resolvedScans} waiting box scan(s) moved into stock.`)
         setImportMsg({ type: 'ok', text: parts.join(' ') })
@@ -187,7 +191,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
   }
 
   const filtered = useMemo(() =>
-    fuzzyFilter(showRetired ? articleList : articleList.filter(a => a.active), search, a => [a.artName, a.artCode, a.color, a.colorCode])
+    fuzzyFilter(showRetired ? articleList : articleList.filter(a => a.active), search, a => [a.artName, a.artCode, a.color, a.colorCode, a.segment ?? ''])
   , [articleList, search, showRetired])
 
   function openAdd() {
@@ -207,6 +211,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
       maxSize:   a.maxSize,
       minSize:   a.minSize,
       customSizes: '',
+      segment:   a.segment ?? '',
     })
     setColors([{ color: a.color, colorCode: a.colorCode }])
     setFormError('')
@@ -259,6 +264,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
               minSize: form.minSize,
               maxSize: form.maxSize,
               customSizes: form.customSizes,
+              segment: form.segment,
             }
             updated = await saveArticle(payload)
           }
@@ -272,6 +278,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
             minSize: form.minSize,
             maxSize: form.maxSize,
             customSizes: form.customSizes,
+            segment: form.segment,
           }
           updated = await saveArticle(payload)
         }
@@ -371,8 +378,15 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
             <li className="font-medium">{`${uploadPreview.summary.addedPending} new article colours without colour code (kept by colour name; code added at first scan)`}</li>
             {uploadPreview.summary.filled > 0 && <li className="font-medium">{`${uploadPreview.summary.filled} existing colours get their colour code`}</li>}
             <li>{`${uploadPreview.summary.alreadyThere} already in the master (skipped)`}</li>
+            {uploadPreview.summary.segmentsSet > 0 && <li className="font-medium">{`${uploadPreview.summary.segmentsSet} existing article colours get their segment`}</li>}
+            {uploadPreview.summary.segmentDiffers.length > 0 && <li className="text-amber-700 dark:text-amber-400">{`${uploadPreview.summary.segmentDiffers.length} have a different segment in the master (not changed; listed below)`}</li>}
             {uploadPreview.summary.problems.length > 0 && <li className="text-red-600">{`${uploadPreview.summary.problems.length} row(s) cannot be read and will be skipped`}</li>}
           </ul>
+          {uploadPreview.summary.segmentDiffers.length > 0 && (
+            <div className="mt-2 max-h-32 overflow-y-auto rounded-lg bg-background p-2 text-xs text-amber-700 dark:text-amber-400">
+              {uploadPreview.summary.segmentDiffers.slice(0, 50).map((p, i) => <p key={i}>{p.message}</p>)}
+            </div>
+          )}
           {uploadPreview.summary.problems.length > 0 && (
             <div className="mt-2 max-h-32 overflow-y-auto rounded-lg bg-background p-2 text-xs text-red-600">
               {uploadPreview.summary.problems.slice(0, 50).map(p => <p key={p.rowNumber}>{p.message}</p>)}
@@ -380,7 +394,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
           )}
           <div className="mt-3 flex gap-2">
             <button
-              disabled={isImporting || uploadPreview.summary.added + uploadPreview.summary.addedPending + uploadPreview.summary.filled === 0}
+              disabled={isImporting || uploadPreview.summary.added + uploadPreview.summary.addedPending + uploadPreview.summary.filled + uploadPreview.summary.segmentsSet === 0}
               onClick={() => sendUpload(uploadFile, true)}
               className="rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background disabled:opacity-50"
             >
@@ -508,6 +522,10 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
               )}
             </div>
             <div className="px-4 pb-3 flex gap-4 text-sm">
+              <div>
+                <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide block">Segment</span>
+                <span className="text-foreground font-medium">{a.segment || '—'}</span>
+              </div>
               {a.minSize && (
                 <div>
                   <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide block">Min Size</span>
@@ -548,6 +566,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                 <th className="text-left pl-4 pr-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">#</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Article Name</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Article Code</th>
+                <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Segment</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Color</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Color Code</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Min Size</th>
@@ -563,6 +582,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                     <p className="font-medium text-foreground truncate text-sm" title={a.retiredReason ?? a.artName}>{a.artName || '—'}<StatusBadge a={a} /></p>
                   </td>
                   <td className="px-2 py-3 font-mono text-xs text-foreground whitespace-nowrap">{a.artCode || '—'}{mrpsByCode[mrpKey(a.artCode)]?.length ? <span className="block font-sans text-[10px] text-muted-foreground">MRPs: {mrpsByCode[mrpKey(a.artCode)].join(', ')}</span> : null}</td>
+                  <td className="px-2 py-3 text-sm text-foreground whitespace-nowrap">{a.segment || <span className="text-muted-foreground">—</span>}</td>
                   <td className="px-2 py-3 text-sm text-foreground whitespace-nowrap">{a.color || '—'}</td>
                   <td className="px-2 py-3 whitespace-nowrap">
                     {a.colorCode ? (
@@ -652,6 +672,17 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                     className={inputCls}
                     placeholder="e.g. AC-2024"
                   />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[11px] font-semibold text-foreground uppercase tracking-wider block mb-1.5">Segment</label>
+                  <select
+                    value={form.segment}
+                    onChange={e => setForm(f => ({ ...f, segment: e.target.value }))}
+                    className={inputCls}
+                  >
+                    <option value="">Not set</option>
+                    {SEGMENTS.map(sg => <option key={sg} value={sg}>{sg}</option>)}
+                  </select>
                 </div>
 
                 {modalMode === 'add' ? (

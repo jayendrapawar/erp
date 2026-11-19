@@ -271,7 +271,7 @@ export async function expectedStock(db: DbOrTx, search = ''): Promise<ExpectedSt
   }))
 }
 
-async function refreshBillStatus(tx: DbOrTx, billId: number) {
+export async function refreshBillStatus(tx: DbOrTx, billId: number) {
   await tx.execute(sql`
     UPDATE purchase_bills b SET
       status = CASE WHEN x.n = 0 THEN 'expected' WHEN x.n < b."totalCartons" THEN 'partial' ELSE 'received' END,
@@ -391,7 +391,7 @@ export async function receiveCarton(db: Db, actor: Actor, input: { rawInput: str
   })
 }
 
-async function outcomeFor(tx: DbOrTx, receiptId: number, label: string, warnings: string[]): Promise<ReceiveOutcome> {
+export async function outcomeFor(tx: DbOrTx, receiptId: number, label: string, warnings: string[]): Promise<ReceiveOutcome> {
   const r = await tx.execute<Record<string, unknown>>(sql`
     SELECT c.id, c.match, c."billId", b."refNo", l."lineNo", l.cartons, c."postedAt", c."postedPairs", l."assortmentId", (l."sizeFrom" = l."sizeTo") AS single,
            (SELECT count(*) FROM carton_receipts x WHERE x."billLineId" = c."billLineId" AND x.status = 'active')::int AS received
@@ -414,7 +414,7 @@ async function outcomeFor(tx: DbOrTx, receiptId: number, label: string, warnings
  * A carton posts only when its line has an assortment and every size resolves to an active SKU;
  * otherwise it stays checked-only (see the note at the top). Set-based.
  */
-async function postReceivedCartons(tx: Tx, actor: Actor, receiptIds: number[]): Promise<{ posted: number; pending: number }> {
+export async function postReceivedCartons(tx: Tx, actor: Actor, receiptIds: number[]): Promise<{ posted: number; pending: number }> {
   const where = sql`c.id IN (SELECT json_array_elements_text(${J(receiptIds)}::json)::bigint)`
   const rows = (await tx.execute<{ receiptId: number; assortmentId: number | null; sizes: AssortmentSize[] | null; articleCode: string; colourCode: string; sizeFrom: string; sizeTo: string; pairsPerCarton: number }>(sql`
     SELECT c.id AS "receiptId", l."assortmentId", a.sizes, c."articleCode", c."colourCode", l."sizeFrom", l."sizeTo", l."pairsPerCarton"

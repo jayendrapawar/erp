@@ -110,3 +110,25 @@ Not cached; no polling. Receiving refreshes the header figures at most every 2 s
   factory seconds. Used to match bill lines and labels; a carton with a letter other than A gets a warning.
 - Flite PU articles and assortments are not in the master yet, so the four sample bills' cartons
   would be recorded but not added to stock until they are.
+
+## Manual carton entry (label damaged), 20 Nov 2026
+
+Purchases → Receive → **Manual entry** (`lib/purchases/manual-carton.ts`, `components/purchases/manual-carton-panel.tsx`):
+
+1. Scan **one pair box** from the carton (camera, USB scanner or typed): article, colour, size, MRP, mfg month.
+2. Choose the carton's **size range** from the open proforma invoice lines for that article + colour
+   (only ranges that contain the box's size; chosen automatically when only one fits).
+   **Pairs per carton always come from the invoice line** — never typed. Not on an open invoice →
+   cannot be entered by hand (upload the invoice, or scan the boxes with the warehouse scanner).
+3. Contents by size: the line's assortment; else the only active assortment that fits (division +
+   pairs per carton + range), or the one matching the article's segment; else the receiver types
+   pairs per size (must add up to the invoice's pairs per carton) and chooses the segment — saved
+   to **Master → Assortments** (source manual, audited) and set on every open line it now fits;
+   the article gets that segment if it had none.
+
+The carton is then received exactly like a scanned one (same stock posting, same undo). The pair
+box's label is the receipt key (`manual:box:…`), so one box cannot receive two cartons. 2 reads
+for step 1; 1 transaction (~12–16 statements) to receive.
+
+All scanners (warehouse, Direct Billing, order billing, receive) start the camera only when
+"Scan with camera" is tapped.
