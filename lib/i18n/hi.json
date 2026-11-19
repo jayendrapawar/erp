@@ -1059,5 +1059,10 @@
   "Gents, Ladies or Kids. You can keep this column; it is not saved yet (coming with the segment update).": "Gents, Ladies या Kids। यह कॉलम रख सकते हैं; अभी सेव नहीं होता (सेगमेंट अपडेट के साथ आएगा)।",
   "Row {0}: artName, artCode and color are all required.": "पंक्ति {0}: artName, artCode और color तीनों ज़रूरी हैं।",
   "Row {0} ({1} {2}): {3}": "पंक्ति {0} ({1} {2}): {3}",
-  "Row {0} ({1} {2}): no sizes.": "पंक्ति {0} ({1} {2}): कोई साइज़ नहीं।"
+  "Row {0} ({1} {2}): no sizes.": "पंक्ति {0} ({1} {2}): कोई साइज़ नहीं।",
+  "Draft bills": "ड्राफ़्ट बिल",
+  "Draft bills ({0})": "ड्राफ़्ट बिल ({0})",
+  "This bill: draft #{0}": "यह बिल: ड्राफ़्ट #{0}",
+  "This bill: draft #{0} · saving…": "यह बिल: ड्राफ़्ट #{0} · सेव हो रहा है…",
+  "No other saved drafts.": "कोई और सेव किया ड्राफ़्ट नहीं।"
 }

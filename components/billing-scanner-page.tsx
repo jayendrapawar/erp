@@ -460,9 +460,9 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
   const bannerTimer                  = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ── Manual entry ───────────────────────────────────────────────────────────
+  const [draftsOpen, setDraftsOpen] = useState(false)
   const [manualArt, setManualArt] = useState('')
   const [manualMrp, setManualMrp] = useState('')
-  const [manualDiv, setManualDiv] = useState('')
   const [manualQty, setManualQty] = useState<number | ''>(1)
 
   // Article search for manual entry
@@ -702,7 +702,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
     const mrp = parseFloat(manualMrp) || 0
     const qty = Number(manualQty) || 1
     if (!art) { showError('Article number is required.'); return }
-    addManualLine(art, mrp, manualDiv, qty)
+    addManualLine(art, mrp, '', qty)
     setManualQty(1)
     setManualArt('')
     setArtQuery('')
@@ -816,6 +816,8 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
   const sgstAmt    = Math.round(afterDisc * SGST_PCT / 100 * 100) / 100
   const netAmt     = Math.round((afterDisc + cgstAmt + sgstAmt) * 100) / 100
 
+  const otherDrafts = drafts.filter(d => d.id !== draftId)
+
   // ── Banners component ──────────────────────────────────────────────────────
   function Banners() {
     return (
@@ -843,25 +845,33 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
 
         {/* ── Direct Billing: saved drafts ── */}
         {directBill && (draftId != null || drafts.some(d => d.id !== draftId)) && (
-          <section aria-label="Saved drafts" className="rounded-2xl border border-border bg-card p-3 space-y-2">
-            {draftId != null && (
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-muted-foreground">
-                  Saved automatically as draft #{draftId}{pendingScans > 0 ? ' · saving…' : ''}
-                </p>
-                {billLines.length > 0 && (
-                  <button type="button" onClick={resetLocal} disabled={pendingScans > 0}
-                    className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50">
-                    Start a new bill (keep this as draft)
-                  </button>
-                )}
-              </div>
+          <section aria-label="Saved drafts" className="rounded-2xl border border-border bg-card">
+            {/* One-line bar; tap to open the drafts (the list used to fill the screen). */}
+            <button type="button" onClick={() => setDraftsOpen(o => !o)} aria-expanded={draftsOpen}
+              className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left">
+              <span className="text-sm font-semibold text-foreground">
+                {otherDrafts.length > 0 ? `Draft bills (${otherDrafts.length})` : 'Draft bills'}
+              </span>
+              <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                {draftId != null && <span>{pendingScans > 0 ? `This bill: draft #${draftId} · saving…` : `This bill: draft #${draftId}`}</span>}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-4 w-4 transition-transform ${draftsOpen ? 'rotate-180' : ''}`} aria-hidden>
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </span>
+            </button>
+            {draftsOpen && (
+            <div className="space-y-2 border-t border-border p-3">
+            {draftId != null && billLines.length > 0 && (
+              <button type="button" onClick={() => { resetLocal(); setDraftsOpen(false) }} disabled={pendingScans > 0}
+                className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50">
+                Start a new bill (keep this as draft)
+              </button>
             )}
-            {drafts.filter(d => d.id !== draftId).length > 0 && (
+            {otherDrafts.length === 0 && <p className="text-xs text-muted-foreground">No other saved drafts.</p>}
+            {otherDrafts.length > 0 && (
               <>
-                <p className="text-sm font-semibold text-foreground">Saved drafts</p>
-                <ul className="divide-y divide-border rounded-xl border border-border">
-                  {drafts.filter(d => d.id !== draftId).map(d => (
+                <ul className="max-h-[45dvh] divide-y divide-border overflow-y-auto rounded-xl border border-border">
+                  {otherDrafts.map(d => (
                     <li key={d.id} className="flex items-center gap-2 px-3 py-2">
                       <div className="flex-1 min-w-0">
                         <p className="text-sm text-foreground truncate">{d.shopkeeperName || 'No retailer yet'} <span className="text-muted-foreground">· #{d.id}</span></p>
@@ -869,12 +879,14 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
                           {d.boxes} box{d.boxes === 1 ? '' : 'es'}{d.manualPairs ? ` + ${d.manualPairs} typed` : ''} · {d.billerName || '—'} · {new Date(d.updatedAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                         </p>
                       </div>
-                      <button type="button" onClick={() => resumeDraft(d.id)} className="rounded-lg bg-foreground text-background px-2.5 py-1 text-xs font-semibold">Resume</button>
+                      <button type="button" onClick={() => { setDraftsOpen(false); resumeDraft(d.id) }} className="rounded-lg bg-foreground text-background px-2.5 py-1 text-xs font-semibold">Resume</button>
                       <button type="button" onClick={() => discardDraftById(d.id)} className="rounded-lg border border-border px-2.5 py-1 text-xs text-destructive hover:bg-muted">Discard</button>
                     </li>
                   ))}
                 </ul>
               </>
+            )}
+            </div>
             )}
           </section>
         )}
@@ -1106,17 +1118,6 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
                         onChange={e => setManualQty(e.target.value === '' ? '' : parseInt(e.target.value) || 1)}
                         placeholder="1" className="h-8 text-sm" />
                     </div>
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="b-div" className="text-xs">Division</Label>
-                    <select id="b-div" value={manualDiv} onChange={e => setManualDiv(e.target.value)}
-                      className="flex h-8 w-full rounded-md border border-input bg-background px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
-                      <option value="">—</option>
-                      <option value="Flite PU">Flite PU</option>
-                      <option value="Flite EVA">Flite EVA</option>
-                      <option value="Sparx">Sparx</option>
-                      <option value="Bahamas">Bahamas</option>
-                    </select>
                   </div>
                   <Banners />
                   <Button type="submit" className="w-full h-9 text-sm">Add to Bill</Button>
