@@ -1,5 +1,6 @@
 'use client'
 
+import { playAlreadyScanned, playScanOk } from '@/lib/scan-sound'
 import { useState, useTransition, useRef, useCallback, useEffect } from 'react'
 import jsQR from 'jsqr'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
@@ -265,21 +266,6 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     scanMsgTimer.current = setTimeout(() => setScanMsg(null), 3000)
   }
 
-  // ── audio / haptic ───────────────────────────────────────────────────────────
-  function triggerFeedback() {
-    try {
-      const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
-      const osc = ctx.createOscillator(); const gain = ctx.createGain()
-      osc.connect(gain); gain.connect(ctx.destination)
-      osc.type = 'sine'; osc.frequency.setValueAtTime(1046, ctx.currentTime)
-      gain.gain.setValueAtTime(0.3, ctx.currentTime)
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15)
-      osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.15)
-      osc.onended = () => ctx.close()
-    } catch { /* ignore */ }
-    try { if (navigator.vibrate) navigator.vibrate(60) } catch { /* ignore */ }
-  }
-
   // ── handle a decoded QR string ───────────────────────────────────────────────
   function handleQrDecode(raw: string) {
     const devSuffix = showDevTrackingRef.current ? ` (${raw})` : ''
@@ -320,6 +306,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     )
     if (alreadyScanned) {
       showMsg('warn', `${art} Sz ${size} — Duplicate QR, already scanned` + devSuffix)
+      playAlreadyScanned()
       return
     }
 
@@ -355,7 +342,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       { type: 'qr', key, raw, label: `${extArt} / SZ(${extSize})` }
     ])
     setLastScannedMsg(successText)
-    triggerFeedback()
+    playScanOk()
     showMsg('ok', successText + devSuffix)
   }
 

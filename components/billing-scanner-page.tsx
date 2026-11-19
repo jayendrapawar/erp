@@ -1,5 +1,6 @@
 'use client'
 
+import { playAlreadyScanned, playScanOk } from '@/lib/scan-sound'
 import jsQR from 'jsqr'
 import {
   useCallback, useEffect, useId, useImperativeHandle, useMemo,
@@ -314,6 +315,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
       } else {
         dropBox(key, raw)
         showWarning(out.message)
+        if (out.status === 'on_other_bill') playAlreadyScanned()
       }
     } catch (e) {
       dropBox(key, raw)
@@ -505,24 +507,6 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
     setSuccessMsg(null); setWarnMsg(null); setErrorMsg(msg)
   }
 
-  // ── Audio / haptic ─────────────────────────────────────────────────────────
-
-  function triggerFeedback() {
-    try {
-      const ctx  = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
-      const osc  = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.connect(gain); gain.connect(ctx.destination)
-      osc.type = 'sine'
-      osc.frequency.setValueAtTime(1046, ctx.currentTime)
-      gain.gain.setValueAtTime(0.35, ctx.currentTime)
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18)
-      osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.18)
-      osc.onended = () => ctx.close()
-    } catch { /* ignore */ }
-    try { if (navigator.vibrate) navigator.vibrate(80) } catch { /* ignore */ }
-  }
-
   // ── Bill line management ───────────────────────────────────────────────────
 
   function addScannedBox(art: string, mrp: number, division: string, rawQr: string) {
@@ -531,6 +515,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
     const prev = billLinesRef.current
     if (prev.some(l => l.boxCodes.some(c => (c.split('-').pop() ?? c) === boxCode))) {
       showWarning(`Box already scanned: ${art}`)
+      playAlreadyScanned()
       return
     }
     const existing = prev.find(l => l.key === key)
@@ -538,7 +523,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
       ? prev.map(l => l.key === key ? { ...l, qty: l.qty + 1, boxCodes: [...l.boxCodes, rawQr] } : l)
       : [...prev, { key, artNumber: art, mrp, division, qty: 1, boxCodes: [rawQr], notInStock: 0 }])
     showSuccess(existing ? `+1 box: ${art}` : `Added: ${art} @ ₹${mrp.toFixed(2)}`)
-    triggerFeedback()
+    playScanOk()
     if (directBill) void persistScan(key, rawQr, art)
   }
 

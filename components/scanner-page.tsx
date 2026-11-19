@@ -1,5 +1,6 @@
 'use client'
 
+import { playAlreadyScanned, playScanOk } from '@/lib/scan-sound'
 import jsQR from 'jsqr'
 import { User } from 'lucide-react'
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
@@ -223,28 +224,6 @@ export function ScannerPage() {
       }
     }
   }, [])
-
-  function triggerScanFeedback() {
-    try {
-      const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.connect(gain)
-      gain.connect(ctx.destination)
-      osc.type = 'sine'
-      osc.frequency.setValueAtTime(1046, ctx.currentTime)
-      gain.gain.setValueAtTime(0.35, ctx.currentTime)
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18)
-      osc.start(ctx.currentTime)
-      osc.stop(ctx.currentTime + 0.18)
-      osc.onended = () => ctx.close()
-    } catch {
-    }
-    try {
-      if (navigator.vibrate) navigator.vibrate(80)
-    } catch {
-    }
-  }
 
   function showSuccess(msg: string) {
     if (successTimerRef.current) clearTimeout(successTimerRef.current)
@@ -496,9 +475,10 @@ export function ScannerPage() {
         : undefined
       if (dup) {
         showWarning(dup.scannedByName ? `${t('duplicateByUser')} ${dup.scannedByName}` : t('duplicateQR'))
+        playAlreadyScanned()
         return
       }
-      triggerScanFeedback()
+      playScanOk()
       const entry: OfflineEntry = {
         tempId:        clientEventId,
         entryType:     'scan',
@@ -536,6 +516,7 @@ export function ScannerPage() {
       }
       if (masterCheck.status === 'duplicate') {
         showWarning(masterCheck.scannedByName ? t('duplicateByUser') + ' ' + masterCheck.scannedByName : t('duplicateQR'))
+        playAlreadyScanned()
         return
       }
       if (masterCheck.status === 'carton' || masterCheck.status === 'invalid') {
@@ -579,6 +560,7 @@ export function ScannerPage() {
         if (res.error === DUPLICATE_QR_ERROR) {
           const who = res.scannedByName
           showWarning(who ? `${t('duplicateByUser')} ${who}` : t('duplicateQR'))
+          playAlreadyScanned()
         } else if (res.error === 'ERROR') showError(t('scanRecordError'))
         else showWarning(res.message)
         return false
@@ -594,7 +576,7 @@ export function ScannerPage() {
   function completeCameraScan(scan: Omit<RecentScan, 'masterArtName' | 'masterColorName'> & Partial<Pick<RecentScan, 'masterArtName' | 'masterColorName'>>, message: string) {
     setLastCameraScan({ ...scan, masterArtName: scan.masterArtName ?? '—', masterColorName: scan.masterColorName ?? '—' })
     setDailyScanCount(incrementDailyScanCount())
-    triggerScanFeedback()
+    playScanOk()
     showSuccess(message)
     loadRecentScans()
   }
@@ -619,6 +601,7 @@ export function ScannerPage() {
         if (result.error === DUPLICATE_QR_ERROR) {
           const who = result.scannedByName
           showWarning(who ? `${t('duplicateByUser')} ${who}` : t('duplicateQR'))
+          playAlreadyScanned()
           resumeAfterArticleDialog()
           return true
         }
@@ -645,7 +628,7 @@ export function ScannerPage() {
     }
     setLastCameraScan(savedScan ?? null)
     setDailyScanCount(incrementDailyScanCount())
-    triggerScanFeedback()
+    playScanOk()
     showSuccess('Article linked and scan saved.')
     resumeAfterArticleDialog()
   }
