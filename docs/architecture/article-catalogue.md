@@ -103,3 +103,22 @@ with `--trust-source`. Reports: `docs/catalog/sparx-reconciliation.md` and
 Restore the pre-import backup (`npm run db:restore`), or run
 `db/migrations/0003_article_catalog.down.sql` after re-activating retired rows
 (`UPDATE articles SET active = true, "retiredAt" = NULL, "retiredReason" = NULL WHERE "retiredReason" LIKE 'Not in approved catalogue%'`).
+
+## Article list upload (Master → Articles → Upload Excel / CSV)
+
+Code: `lib/catalog/article-upload.ts` (shared by the screen and `scripts/catalog/upload-articles.ts`);
+column guide in `lib/catalog/article-upload-columns.ts` (shown on screen under "How to upload").
+
+- Columns: artName, artCode, color, colorCode (optional), minSize, maxSize, Stock source (optional →
+  division: Sparx, PU → Flite PU, Flite/EVA → Flite EVA, Bahamas), Segment (accepted, not stored yet).
+- Add-only: never deletes, retires or edits an existing variant. Preview first (1 read), then one
+  transaction (~8–15 statements whatever the row count).
+- Rows without a colour code are stored as "colour code pending" variants (colorCode = '', keyed by
+  article code + colour name). The code is filled (same row id) by:
+  1. the New Article form: its colour list shows pending colours of the scanned article code first;
+     choosing one gives that variant the scanned colour code;
+  2. a later upload that has the code for the same article code + colour name;
+  3. editing the article in the master.
+- Boxes scanned before their article existed are posted to stock when the upload adds the code.
+
+Loaded 19 Nov 2026: `Relaxo filled Article.xlsx` (Sparx, Flite PU, Flite EVA; 3 "Test Article" rows left out).

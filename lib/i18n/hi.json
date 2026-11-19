@@ -35,7 +35,6 @@
   "Coming soon": "जल्द आ रहा है",
   "Inventory analytics and business reports": "इन्वेंटरी विश्लेषण और व्यापार रिपोर्ट",
   "Scan warehouse inventory items": "वेयरहाउस का माल स्कैन करें",
-
   "Add a short note saying what was decided.": "क्या तय हुआ, उसका छोटा नोट लिखें।",
   "An article with this article code and colour code already exists.": "इस आर्टिकल कोड और कलर कोड वाला आर्टिकल पहले से है।",
   "Article not found.": "आर्टिकल नहीं मिला।",
@@ -84,7 +83,6 @@
   "Failed to load catalogue": "कैटलॉग लोड नहीं हुआ",
   "Choose one or more bill PDFs.": "एक या ज़्यादा बिल PDF चुनें।",
   "Upload failed.{0}": "अपलोड नहीं हुआ।{0}",
-
   "· MRPs {0}": "· MRP {0}",
   "(not in the approved catalogue)": "(मंज़ूर कैटलॉग में नहीं)",
   ")? This action cannot be undone.": ")? यह वापस नहीं हो सकता।",
@@ -181,7 +179,6 @@
   "What was decided or fixed?": "क्या तय या ठीक किया गया?",
   "Why ignore these scans? (for example: test labels)": "ये स्कैन क्यों अनदेखे करें? (जैसे: टेस्ट लेबल)",
   "Why is this not a problem?": "यह दिक्कत क्यों नहीं है?",
-
   "· code": "· कोड",
   "+ Add": "+ जोड़ें",
   "= sizes": "= साइज़",
@@ -242,7 +239,6 @@
   "Upload it here. You will see every change before anything is saved.": "यहाँ अपलोड करें। सेव होने से पहले हर बदलाव दिखेगा।",
   "Ver.": "संस्करण",
   "with errors": "गड़बड़ी वाली",
-
   "Articles (": "आर्टिकल (",
   "Assign Role": "भूमिका दें",
   "Assortments (": "असॉर्टमेंट (",
@@ -260,7 +256,6 @@
   "Suppliers (": "सप्लायर (",
   "Users (": "यूज़र (",
   "Users, retailers, suppliers, articles & sets": "यूज़र, रिटेलर, सप्लायर, आर्टिकल और सेट",
-
   "? This cannot be undone.": "? यह वापस नहीं हो सकता।",
   "+ Add Set": "+ सेट जोड़ें",
   "Add Set": "सेट जोड़ें",
@@ -280,7 +275,6 @@
   "size:qty": "साइज़:मात्रा",
   "Sizes × Qtys": "साइज़ × मात्रा",
   "Total:": "कुल:",
-
   "{0} days": "{0} दिन",
   "+ Add Supplier": "+ सप्लायर जोड़ें",
   "15 characters": "15 अक्षर",
@@ -309,7 +303,6 @@
   "Search suppliers…": "सप्लायर खोजें…",
   "Status": "स्थिति",
   "— Select day —": "— दिन चुनें —",
-
   "+ Add Retailer": "+ रिटेलर जोड़ें",
   "Add Retailer": "रिटेलर जोड़ें",
   "All {0} row{1} already exist — nothing imported.": "सभी {0} पंक्तियाँ पहले से हैं — कुछ इम्पोर्ट नहीं हुआ।",
@@ -339,7 +332,6 @@
   "Salesman name": "सेल्समैन का नाम",
   "Search retailers…": "रिटेलर खोजें…",
   "Street address": "गली / पता",
-
   "Assigned": "असाइन",
   "Out of Stock": "स्टॉक खत्म",
   "← Home": "← होम",
@@ -414,7 +406,6 @@
   "total pairs to procure": "कुल जोड़ी खरीदनी है",
   "Vendor / Shopkeeper": "वेंडर / दुकानदार",
   "vendors affected": "वेंडर पर असर",
-
   "· editing manual qty (max": "· हाथ से मात्रा बदल रहे हैं (अधिकतम",
   "(max": "(अधिकतम",
   "{0} / MANUAL / SZ({1}) — {2} verified": "{0} / हाथ से / SZ({1}) — {2} जाँचे",
@@ -495,7 +486,6 @@
   "Verified": "जाँच हुई",
   "Verify packed orders and generate bills": "पैक ऑर्डर जाँचें और बिल बनाएं",
   "Within City": "शहर के अंदर",
-
   "✓ Delivered": "✓ डिलीवर हुआ",
   "Agent name": "एजेंट का नाम",
   "Confirm Pick Up": "पिक-अप पक्का करें",
@@ -512,7 +502,6 @@
   "Back to Home": "होम पर वापस",
   "No Role Assigned": "कोई भूमिका नहीं दी गई",
   "Your account doesn't have an order management role yet. Please contact your admin to assign a role.": "आपके खाते को अभी ऑर्डर की कोई भूमिका नहीं मिली है। भूमिका के लिए एडमिन से बात करें।",
-
   "✓ Pack Order": "✓ ऑर्डर पैक करें",
   "All Orders": "सभी ऑर्डर",
   "Back": "वापस",
@@ -535,7 +524,6 @@
   "Size: {0}": "साइज़: {0}",
   "To Pack": "पैक करना है",
   "Total pairs": "कुल जोड़ी",
-
   "— Skip / No picker —": "— छोड़ें / कोई पिकर नहीं —",
   "{0}m ago": "{0} मिनट पहले",
   "{0}s ago": "{0} सेकंड पहले",
@@ -629,7 +617,6 @@
   "Vendor": "वेंडर",
   "Welcome, {0}": "नमस्ते, {0}",
   "will be printed": "प्रिंट होंगे",
-
   "· saving…": "· सेव हो रहा है…",
   "{0} line{1} · {2} boxes · ₹{3}": "{0} लाइन · {2} बॉक्स · ₹{3}",
   "{0}: this box was not scanned into stock — it will go out as Unscanned dispatch.": "{0}: यह बॉक्स स्टॉक में स्कैन नहीं हुआ था — यह बिना-स्कैन डिस्पैच में जाएगा।",
@@ -702,7 +689,6 @@
   "This line item will be removed from the bill.": "यह लाइन बिल से हट जाएगी।",
   "Toggle flashlight": "फ़्लैशलाइट चालू/बंद",
   "Upload QR Image": "QR फ़ोटो अपलोड करें",
-
   "{0} — Color breakdown": "{0} — कलर के हिसाब से",
   "{0} › {1} — Size breakdown": "{0} › {1} — साइज़ के हिसाब से",
   "All Articles": "सभी आर्टिकल",
@@ -718,7 +704,6 @@
   "tap breadcrumb to go back": "वापस जाने के लिए ऊपर का रास्ता दबाएं",
   "You are offline. Dashboard data requires an internet connection.": "आप ऑफ़लाइन हैं। डैशबोर्ड के लिए इंटरनेट चाहिए।",
   "You are offline. Sign-in requires an internet connection.": "आप ऑफ़लाइन हैं। साइन इन के लिए इंटरनेट चाहिए।",
-
   "— tap a size to correct it": "— ठीक करने के लिए साइज़ दबाएं",
   "· article not in master": "· आर्टिकल मास्टर में नहीं",
   "· retired": "· बंद",
@@ -791,7 +776,6 @@
   "Value at MRP": "MRP पर कीमत",
   "Why undo?": "क्यों वापस करें?",
   "without MRP": "बिना MRP",
-
   "— bills mailed from": "— यहाँ से मेल हुए बिल:",
   "— cartons are checked against the bill and stock comes from scanning their boxes. Add the assortment in Master → Assortments to add stock from the carton itself.": "— कार्टन बिल से मिलाए जाते हैं और स्टॉक उनके बॉक्स स्कैन करने से आता है। कार्टन से ही स्टॉक जोड़ने के लिए मास्टर → असॉर्टमेंट में असॉर्टमेंट जोड़ें।",
   "— switch it on once the stocktake of the whole warehouse is complete. Until then, bills can still be uploaded as PDFs.": "— पूरे वेयरहाउस की स्टॉक गिनती पूरी होने पर इसे चालू करें। तब तक बिल PDF से अपलोड कर सकते हैं।",
@@ -899,7 +883,6 @@
   "Upload bill PDFs": "बिल PDF अपलोड करें",
   "Why cancel this bill?": "यह बिल क्यों रद्द करें?",
   "Working…": "काम हो रहा है…",
-
   "✕ Duplicate": "✕ दोहराया",
   "Also remove the article this scan created (only allowed if nothing else uses it).": "इस स्कैन से बना आर्टिकल भी हटाएं (तभी, जब कहीं और इस्तेमाल न हो)।",
   "Article linked and scan saved.": "आर्टिकल लिंक हुआ और स्कैन सेव हुआ।",
@@ -939,7 +922,6 @@
   "Enter colour name": "कलर का नाम लिखें",
   "For example 6-10 or 11,12,13,1": "जैसे 6-10 या 11,12,13,1",
   "is not in this article's sizes:": "इस आर्टिकल के साइज़ में नहीं है:",
-
   "Finish or close the New Article form first, then scan again.": "पहले नया आर्टिकल फ़ॉर्म पूरा करें या बंद करें, फिर स्कैन करें।",
   "{0}: new article, not in the article master. It stays on the bill; an admin can add it in Master → Articles → Missing articles.": "{0}: नया आर्टिकल, आर्टिकल मास्टर में नहीं है। यह बिल में रहेगा; एडमिन इसे मास्टर → आर्टिकल → मास्टर में नहीं मिले आर्टिकल में जोड़ सकते हैं।",
   "{0}: new colour, not in the article master. It stays on the bill; an admin can add it in Master → Articles → Missing articles.": "{0}: नया कलर, आर्टिकल मास्टर में नहीं है। यह बिल में रहेगा; एडमिन इसे मास्टर → आर्टिकल → मास्टर में नहीं मिले आर्टिकल में जोड़ सकते हैं।",
@@ -965,7 +947,6 @@
   "By": "द्वारा",
   "Flag name…": "फ़्लैग का नाम…",
   "Select Flag:": "फ़्लैग चुनें:",
-
   "{0} box{1} already on another bill: {2}. Undo {3} and save again.": "{0} बॉक्स पहले से दूसरे बिल पर हैं: {2}। {3} वापस करके फिर सेव करें।",
   "Empty or too long QR text.": "QR का टेक्स्ट खाली या बहुत लंबा है।",
   "Invalid request.": "गलत अनुरोध।",
@@ -1023,5 +1004,60 @@
   "Receipt not found or already undone.": "प्राप्ति नहीं मिली या पहले ही वापस हो चुकी।",
   "That assortment does not fit this line (division, pairs per carton and size range must match).": "यह असॉर्टमेंट इस लाइन पर नहीं बैठता (डिवीजन, कार्टन जोड़ी और साइज़ रेंज मेल खाने चाहिए)।",
   "The carton label is missing the article, colour or size range.": "कार्टन लेबल पर आर्टिकल, कलर या साइज़ रेंज नहीं है।",
-  "This is a box label. Scan the outer carton label.": "यह बॉक्स का लेबल है। कार्टन के बाहर का लेबल स्कैन करें।"
+  "This is a box label. Scan the outer carton label.": "यह बॉक्स का लेबल है। कार्टन के बाहर का लेबल स्कैन करें।",
+  "Choose an Excel (.xlsx) or CSV file.": "एक Excel (.xlsx) या CSV फ़ाइल चुनें।",
+  "The file is too large (limit about 900 KB). Split it into two files.": "फ़ाइल बहुत बड़ी है (सीमा लगभग 900 KB)। इसे दो फ़ाइलों में बाँटें।",
+  "Only .xlsx or .csv files can be uploaded. In Excel use File → Save As → Excel Workbook (.xlsx).": "केवल .xlsx या .csv फ़ाइलें अपलोड हो सकती हैं। Excel में File → Save As → Excel Workbook (.xlsx) चुनें।",
+  "The file could not be read. Save it again as .xlsx and retry.": "फ़ाइल पढ़ी नहीं जा सकी। इसे फिर से .xlsx में सेव करके दोबारा कोशिश करें।",
+  "Missing column(s): {0}. The first row must hold the column names shown in \"How to upload\".": "कॉलम नहीं मिले: {0}। पहली पंक्ति में \"अपलोड कैसे करें\" में दिखाए गए कॉलम के नाम होने चाहिए।",
+  "No article rows found below the header row.": "शीर्षक पंक्ति के नीचे कोई आर्टिकल पंक्ति नहीं मिली।",
+  "Added {0} article colour(s).": "{0} आर्टिकल रंग जोड़े गए।",
+  "{0} of them have no colour code yet.": "इनमें से {0} का रंग कोड अभी नहीं है।",
+  "{0} colour(s) got their colour code.": "{0} रंगों को उनका रंग कोड मिला।",
+  "{0} were already in the master.": "{0} पहले से मास्टर में थे।",
+  "{0} waiting box scan(s) moved into stock.": "प्रतीक्षा में {0} बॉक्स स्कैन स्टॉक में आ गए।",
+  "Upload failed: {0}": "अपलोड विफल: {0}",
+  "↑ Upload Excel / CSV": "↑ Excel / CSV अपलोड करें",
+  "Hide help": "मदद छिपाएँ",
+  "How to upload": "अपलोड कैसे करें",
+  "How to upload an article list": "आर्टिकल सूची कैसे अपलोड करें",
+  "Use an Excel file (.xlsx) or a CSV file. Only the first sheet is read.": "Excel फ़ाइल (.xlsx) या CSV फ़ाइल इस्तेमाल करें। केवल पहली शीट पढ़ी जाती है।",
+  "The first row must hold the column names below (any order; capitals and spaces do not matter). Other columns, like id, are ignored.": "पहली पंक्ति में नीचे दिए कॉलम के नाम होने चाहिए (किसी भी क्रम में; बड़े-छोटे अक्षर और स्पेस से फ़र्क नहीं पड़ता)। दूसरे कॉलम, जैसे id, छोड़ दिए जाते हैं।",
+  "One row per article colour. A colour with two size runs (for example 11–13 and 1–5) can be two rows.": "हर आर्टिकल रंग की एक पंक्ति। दो साइज़ रेंज वाले रंग (जैसे 11–13 और 1–5) की दो पंक्तियाँ हो सकती हैं।",
+  "You see a preview first. Nothing is saved until you tap Add to master.": "पहले आपको झलक दिखेगी। \"मास्टर में जोड़ें\" दबाने तक कुछ भी सेव नहीं होता।",
+  "Uploading never deletes or changes articles already in the master. Rows already there are skipped, so the same file can be uploaded again safely.": "अपलोड करने से मास्टर के मौजूदा आर्टिकल कभी हटते या बदलते नहीं। जो पंक्तियाँ पहले से हैं वे छोड़ दी जाती हैं, इसलिए वही फ़ाइल दोबारा सुरक्षित रूप से अपलोड की जा सकती है।",
+  "Column name": "कॉलम का नाम",
+  "Needed?": "ज़रूरी?",
+  "Example": "उदाहरण",
+  "What to enter": "क्या भरें",
+  "Required": "ज़रूरी",
+  "Optional": "वैकल्पिक",
+  "↓ Download template": "↓ टेम्पलेट डाउनलोड करें",
+  "Check before adding": "जोड़ने से पहले जाँचें",
+  "{0} rows read, {1} article codes": "{0} पंक्तियाँ पढ़ी गईं, {1} आर्टिकल कोड",
+  "{0} new article colours with colour code": "रंग कोड वाले {0} नए आर्टिकल रंग",
+  "{0} new article colours without colour code (kept by colour name; code added at first scan)": "बिना रंग कोड के {0} नए आर्टिकल रंग (रंग के नाम से रखे गए; पहले स्कैन पर कोड जुड़ेगा)",
+  "{0} existing colours get their colour code": "{0} मौजूदा रंगों को उनका रंग कोड मिलेगा",
+  "{0} already in the master (skipped)": "{0} पहले से मास्टर में (छोड़े गए)",
+  "{0} row(s) cannot be read and will be skipped": "{0} पंक्तियाँ पढ़ी नहीं जा सकीं और छोड़ दी जाएँगी",
+  "Add to master": "मास्टर में जोड़ें",
+  "Adding…": "जोड़ रहे हैं…",
+  "{0} · code pending": "{0} · कोड बाकी",
+  "pending": "बाकी",
+  "No colour code yet (this article)": "अभी रंग कोड नहीं (यह आर्टिकल)",
+  "Other colours": "दूसरे रंग",
+  "Colours": "रंग",
+  "This colour is in the master without a colour code. Saving gives it code {0}.": "यह रंग मास्टर में बिना रंग कोड के है। सेव करने पर इसे कोड {0} मिलेगा।",
+  "Colours under \"No colour code yet\" are waiting for their code. If this box is one of them, choose it.": "\"अभी रंग कोड नहीं\" वाले रंग अपने कोड की प्रतीक्षा में हैं। अगर यह बॉक्स उनमें से एक है, तो उसे चुनें।",
+  "Article name (family name), e.g. SS-702, PXL-05, FL-48.": "आर्टिकल का नाम (फ़ैमिली नाम), जैसे SS-702, PXL-05, FL-48।",
+  "Article code exactly as on the box label.": "आर्टिकल कोड, ठीक वैसा ही जैसा बॉक्स लेबल पर है।",
+  "Colour name.": "रंग का नाम।",
+  "Colour code from the box label. Leave blank if not known: the row is kept with its colour name, and the code is added when the first box of that colour is scanned.": "बॉक्स लेबल का रंग कोड। पता न हो तो खाली छोड़ें: पंक्ति रंग के नाम से रखी जाती है, और उस रंग का पहला बॉक्स स्कैन होने पर कोड जुड़ जाता है।",
+  "Smallest size. Children’s runs may wrap: minSize 11, maxSize 5 = 11, 12, 13, 1 … 5.": "सबसे छोटा साइज़। बच्चों की रेंज घूम सकती है: minSize 11, maxSize 5 = 11, 12, 13, 1 … 5।",
+  "Largest size.": "सबसे बड़ा साइज़।",
+  "Division: Sparx, PU, Flite (EVA) or Bahamas.": "डिवीज़न: Sparx, PU, Flite (EVA) या Bahamas।",
+  "Gents, Ladies or Kids. You can keep this column; it is not saved yet (coming with the segment update).": "Gents, Ladies या Kids। यह कॉलम रख सकते हैं; अभी सेव नहीं होता (सेगमेंट अपडेट के साथ आएगा)।",
+  "Row {0}: artName, artCode and color are all required.": "पंक्ति {0}: artName, artCode और color तीनों ज़रूरी हैं।",
+  "Row {0} ({1} {2}): {3}": "पंक्ति {0} ({1} {2}): {3}",
+  "Row {0} ({1} {2}): no sizes.": "पंक्ति {0} ({1} {2}): कोई साइज़ नहीं।"
 }

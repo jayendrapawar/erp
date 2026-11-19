@@ -33,6 +33,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
   const [sizes, setSizes] = useState(initialSizes ?? suggestSizes(parsed.articleCode))
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [colours, setColours] = useState<string[]>([])
+  const [pendingColours, setPendingColours] = useState<string[]>([])
   const [selectedKnownName, setSelectedKnownName] = useState(Boolean(existingName))
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
@@ -72,21 +73,23 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
     const exactName = selectedKnownName ? articleName.trim() : matchingName
     if (!exactName) {
       setColours([])
+      setPendingColours([])
       setColourChoice('')
       return
     }
     let cancelled = false
     const timer = setTimeout(() => {
-      getColoursForName(exactName).then((values) => {
+      getColoursForName(exactName, parsed.articleCode).then((values) => {
         if (!cancelled) {
           const names = values.map((value) => value.colorName)
           setColours(names)
+          setPendingColours(values.filter((value) => value.pending).map((value) => value.colorName))
           setColourChoice((choice) => names.includes(choice) ? choice : '')
         }
       }).catch(() => { if (!cancelled) setColours([]) })
     }, 250)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [articleName, matchingName, selectedKnownName])
+  }, [articleName, matchingName, selectedKnownName, parsed.articleCode])
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -205,9 +208,16 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
             <Label htmlFor="new-article-colour">Colour name</Label>
             {colours.length === 0 ? <Input id="new-article-colour" autoFocus={isLockedName} value={otherColour} onChange={(event) => setOtherColour(event.target.value)} disabled={loading} className="h-12 text-base" placeholder="Enter colour name" /> : <select id="new-article-colour" autoFocus={isLockedName} value={colourChoice} disabled={loading} onChange={(event) => { setColourChoice(event.target.value); if (event.target.value !== '__other__') setOtherColour('') }} className="h-12 w-full rounded-lg border border-input bg-background px-3 text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <option value="">Choose a colour</option>
-              {colours.map((colour) => <option key={colour} value={colour}>{colour}</option>)}
+              {pendingColours.length > 0 && <optgroup label="No colour code yet (this article)">
+                {pendingColours.map((colour) => <option key={`p-${colour}`} value={colour}>{colour}</option>)}
+              </optgroup>}
+              <optgroup label={pendingColours.length > 0 ? 'Other colours' : 'Colours'}>
+                {colours.filter((colour) => !pendingColours.includes(colour)).map((colour) => <option key={colour} value={colour}>{colour}</option>)}
+              </optgroup>
               <option value="__other__">Other</option>
             </select>}
+            {pendingColours.includes(colourChoice) && <p className="text-xs text-muted-foreground">{`This colour is in the master without a colour code. Saving gives it code ${parsed.colorCode}.`}</p>}
+            {pendingColours.length > 0 && !colourChoice && <p className="text-xs text-amber-700 dark:text-amber-400">Colours under &quot;No colour code yet&quot; are waiting for their code. If this box is one of them, choose it.</p>}
             {colourChoice === '__other__' && <Input autoFocus value={otherColour} onChange={(event) => setOtherColour(event.target.value)} disabled={loading} className="h-12 text-base" placeholder="Enter colour name" />}
           </div>
 

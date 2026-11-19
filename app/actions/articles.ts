@@ -13,6 +13,7 @@ import { parseQr, isValidWarehouseQr } from '@/lib/qr-parser'
 import { recordBoxScan, resolvePendingScans } from '@/lib/inventory/scan-service'
 import { expandSizeRange, sizeSortOrders, sortSizes } from '@/lib/catalog/sizes'
 import { listMissingArticles, type MissingArticle } from '@/lib/catalog/missing-articles'
+import { applyArticleUpload, csvToCells, parseArticleSheet, planArticleUpload, summarise, xlsxToCells, type UploadSummary } from '@/lib/catalog/article-upload'
 
 export type Article = typeof articles.$inferSelect
 
@@ -117,14 +118,25 @@ export async function searchArticleNames(query: string): Promise<string[]> {
   return rows.map((row) => row.artName)
 }
 
-export async function getColoursForName(name: string): Promise<Array<{ colorName: string; hasCodes: boolean }>> {
+/**
+ * Colour names of an article name for the New Article form. `pending` = a variant of the scanned
+ * article code that is in the master by colour name only (no colour code yet): choosing it gives
+ * that variant the scanned colour code.
+ */
+export async function getColoursForName(name: string, artCode = ''): Promise<Array<{ colorName: string; hasCodes: boolean; pending: boolean }>> {
   await requirePermission('articles.view')
+  const code = normalizeArticleValue(artCode)
   const rows = await db.select({ colorName: articleColors.colorName, artCode: articles.artCode, colorCode: articles.colorCode })
     .from(articleColors).innerJoin(articles, eq(articles.id, articleColors.articleId))
-    .where(sql`${NORM(articles.artName)} = ${normalizeArticleValue(name)} AND ${articles.active}`)
-  const result = new Map<string, boolean>()
-  for (const row of rows) result.set(row.colorName, (result.get(row.colorName) ?? false) || Boolean(normalizeArticleValue(row.artCode) && normalizeArticleValue(row.colorCode)))
-  return [...result].map(([colorName, hasCodes]) => ({ colorName, hasCodes }))
+    .where(sql`(${NORM(articles.artName)} = ${normalizeArticleValue(name)} OR (${code} <> '' AND ${NORM(articles.artCode)} = ${code})) AND ${articles.active}`)
+  const result = new Map<string, { hasCodes: boolean; pending: boolean }>()
+  for (const row of rows) {
+    const prev = result.get(row.colorName) ?? { hasCodes: false, pending: false }
+    const hasCode = Boolean(normalizeArticleValue(row.artCode) && normalizeArticleValue(row.colorCode))
+    const pending = Boolean(code) && normalizeArticleValue(row.artCode) === code && !normalizeArticleValue(row.colorCode)
+    result.set(row.colorName, { hasCodes: prev.hasCodes || hasCode, pending: prev.pending || pending })
+  }
+  return [...result].map(([colorName, v]) => ({ colorName, ...v }))
 }
 
 // ── Writes from the Master screen ────────────────────────────────────────────
@@ -210,75 +222,39 @@ export async function deleteArticle(id: number): Promise<Article[]> {
   return db.select().from(articles).orderBy(asc(articles.artName))
 }
 
-/** Bulk import from CSV. All-or-nothing: any conflict rolls back the whole file. */
-export async function importArticles(
-  rows: Array<Omit<Article, 'id' | 'reviewStatus' | 'active' | 'source' | 'division' | 'catalogArticleId' | 'retiredAt' | 'retiredReason'> & { customSizes?: string }>,
-): Promise<{ imported: number; skipped: number; list: Article[] }> {
+export type ArticleUploadResult =
+  | { ok: false; error: string }
+  | { ok: true; applied: boolean; summary: UploadSummary; resolvedScans: number; list?: Article[] }
+
+/**
+ * Upload an article list (.xlsx or .csv; column guide in lib/catalog/article-upload).
+ * `apply` false = preview only (1 read). `apply` true = add-only write in one transaction.
+ */
+export async function uploadArticleList(form: FormData): Promise<ArticleUploadResult> {
   const u = await requirePermission('articles.edit')
-
-  const existing = await db.select({ artName: articles.artName, color: articles.color, artCode: articles.artCode, colorCode: articles.colorCode }).from(articles)
-  type Row = (typeof rows)[number]
-  const fileRows = new Map<string, Row>()
-  const sizeUnion = new Map<string, Set<string>>()
-  const keyFor = (row: { artName: string; color: string; artCode: string; colorCode: string }) => {
-    const code = normalizeArticleValue(row.artCode), shade = normalizeArticleValue(row.colorCode)
-    return code && shade ? `code:${code}||${shade}` : `name:${normalizeArticleValue(row.artName)}||${normalizeArticleValue(row.color)}`
-  }
-  for (const row of rows) {
-    const key = keyFor(row)
-    const labels = new Set<string>()
-    const explicit = parseSizeText(row.customSizes ?? '')
-    if (explicit.length) explicit.forEach((s) => labels.add(s))
-    else sizesFromRange(row.minSize, row.maxSize).forEach((s) => labels.add(s))
-    if (fileRows.has(key)) labels.forEach((l) => sizeUnion.get(key)!.add(l))
-    else {
-      fileRows.set(key, { ...row, artCode: normalizeArticleValue(row.artCode), colorCode: normalizeArticleValue(row.colorCode) })
-      sizeUnion.set(key, labels)
-    }
-  }
-  const codeKeys = new Set(existing.filter((a) => normalizeArticleValue(a.artCode) && normalizeArticleValue(a.colorCode)).map(keyFor))
-  const nameKeys = new Set(existing.map((a) => `name:${normalizeArticleValue(a.artName)}||${normalizeArticleValue(a.color)}`))
-  const newRows = [...fileRows.entries()].filter(([key, row]) => {
-    const hasCodes = normalizeArticleValue(row.artCode) && normalizeArticleValue(row.colorCode)
-    return !(hasCodes ? codeKeys : nameKeys).has(key)
-  })
-
-  let insertedCount = 0
+  const file = form.get('file')
+  const apply = form.get('apply') === '1'
+  if (!(file instanceof File) || file.size === 0) return { ok: false, error: 'Choose an Excel (.xlsx) or CSV file.' }
+  if (file.size > 900_000) return { ok: false, error: 'The file is too large (limit about 900 KB). Split it into two files.' }
+  const name = file.name.toLowerCase()
+  let cells
   try {
-    await db.transaction(async (tx) => {
-      if (!newRows.length) return
-      const inserted = await tx.insert(articles).values(newRows.map(([key, { customSizes: _c, ...row }]) => {
-        const sizes = sortSizeLabels([...(sizeUnion.get(key) ?? [])])
-        return { ...row, minSize: sizes[0] ?? '', maxSize: sizes[sizes.length - 1] ?? '', source: 'import' as const }
-      })).returning({ id: articles.id })
-      insertedCount = inserted.length
-      const colorRows = inserted.flatMap(({ id }, i) => newRows[i][1].color.trim() ? [{ articleId: id, colorName: newRows[i][1].color.trim(), colorHex: newRows[i][1].colorCode || null }] : [])
-      if (colorRows.length) await tx.insert(articleColors).values(colorRows)
-      const sizeRows = inserted.flatMap(({ id }, i) => {
-        const labels = sortSizeLabels([...(sizeUnion.get(newRows[i][0]) ?? [])])
-        const order = sizeSortOrders(labels)
-        return labels.map((sizeLabel) => ({ articleId: id, sizeLabel, sortOrder: order.get(sizeLabel)! }))
-      })
-      for (let i = 0; i < sizeRows.length; i += 1000) await tx.insert(articleSizes).values(sizeRows.slice(i, i + 1000))
-      // Attach coded rows to their article-code records (two statements for the whole file).
-      const insertedIds = JSON.stringify(inserted.map((r) => r.id))
-      await tx.execute(sql`
-        INSERT INTO catalog_articles ("artCode", "artName", source)
-        SELECT DISTINCT ON (a."artCode") a."artCode", a."artName", 'import' FROM articles a
-        WHERE a.id IN (SELECT json_array_elements_text(${insertedIds}::json)::int) AND a."artCode" <> ''
-        ON CONFLICT ("artCode") DO NOTHING`)
-      await tx.execute(sql`
-        UPDATE articles a SET "catalogArticleId" = c.id FROM catalog_articles c
-        WHERE a.id IN (SELECT json_array_elements_text(${insertedIds}::json)::int) AND c."artCode" = a."artCode"`)
-      await audit(tx, { actor: actorOf(u), action: 'article.imported', entityType: 'article_import', entityId: new Date().toISOString(), after: { rows: rows.length, imported: insertedCount } })
-      const codes = new Set(newRows.map(([, r]) => `${r.artCode}|${r.colorCode}`).filter((k) => !k.startsWith('|') && !k.endsWith('|')))
-      for (const k of codes) { const [c, col] = k.split('|'); await resolvePendingScans(tx, actorOf(u), c, col) }
-    })
-  } catch (error) { friendlyUniqueError(error) }
-
+    if (name.endsWith('.xlsx')) cells = await xlsxToCells(await file.arrayBuffer())
+    else if (name.endsWith('.csv')) cells = csvToCells(await file.text())
+    else return { ok: false, error: 'Only .xlsx or .csv files can be uploaded. In Excel use File → Save As → Excel Workbook (.xlsx).' }
+  } catch {
+    return { ok: false, error: 'The file could not be read. Save it again as .xlsx and retry.' }
+  }
+  const parsed = parseArticleSheet(cells)
+  if (parsed.missingColumns.length) return { ok: false, error: `Missing column(s): ${parsed.missingColumns.join(', ')}. The first row must hold the column names shown in "How to upload".` }
+  if (!parsed.rows.length) return { ok: false, error: parsed.problems[0]?.message ?? 'No article rows found below the header row.' }
+  const plan = await planArticleUpload(db, parsed.rows)
+  const summary = summarise(parsed, plan)
+  if (!apply) return { ok: true, applied: false, summary, resolvedScans: 0 }
+  const { resolvedScans } = await applyArticleUpload(db, actorOf(u), plan, { fileName: file.name, rowsRead: summary.rowsRead })
   revalidatePath('/master')
   const list = await db.select().from(articles).orderBy(asc(articles.artName))
-  return { imported: insertedCount, skipped: rows.length - insertedCount, list }
+  return { ok: true, applied: true, summary, resolvedScans, list }
 }
 
 // ── Missing articles: review actions (admin) ─────────────────────────────────
@@ -370,6 +346,12 @@ async function linkOrCreateArticleOnce(input: LinkInput): Promise<LinkResult> {
           before: { active: false, retiredReason: byCode.retiredReason }, after: { active: true, reviewStatus: 'needs_review' }, metadata: { rawQr: input.rawQr } })
       }
 
+      // Same article code, chosen colour name, no colour code yet (uploaded without one): this box
+      // tells us the code, so that variant gets it (keeps its id and sizes).
+      const [pendingColour] = articleId ? [] : await tx.select({ id: articles.id, artName: articles.artName, color: articles.color }).from(articles)
+        .where(sql`${NORM(articles.artCode)} = ${artCode} AND btrim(${articles.colorCode}) = '' AND ${articles.active} AND ${NORM(articles.color)} = ${normalizeArticleValue(color)}`)
+        .orderBy(articles.id).limit(1).for('update')
+
       if (articleId) {
         sizes = (await tx.select({ sizeLabel: articleSizes.sizeLabel }).from(articleSizes)
           .where(and(eq(articleSizes.articleId, articleId), eq(articleSizes.active, true))).orderBy(articleSizes.sortOrder)).map((r) => r.sizeLabel)
@@ -377,6 +359,23 @@ async function linkOrCreateArticleOnce(input: LinkInput): Promise<LinkResult> {
           if (!input.addScannedSize) throw new LinkAbort({ ok: false, error: 'SIZE_NOT_IN_ARTICLE', sizes })
           await syncSizes(tx, articleId, [...sizes, parsed.size])
         }
+      } else if (pendingColour) {
+        sizes = (await tx.select({ sizeLabel: articleSizes.sizeLabel }).from(articleSizes)
+          .where(and(eq(articleSizes.articleId, pendingColour.id), eq(articleSizes.active, true))).orderBy(articleSizes.sortOrder)).map((r) => r.sizeLabel)
+        if (!sizes.includes(parsed.size)) {
+          if (!input.addScannedSize) throw new LinkAbort({ ok: false, error: 'SIZE_NOT_IN_ARTICLE', sizes })
+          sizes.push(parsed.size)
+        }
+        const updated = await tx.update(articles).set({ colorCode, reviewStatus: 'approved' })
+          .where(sql`${articles.id} = ${pendingColour.id} AND btrim(${articles.colorCode}) = ''`).returning({ id: articles.id })
+        articleId = updated[0]?.id
+        if (!articleId) throw new LinkAbort({ ok: false, error: 'ALREADY_EXISTS' })
+        linkAction = 'linked'
+        await tx.update(articleColors).set({ colorHex: colorCode }).where(eq(articleColors.articleId, articleId))
+        await syncSizes(tx, articleId, [...sizes])
+        await ensureCatalogArticle(tx, articleId, artCode, pendingColour.artName, 'scan_dialog')
+        await audit(tx, { actor, action: 'article.colour_code_linked_from_scan', entityType: 'article', entityId: articleId,
+          before: { colorCode: '' }, after: { colorCode, color: pendingColour.color }, metadata: { rawQr: input.rawQr } })
       } else {
         const byName = await tx.select({ id: articles.id, artName: articles.artName, color: articles.color, artCode: articles.artCode, colorCode: articles.colorCode })
           .from(articles).where(sql`${NORM(articles.artName)} = ${normalizeArticleValue(name)} AND ${articles.active}`)

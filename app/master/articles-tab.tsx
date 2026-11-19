@@ -2,65 +2,14 @@
 
 import { useState, useMemo, useTransition, useRef, useEffect } from 'react'
 import { fuzzyFilter } from '@/lib/fuzzy'
-import { saveArticle, importArticles, deleteArticle, getArticleSizes, getArticles, getArticleMrps, getMissingArticles, addSizeToArticleFromScans, setMissingArticleReview, setCatalogReviewItemStatus } from '@/app/actions/articles'
-import type { CatalogReviewItem } from '@/app/actions/articles'
+import { saveArticle, uploadArticleList, deleteArticle, getArticleSizes, getArticles, getArticleMrps, getMissingArticles, addSizeToArticleFromScans, setMissingArticleReview, setCatalogReviewItemStatus } from '@/app/actions/articles'
+import type { CatalogReviewItem, ArticleUploadResult } from '@/app/actions/articles'
+import { ARTICLE_UPLOAD_COLUMNS, articleTemplateCsv } from '@/lib/catalog/article-upload-columns'
 import type { MissingArticle } from '@/lib/catalog/missing-articles'
 import { expandSizeRange } from '@/lib/catalog/sizes'
 import type { Article } from '@/app/actions/articles'
 import { NewArticleDialog } from '@/components/scanner/new-article-dialog'
 import { parseQr } from '@/lib/qr-parser'
-
-// ── CSV parser ────────────────────────────────────────────────────────────────
-// Expected columns (case-insensitive, order flexible):
-// artName, artCode, color, colorCode, maxSize, minSize, optional sizes
-function parseCsvLine(line: string): string[] {
-  const cells: string[] = []
-  let cell = ''
-  let quoted = false
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i]
-    if (char === '"') {
-      if (quoted && line[i + 1] === '"') {
-        cell += '"'
-        i++
-      } else {
-        quoted = !quoted
-      }
-    } else if (char === ',' && !quoted) {
-      cells.push(cell.trim())
-      cell = ''
-    } else {
-      cell += char
-    }
-  }
-  cells.push(cell.trim())
-  return cells
-}
-
-function parseCsv(text: string): Parameters<typeof importArticles>[0] {
-  const lines = text.split(/\r?\n/).filter(l => l.trim())
-  if (lines.length < 2) return []
-
-  const headers = parseCsvLine(lines[0]).map(h => h.toLowerCase().replace(/[^a-z]/g, ''))
-  const idx = (name: string) => headers.indexOf(name.toLowerCase().replace(/[^a-z]/g, ''))
-
-  return lines.slice(1).flatMap(line => {
-    const cols = parseCsvLine(line)
-    const get = (name: string) => cols[idx(name)] ?? ''
-    const artName = get('artname') || get('name')
-    if (!artName) return []
-    return [{
-      artName,
-      artCode:   get('artcode') || get('code') || '',
-      color:     get('color') || '',
-      colorCode: get('colorcode') || '',
-      maxSize:   get('maxsize') || get('max') || '',
-      minSize:   get('minsize') || get('min') || '',
-      customSizes: get('sizes'),
-    }]
-  })
-}
 
 export type { Article }
 
@@ -189,43 +138,52 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
   const [isSaving, startSave] = useTransition()
   const [isDeleting, startDelete] = useTransition()
 
-  // ── CSV import state ──
-  const csvInputRef = useRef<HTMLInputElement>(null)
+  // ── Article list upload (preview first, then add) ──
+  const uploadInputRef = useRef<HTMLInputElement>(null)
   const [isImporting, startImport] = useTransition()
   const [importMsg, setImportMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploadPreview, setUploadPreview] = useState<Extract<ArticleUploadResult, { ok: true }> | null>(null)
+  const [showUploadHelp, setShowUploadHelp] = useState(false)
 
-  function handleCsvFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!e.target.files) return
-    e.target.value = ''
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      const text = ev.target?.result as string
-      const rows = parseCsv(text)
-      if (rows.length === 0) {
-        setImportMsg({ type: 'err', text: 'No valid rows found in CSV.' })
-        return
+  function sendUpload(file: File, apply: boolean) {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('apply', apply ? '1' : '0')
+    setImportMsg(null)
+    startImport(async () => {
+      try {
+        const res = await uploadArticleList(form)
+        if (!res.ok) { setImportMsg({ type: 'err', text: res.error }); setUploadFile(null); setUploadPreview(null); return }
+        if (!apply) { setUploadFile(file); setUploadPreview(res); return }
+        if (res.list) updateArticles(res.list)
+        const s = res.summary
+        const parts = [`Added ${s.added + s.addedPending} article colour(s).`]
+        if (s.addedPending) parts.push(`${s.addedPending} of them have no colour code yet.`)
+        if (s.filled) parts.push(`${s.filled} colour(s) got their colour code.`)
+        parts.push(`${s.alreadyThere} were already in the master.`)
+        if (res.resolvedScans) parts.push(`${res.resolvedScans} waiting box scan(s) moved into stock.`)
+        setImportMsg({ type: 'ok', text: parts.join(' ') })
+        setUploadFile(null); setUploadPreview(null)
+      } catch (error) {
+        setImportMsg({ type: 'err', text: `Upload failed: ${error instanceof Error ? error.message : 'check your connection and try again'}` })
       }
-      startImport(async () => {
-        try {
-          const { imported, skipped, list } = await importArticles(rows)
-          updateArticles(list)
-          const msg = imported === 0
-            ? `Nothing imported — all ${skipped} row${skipped !== 1 ? 's' : ''} already exist in the database (matched by Article Name + Color).`
-            : skipped > 0
-              ? `Imported ${imported} new article${imported !== 1 ? 's' : ''}. Skipped ${skipped} already-existing row${skipped !== 1 ? 's' : ''}.`
-              : `Imported ${imported} article${imported !== 1 ? 's' : ''} successfully.`
-          setImportMsg({ type: imported === 0 ? 'err' : 'ok', text: msg })
-          setTimeout(() => setImportMsg(null), 4000)
-        } catch (error) {
-          console.error('[v0] Article CSV import failed:', error)
-          const message = error instanceof Error ? error.message : 'Unknown import error'
-          setImportMsg({ type: 'err', text: `Import failed: ${message}` })
-        }
-      })
-    }
-    reader.readAsText(file)
+    })
+  }
+
+  function handleUploadFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (file) sendUpload(file, false)
+  }
+
+  function downloadTemplate() {
+    const url = URL.createObjectURL(new Blob([articleTemplateCsv()], { type: 'text/csv' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'article-list-template.csv'
+    link.click()
+    URL.revokeObjectURL(url)
   }
 
   const filtered = useMemo(() =>
@@ -331,11 +289,11 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
     <div>
       {/* ── Hidden CSV file input ── */}
       <input
-        ref={csvInputRef}
+        ref={uploadInputRef}
         type="file"
-        accept=".csv,text/csv"
+        accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
         className="hidden"
-        onChange={handleCsvFile}
+        onChange={handleUploadFile}
       />
 
       {/* ── Toolbar ── */}
@@ -350,11 +308,14 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
       </div>
       <div className="flex items-center gap-2 mb-4">
         <button
-          onClick={() => csvInputRef.current?.click()}
+          onClick={() => uploadInputRef.current?.click()}
           disabled={isImporting}
           className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
         >
-          {isImporting ? 'Importing…' : '↑ Import CSV'}
+          {isImporting ? 'Reading…' : '↑ Upload Excel / CSV'}
+        </button>
+        <button onClick={() => setShowUploadHelp(v => !v)} className="text-xs text-muted-foreground underline underline-offset-2">
+          {showUploadHelp ? 'Hide help' : 'How to upload'}
         </button>
         <button
           onClick={openAdd}
@@ -364,7 +325,73 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
         </button>
       </div>
 
-      {/* Import feedback */}
+      {showUploadHelp && (
+        <section className="mb-4 rounded-xl border border-border bg-muted/30 p-4 text-sm">
+          <h3 className="font-semibold">How to upload an article list</h3>
+          <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs text-muted-foreground">
+            <li>Use an Excel file (.xlsx) or a CSV file. Only the first sheet is read.</li>
+            <li>The first row must hold the column names below (any order; capitals and spaces do not matter). Other columns, like id, are ignored.</li>
+            <li>One row per article colour. A colour with two size runs (for example 11–13 and 1–5) can be two rows.</li>
+            <li>You see a preview first. Nothing is saved until you tap Add to master.</li>
+            <li>Uploading never deletes or changes articles already in the master. Rows already there are skipped, so the same file can be uploaded again safely.</li>
+          </ol>
+          <div className="mt-3 overflow-x-auto rounded-lg border border-border bg-background">
+            <table className="w-full text-xs">
+              <thead className="bg-muted/50">
+                <tr>
+                  <th className="px-2 py-1.5 text-left">Column name</th>
+                  <th className="px-2 py-1.5 text-left">Needed?</th>
+                  <th className="px-2 py-1.5 text-left">Example</th>
+                  <th className="px-2 py-1.5 text-left">What to enter</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {ARTICLE_UPLOAD_COLUMNS.map(c => (
+                  <tr key={c.name}>
+                    <td className="px-2 py-1.5 font-mono font-semibold whitespace-nowrap" data-no-translate>{c.name}</td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">{c.required ? 'Required' : 'Optional'}</td>
+                    <td className="px-2 py-1.5 font-mono whitespace-nowrap" data-no-translate>{c.example}</td>
+                    <td className="px-2 py-1.5 text-muted-foreground">{c.help}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button onClick={downloadTemplate} className="mt-3 rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium hover:bg-muted">↓ Download template</button>
+        </section>
+      )}
+
+      {uploadPreview && uploadFile && (
+        <section className="mb-4 rounded-xl border border-sky-500/40 bg-sky-50/50 p-4 text-sm dark:bg-sky-950/20">
+          <h3 className="font-semibold">Check before adding</h3>
+          <p className="text-xs text-muted-foreground" data-no-translate>{uploadFile.name}</p>
+          <ul className="mt-2 space-y-0.5 text-xs">
+            <li>{`${uploadPreview.summary.rowsRead} rows read, ${uploadPreview.summary.articleCodes} article codes`}</li>
+            <li className="font-medium">{`${uploadPreview.summary.added} new article colours with colour code`}</li>
+            <li className="font-medium">{`${uploadPreview.summary.addedPending} new article colours without colour code (kept by colour name; code added at first scan)`}</li>
+            {uploadPreview.summary.filled > 0 && <li className="font-medium">{`${uploadPreview.summary.filled} existing colours get their colour code`}</li>}
+            <li>{`${uploadPreview.summary.alreadyThere} already in the master (skipped)`}</li>
+            {uploadPreview.summary.problems.length > 0 && <li className="text-red-600">{`${uploadPreview.summary.problems.length} row(s) cannot be read and will be skipped`}</li>}
+          </ul>
+          {uploadPreview.summary.problems.length > 0 && (
+            <div className="mt-2 max-h-32 overflow-y-auto rounded-lg bg-background p-2 text-xs text-red-600">
+              {uploadPreview.summary.problems.slice(0, 50).map(p => <p key={p.rowNumber}>{p.message}</p>)}
+            </div>
+          )}
+          <div className="mt-3 flex gap-2">
+            <button
+              disabled={isImporting || uploadPreview.summary.added + uploadPreview.summary.addedPending + uploadPreview.summary.filled === 0}
+              onClick={() => sendUpload(uploadFile, true)}
+              className="rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background disabled:opacity-50"
+            >
+              {isImporting ? 'Adding…' : 'Add to master'}
+            </button>
+            <button disabled={isImporting} onClick={() => { setUploadFile(null); setUploadPreview(null) }} className="rounded-lg border border-border px-4 py-2 text-sm">Cancel</button>
+          </div>
+        </section>
+      )}
+
+      {/* Upload feedback */}
       {importMsg && (
         <div className={`mb-3 rounded-lg px-3 py-2 text-xs font-medium ${
           importMsg.type === 'ok'
@@ -467,6 +494,9 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                 <p className="font-semibold text-base text-foreground truncate">{a.artName || '—'}<StatusBadge a={a} /></p>
                 {a.artCode && <p className="text-xs text-muted-foreground font-mono mt-0.5">{a.artCode}{mrpsByCode[mrpKey(a.artCode)]?.length ? ` · MRPs ${mrpsByCode[mrpKey(a.artCode)].join(', ')}` : ''}</p>}
               </div>
+              {!a.colorCode && a.color && (
+                <span className="shrink-0 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">{`${a.color} · code pending`}</span>
+              )}
               {a.colorCode && (
                 <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium border border-border bg-muted">
                   <span
@@ -545,7 +575,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                         )}
                         {a.colorCode}
                       </span>
-                    ) : '—'}
+                    ) : a.color ? <span className="text-xs text-amber-700 dark:text-amber-400">pending</span> : '—'}
                   </td>
                   <td className="px-2 py-3 text-sm text-muted-foreground whitespace-nowrap">{a.minSize || '—'}</td>
                   <td className="px-2 py-3 text-sm text-muted-foreground whitespace-nowrap">{a.maxSize || '—'}</td>
