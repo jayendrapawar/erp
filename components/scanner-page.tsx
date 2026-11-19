@@ -3,11 +3,10 @@
 import jsQR from 'jsqr'
 import { User } from 'lucide-react'
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { createFlag } from '@/app/actions/flags'
 import { addManualEntry, checkScanAgainstMaster, deleteScan, getRecentScans, getScannerContext, recordScan, type ScannerContext } from '@/app/actions/scan'
 import { NewArticleDialog } from '@/components/scanner/new-article-dialog'
-import { LanguageToggle } from '@/components/language-toggle'
+import { PageNav } from '@/components/page-nav'
 import { DashboardPage } from '@/components/dashboard-page'
 import { DEFAULT_MANUAL_FORM, SCAN_INTERVAL_MS, SCAN_MAX_DIM } from '@/components/scanner/constants'
 import { getCachedUser, getDailyScanCount, getStoredActiveFlag, incrementDailyScanCount, saveStoredActiveFlag, setCachedUser } from '@/components/scanner/storage'
@@ -20,7 +19,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { signOut } from '@/lib/auth-client'
 import { DUPLICATE_QR_ERROR } from '@/lib/errors'
 import { useLanguage } from '@/lib/language-context'
 import { cacheFlags, enqueuePendingFlag, getCachedFlags } from '@/lib/offline-flags'
@@ -33,7 +31,6 @@ const CARTON_MESSAGE = 'This is an outer-carton label. Scan the individual footw
 const MISSING_MESSAGE = 'Saved. This article or size is not in the master yet; an admin will link it.'
 
 export function ScannerPage() {
-  const router = useRouter()
   const { t } = useLanguage()
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -280,11 +277,6 @@ export function ScannerPage() {
     setWarnMsg(null)
     setInfoMsg(null)
     setError(msg)
-  }
-
-  async function handleLogout() {
-    await signOut()
-    router.push('/sign-in')
   }
 
   const startCamera = useCallback(async () => {
@@ -937,15 +929,7 @@ export function ScannerPage() {
                 </span>
               )}
             </div>
-            <div className="hidden md:flex gap-1.5 sm:gap-2 items-center shrink-0">
-              <Button variant="outline" size="sm" className="text-xs sm:text-sm px-2 sm:px-3" onClick={() => router.push('/home')}>
-                ← Home
-              </Button>
-              <LanguageToggle />
-              <Button variant="outline" size="sm" className="text-xs sm:text-sm px-2 sm:px-3" onClick={handleLogout}>
-                {t('signOut')}
-              </Button>
-            </div>
+            <PageNav />
           </div>
           {userName && (
             <div className="flex items-center gap-1 ml-auto mt-0.5">

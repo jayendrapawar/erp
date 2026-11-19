@@ -4,7 +4,7 @@ import './globals.css'
 import { LanguageProvider } from '@/lib/language-context'
 import { GlobalNetworkStatus } from '@/components/global-network-status'
 import { ServiceWorkerRegistration } from '@/components/service-worker-registration'
-import { AppNav } from '@/components/app-nav'
+import { AppShell } from '@/components/app-nav'
 
 export const metadata: Metadata = {
   title: 'Shayona Inventory Management',
@@ -45,8 +45,7 @@ export default function RootLayout({
         <LanguageProvider>
           <ServiceWorkerRegistration />
           <GlobalNetworkStatus />
-          {children}
-          <AppNav />
+          <AppShell>{children}</AppShell>
         </LanguageProvider>
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>

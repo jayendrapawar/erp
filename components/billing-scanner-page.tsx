@@ -5,7 +5,6 @@ import {
   useCallback, useEffect, useId, useImperativeHandle, useMemo,
   useRef, useState, forwardRef,
 } from 'react'
-import { useRouter } from 'next/navigation'
 import { fuzzyFilter } from '@/lib/fuzzy'
 import { buildInvoiceHtml } from '@/lib/bill-html'
 import { SCAN_INTERVAL_MS, SCAN_MAX_DIM } from '@/components/scanner/constants'
@@ -15,7 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { isValidWarehouseQr, parseQr } from '@/lib/qr-parser'
-import { signOut } from '@/lib/auth-client'
+import { PageNav } from '@/components/page-nav'
 import {
   discardDirectBillDraft, generateDirectBillFromDraft, getOpenDirectBillDrafts, openDirectBillDraft,
   removeFromDirectBill, saveDirectBillDraft, scanIntoDirectBill, startDirectBillDraft,
@@ -244,7 +243,6 @@ interface Props {
 // ── Main Component ─────────────────────────────────────────────────────────────
 
 export function BillingScannerPage({ vendors, articles = [], onBillGenerated, embedded }: Props) {
-  const router = useRouter()
 
   // Guard: vendors may briefly be undefined during SSR/hydration
   const safeVendors = vendors ?? []
@@ -800,10 +798,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
         {!embedded && (
           <div className="flex items-center justify-between gap-2">
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Billing Scanner</h1>
-            <div className="flex gap-1.5 items-center shrink-0">
-              <Button variant="outline" size="sm" className="text-xs px-2 sm:px-3" onClick={() => router.push('/home')}>← Home</Button>
-              <Button variant="outline" size="sm" className="text-xs px-2 sm:px-3" onClick={async () => { await signOut(); router.push('/sign-in') }}>Sign Out</Button>
-            </div>
+            <PageNav />
           </div>
         )}
 

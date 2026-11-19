@@ -1,6 +1,6 @@
 # Hindi screens
 
-The हिंदी button (phone: **More → हिंदी**; computer: top-right) switches the whole app to Hindi.
+The language switch is in the profile menu (round icon with your initials, top right of every screen): **English | हिंदी**.
 The choice is kept on that phone or browser (`localStorage` key `shayona.language`); nothing is stored in the database.
 
 ## How it works

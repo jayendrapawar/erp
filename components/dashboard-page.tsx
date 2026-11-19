@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { fuzzyFilter } from '@/lib/fuzzy'
-import { useRouter } from 'next/navigation'
 import { BarChart3, Filter, Package, PieChart, QrCode, Tag, TrendingUp, User } from 'lucide-react'
 import {
   exportOverallStockToCSV,
@@ -15,7 +14,7 @@ import {
   getScannedChartData,
   getStatistics,
 } from '@/app/actions/dashboard'
-import { LanguageToggle } from '@/components/language-toggle'
+import { PageNav } from '@/components/page-nav'
 import { CHART_COLORS, DRILLDOWN_EMPTY_LABEL } from '@/components/dashboard/constants'
 import type {
   DivisionBreakdownItem,
@@ -41,7 +40,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { signOut } from '@/lib/auth-client'
 import { useLanguage } from '@/lib/language-context'
 import { useOnline } from '@/lib/use-online'
 import {
@@ -61,7 +59,6 @@ import {
 } from 'recharts'
 
 export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
-  const router = useRouter()
   const { t } = useLanguage()
 
   const [activeTab, setActiveTab] = useState<Tab>('scanned')
@@ -218,11 +215,6 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to export data')
     }
-  }
-
-  async function handleLogout() {
-    await signOut()
-    router.push('/sign-in')
   }
 
   function renderScannedKPIs() {
@@ -838,15 +830,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
         <div className="flex flex-col gap-0.5">
           <div className="flex items-center justify-between gap-2">
             <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight">{t('dashboard')}</h1>
-            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-              <LanguageToggle />
-              <Button variant="outline" size="sm" className="text-xs sm:text-sm px-2 sm:px-3" onClick={() => router.push('/scanner')}>
-                {t('scanner')}
-              </Button>
-              <Button variant="outline" size="sm" className="text-xs sm:text-sm px-2 sm:px-3" onClick={handleLogout}>
-                {t('signOut')}
-              </Button>
-            </div>
+            <PageNav />
           </div>
           {loggedInUser && <UserPill icon={<User className="h-2.5 w-2.5" />} name={loggedInUser} />}
         </div>

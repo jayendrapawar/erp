@@ -83,12 +83,12 @@ export function HomeMenuPage({ role }: { role: string }) {
   const visible = MENU_ITEMS.filter(item => hasPermission(userRoles, item.permission))
 
   return (
-    <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4 py-12">
-      {/* Top-right nav */}
-      <div className="fixed top-4 right-4 z-50">
+    <div className="min-h-screen bg-background flex flex-col items-center px-4 pb-12 pt-[max(1rem,env(safe-area-inset-top))]">
+      {/* Profile menu (language, sign out) top right */}
+      <div className="flex w-full max-w-md justify-end">
         <PageNav hideHome />
       </div>
-      <div className="w-full max-w-md">
+      <div className="w-full max-w-md my-auto pt-4">
         <div className="mb-8 text-center">
           <h1 className="text-2xl font-bold text-foreground tracking-tight">{t('appName')}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{t('homeSubtitle')}</p>
