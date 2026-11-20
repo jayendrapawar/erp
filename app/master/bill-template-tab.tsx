@@ -5,7 +5,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { getBillTemplate, saveBillTemplate } from '@/app/actions/bill-template'
-import { buildInvoiceHtml, type BillType, type PageSize } from '@/lib/bill-html'
+import { buildInvoiceHtml, type PageSize } from '@/lib/bill-html'
 import { DEFAULT_BILL_TEMPLATE, checkBillTemplate, type BillTemplate } from '@/lib/bill-template'
 
 const SAMPLE = {
@@ -39,7 +39,6 @@ export function BillTemplateTab() {
   const [t, setT] = useState<BillTemplate | null>(null)
   const [saved, setSaved] = useState<BillTemplate | null>(null)
   const [pageSize, setPageSize] = useState<PageSize>('A4')
-  const [billType, setBillType] = useState<BillType>('city')
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [busy, start] = useTransition()
   const fileRef = useRef<HTMLInputElement>(null)
@@ -48,7 +47,7 @@ export function BillTemplateTab() {
     getBillTemplate().then((v) => { setT(v); setSaved(v); setPageSize(v.defaultPageSize) }).catch(() => setMsg({ ok: false, text: 'Could not load the bill template.' }))
   }, [])
 
-  const preview = useMemo(() => (t ? buildInvoiceHtml({ ...SAMPLE, lineDiscPct: 30, pageSize, billType, template: t }) : ''), [t, pageSize, billType])
+  const preview = useMemo(() => (t ? buildInvoiceHtml({ ...SAMPLE, lineDiscPct: 30, pageSize, template: t }) : ''), [t, pageSize])
   if (!t) return <p className="py-10 text-center text-sm text-muted-foreground">{msg?.text ?? 'Loading…'}</p>
 
   const problems = checkBillTemplate(t)
@@ -110,7 +109,7 @@ export function BillTemplateTab() {
           <label className="flex items-center gap-2 text-sm">
             Default paper
             <select value={t.defaultPageSize} onChange={(e) => set('defaultPageSize', e.target.value as PageSize)} className="rounded-lg border border-border bg-background px-2 py-1 text-sm">
-              <option value="A4">A4</option><option value="A5">A5</option>
+              <option value="A4">Big bill (A4)</option><option value="A5">Small bill (A5)</option>
             </select>
           </label>
           <p className="text-[11px] text-muted-foreground">Discount (4.75%) and GST rates are fixed for now: bills do not store their rates yet, so changing them here would change old bills when reprinted.</p>
@@ -130,10 +129,7 @@ export function BillTemplateTab() {
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="font-semibold">Preview (sample bill)</span>
           {(['A4', 'A5'] as PageSize[]).map((p) => (
-            <button key={p} type="button" onClick={() => setPageSize(p)} className={`rounded-md border px-2 py-1 ${pageSize === p ? 'border-foreground bg-foreground text-background' : 'border-border'}`}>{p}</button>
-          ))}
-          {([['city', 'City (CGST + SGST)'], ['outside', 'Outside city (IGST)']] as [BillType, string][]).map(([b, l]) => (
-            <button key={b} type="button" onClick={() => setBillType(b)} className={`rounded-md border px-2 py-1 ${billType === b ? 'border-foreground bg-foreground text-background' : 'border-border'}`}>{l}</button>
+            <button key={p} type="button" onClick={() => setPageSize(p)} className={`rounded-md border px-2 py-1 ${pageSize === p ? 'border-foreground bg-foreground text-background' : 'border-border'}`}>{p === 'A4' ? 'Big bill (A4)' : 'Small bill (A5)'}</button>
           ))}
         </div>
         <iframe title="Bill preview" srcDoc={preview} className="h-[75vh] w-full rounded-xl border border-border bg-white" />

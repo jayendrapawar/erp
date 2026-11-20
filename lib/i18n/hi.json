@@ -1297,5 +1297,10 @@
   "Outside city (IGST)": "शहर के बाहर (IGST)",
   "Saved. Bills printed from now on use these details.": "सेव हो गया। अब से छपने वाले बिल यही विवरण लेंगे।",
   "Put back the standard shop details?": "दुकान का सामान्य विवरण वापस लगाएँ?",
-  "Discount (4.75%) and GST rates are fixed for now: bills do not store their rates yet, so changing them here would change old bills when reprinted.": "छूट (4.75%) और GST दरें अभी तय हैं: बिल अपनी दरें सेव नहीं करते, इसलिए यहाँ बदलने से पुराने बिल दोबारा छापने पर बदल जाएँगे।"
+  "Discount (4.75%) and GST rates are fixed for now: bills do not store their rates yet, so changing them here would change old bills when reprinted.": "छूट (4.75%) और GST दरें अभी तय हैं: बिल अपनी दरें सेव नहीं करते, इसलिए यहाँ बदलने से पुराने बिल दोबारा छापने पर बदल जाएँगे।",
+  "Bill size": "बिल का साइज़",
+  "Big bill (A4)": "बड़ा बिल (A4)",
+  "Small bill (A5)": "छोटा बिल (A5)",
+  "Full sheet, 210 × 297 mm": "पूरा पेज, 210 × 297 mm",
+  "Half sheet, 148 × 210 mm": "आधा पेज, 148 × 210 mm"
 }

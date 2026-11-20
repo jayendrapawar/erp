@@ -10,7 +10,7 @@ import { PageNav } from '@/components/page-nav'
 import { parseQr, isValidWarehouseQr, normalizeQr } from '@/lib/qr-parser'
 import { SCAN_INTERVAL_MS } from '@/components/scanner/constants'
 import { articlesMatch } from '@/lib/billing-verification'
-import { printInvoices, type MrpLine, type PageSize, type BillType, type PrintConfig } from '@/lib/bill-html'
+import { printInvoices, type MrpLine, type PageSize, type PrintConfig } from '@/lib/bill-html'
 import { getBillTemplate } from '@/app/actions/bill-template'
 import type { BillTemplate } from '@/lib/bill-template'
 import { BillingScannerPage, type BillingVendor } from '@/components/billing-scanner-page'
@@ -65,7 +65,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   const [activeTab, setActiveTab] = useState<BillerTab>('verify')
   // Shop / bank / QR details for printed bills (Master → Bill template). One query on open.
   const [billTemplate, setBillTemplate] = useState<BillTemplate | undefined>(undefined)
-  useEffect(() => { getBillTemplate().then(setBillTemplate).catch(() => {}) }, [])
+  useEffect(() => { getBillTemplate().then((t) => { setBillTemplate(t); setPrintConfig(c => ({ ...c, pageSize: t.defaultPageSize })) }).catch(() => {}) }, [])
 
   // ── Print Bills state ────────────────────────────────────────────────────────
   const [printSelectedIds, setPrintSelectedIds] = useState<Set<number>>(new Set())
@@ -2230,7 +2230,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
               {/* Page Size */}
               <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Page Size</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Bill size</p>
                 <div className="flex gap-2">
                   {(['A4', 'A5'] as PageSize[]).map(size => (
                     <button
@@ -2243,42 +2243,13 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                           : 'border-border bg-card text-foreground hover:bg-muted'
                       }`}
                     >
-                      {size}
+                      {size === 'A4' ? 'Big bill (A4)' : 'Small bill (A5)'}
                     </button>
                   ))}
                 </div>
                 <p className="text-[11px] text-muted-foreground mt-1.5">
-                  {printConfig.pageSize === 'A4' ? '210 × 297 mm — standard invoice size' : '148 × 210 mm — half-sheet bill'}
+                  {printConfig.pageSize === 'A4' ? 'Full sheet, 210 × 297 mm' : 'Half sheet, 148 × 210 mm'}
                 </p>
-              </div>
-
-              {/* Bill Type — pill toggle */}
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Bill Type</p>
-                <div className="flex items-center rounded-xl border border-border bg-muted/40 p-1 gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setPrintConfig(c => ({ ...c, billType: 'city' }))}
-                    className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                      printConfig.billType === 'city'
-                        ? 'bg-background shadow-sm border border-border text-foreground'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    Within City
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPrintConfig(c => ({ ...c, billType: 'outside' }))}
-                    className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                      printConfig.billType === 'outside'
-                        ? 'bg-background shadow-sm border border-border text-foreground'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    Outside City
-                  </button>
-                </div>
               </div>
 
             </div>

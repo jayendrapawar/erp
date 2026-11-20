@@ -9,6 +9,8 @@
  *     shop header, party, bill no. ("Page x of y") and column headings; non-last pages end with
  *     "Continued on page n". The totals block is printed once, on the last page — when it does not fit
  *     under the last lines, those lines stay on their page and the totals go to the next page.
+ *     Each page is a fixed-height box: the totals block sits at the bottom of the last page, the
+ *     spare space is between the lines and the totals (as on the old ERP bill), on A4 and A5.
  *     Without scripts the browser paginates (headings repeat, rows never split).
  *   - Amounts: rate = ceil(MRP × (1 − line discount %)); sub total − 4.75 % discount + GST (fixed
  *     rates; see the note in lib/bill-template.ts).
@@ -114,10 +116,12 @@ function css(isA5: boolean): string {
   /* On screen the page box has the printed width, so the script measures what will print. */
   @media screen {
     .bill, .page { width: ${isA5 ? '148mm' : '210mm'}; margin: 0 auto 16px; padding: ${isA5 ? '6mm' : '9mm'}; background: #fff; box-shadow: 0 0 0 1px #ccc; }
-    .page { min-height: ${isA5 ? '210mm' : '297mm'}; }
+    .page { height: calc(var(--ph) + ${isA5 ? '12mm' : '18mm'}); }
     .bill.paged { width: auto; padding: 0; background: none; box-shadow: none; margin: 0; }
   }
   .page { display: flex; flex-direction: column; break-after: page; }
+  @media print { .page { height: var(--ph); } }
+  .page > .end { margin-top: auto; padding-top: 6px; }
   .bill.paged .page:last-child { break-after: auto; }
   .cont { margin-top: auto; padding-top: 5px; text-align: center; font-weight: 800; letter-spacing: .5px; font-size: ${base - 1}px; }
   .pg { color: #444; font-weight: 700; }
@@ -292,12 +296,11 @@ for(var b=0;b<bills.length;b++){(function(bill){
     cur.push(rows[i]);used+=rh;}
   if(cur.length&&used+footH+endH>H){pages.push(cur);cur=[];}
   pages.push(cur);
-  if(pages.length<2)return;
-  var n=pages.length,thead=table.tHead;
+  var n=pages.length,thead=table.tHead,ph=bill.getAttribute('data-ph')+'mm';
   while(bill.firstChild)bill.removeChild(bill.firstChild);
   for(var p=0;p<n;p++){
-    var pg=document.createElement('div');pg.className='page';
-    var t=top.cloneNode(true),slot=t.querySelector('.pg');if(slot)slot.textContent=' · Page '+(p+1)+' of '+n;pg.appendChild(t);
+    var pg=document.createElement('div');pg.className='page';pg.style.setProperty('--ph',ph);
+    var t=top.cloneNode(true),slot=t.querySelector('.pg');if(slot&&n>1)slot.textContent=' · Page '+(p+1)+' of '+n;pg.appendChild(t);
     var tb=document.createElement('table');tb.className='lines';tb.appendChild(thead.cloneNode(true));
     var body=document.createElement('tbody');
     for(var j=0;j<pages[p].length;j++){var r=pages[p][j];
