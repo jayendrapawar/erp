@@ -749,7 +749,7 @@
   "No movements.": "कोई आवाजाही नहीं।",
   "No stock yet. Scanned boxes appear here.": "अभी स्टॉक नहीं। स्कैन हुए बॉक्स यहाँ दिखेंगे।",
   "None. Every billed box came out of stock.": "कोई नहीं। हर बिल हुआ बॉक्स स्टॉक से निकला।",
-  "Nothing matches.": "कुछ मेल नहीं खाता।",
+  "Nothing matches.": "कुछ नहीं मिला।",
   "Older movements: Movements tab, search “": "पुरानी आवाजाही: आवाजाही टैब में खोजें “",
   "Only": "सिर्फ़",
   "Other": "अन्य",
@@ -844,7 +844,7 @@
   "onwards are read with “Check mail”.": "से आगे के बिल “मेल देखें” से पढ़े जाते हैं।",
   "Open bill": "बिल खोलें",
   "Open bills": "खुले बिल",
-  "Overdue": "देर",
+  "Overdue": "देर से",
   "pairs · code": "जोड़ी · कोड",
   "pairs of size": "जोड़ी, साइज़",
   "Pairs on open bills not received yet.": "खुले बिलों की जोड़ी जो अभी नहीं आईं।",
@@ -1224,5 +1224,11 @@
   "Filter…": "फ़िल्टर…",
   "(blank)": "(खाली)",
   "{0} of {1} shown · {2} filter(s) on": "{1} में से {0} दिख रहे · {2} फ़िल्टर लगे",
-  "Sizes {0}–{1}": "साइज़ {0}–{1}"
+  "Sizes {0}–{1}": "साइज़ {0}–{1}",
+  "Bill no.": "बिल नं.",
+  "Bill date": "बिल की तारीख",
+  "Yes": "हाँ",
+  "No": "नहीं",
+  "e.g. 12 Nov": "जैसे 12 Nov",
+  "e.g. 6-10": "जैसे 6-10"
 }

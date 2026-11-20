@@ -7,6 +7,24 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DIVISIONS, formatSizes } from '@/lib/catalog/assortments'
 import { useQrScanner } from '@/components/scanner/use-qr-scanner'
 import { ManualCartonPanel } from './manual-carton-panel'
+import { FilterBar, FiltersButton, activeFilterCount, applyColumnFilters, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
+
+const BILL_STATUS_LABEL: Record<string, string> = { expected: 'Expected', partial: 'Part received', received: 'Received', cancelled: 'Cancelled' }
+const BILL_FILTERS: ColumnFilterDef<BillRow>[] = [
+  { key: 'ref', label: 'Bill no.', kind: 'text', get: b => b.refNo },
+  { key: 'invoice', label: 'Invoice', kind: 'text', get: b => b.invoiceNo },
+  { key: 'date', label: 'Bill date', kind: 'text', placeholder: 'e.g. 12 Nov', get: b => new Date(`${b.billDate}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) },
+  { key: 'division', label: 'Division', kind: 'select', options: DIVISIONS, get: b => b.division },
+  { key: 'status', label: 'Status', kind: 'select', options: Object.values(BILL_STATUS_LABEL), get: b => BILL_STATUS_LABEL[b.status] ?? b.status },
+  { key: 'overdue', label: 'Overdue', kind: 'select', options: ['Yes', 'No'], get: b => (b.overdue ? 'Yes' : 'No') },
+]
+const EXPECTED_FILTERS: ColumnFilterDef<ExpectedStockRow>[] = [
+  { key: 'name', label: 'Article', kind: 'text', get: r => r.articleName },
+  { key: 'code', label: 'Article code', kind: 'text', get: r => r.articleCode },
+  { key: 'colour', label: 'Colour code', kind: 'text', get: r => r.colourCode },
+  { key: 'range', label: 'Sizes', kind: 'text', placeholder: 'e.g. 6-10', get: r => `${r.sizeFrom}-${r.sizeTo}` },
+  { key: 'overdue', label: 'Overdue', kind: 'select', options: ['Yes', 'No'], get: r => (r.earliest < new Date().toISOString().slice(0, 10) ? 'Yes' : 'No') },
+]
 import {
   cancelBillAction, getBillDetail, getExpectedStock, getOpenBills, getPurchaseOverview, getReceipts, receiveCartonAction,
   setBillDivisionAction, setBillMailStartAction, setLineAssortmentAction, voidCartonAction,
@@ -40,12 +58,6 @@ function uuid(): string {
   b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80
   const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
-}
-
-function useDebounced<T>(value: T, ms = 300): T {
-  const [v, setV] = useState(value)
-  useEffect(() => { const t = setTimeout(() => setV(value), ms); return () => clearTimeout(t) }, [value, ms])
-  return v
 }
 
 const STATUS: Record<string, { label: string; cls: string }> = {
@@ -215,13 +227,13 @@ function BillsTab({ bills, canUpload, mailReady, onOpen, onUploaded }: { bills: 
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-  const [query, setQuery] = useState('')
+  const [filters, setFilters] = useState<FilterValues>({})
   const [shown, setShown] = useState(20)
   const [mailSince, setMailSince] = useState('')
   const [mail, setMail] = useState<MailCheckResult | null>(null)
-  const q = query.trim().toLowerCase()
-  const all = (showAll ? bills : bills.filter((b) => b.status === 'expected' || b.status === 'partial'))
-    .filter((b) => !q || b.refNo.toLowerCase().includes(q) || b.invoiceNo.toLowerCase().includes(q) || b.division.toLowerCase().includes(q))
+  const filtering = activeFilterCount(filters) > 0
+  const all = applyColumnFilters(showAll ? bills : bills.filter((b) => b.status === 'expected' || b.status === 'partial'), BILL_FILTERS, filters)
+  const setBillFilters = (v: FilterValues) => { setFilters(v); setShown(20) }
   const list = all.slice(0, shown)
 
   async function upload(files: FileList | null) {
@@ -300,11 +312,13 @@ function BillsTab({ bills, canUpload, mailReady, onOpen, onUploaded }: { bills: 
         </div>
       )}
       {bills.length > 0 && (
-        <input type="search" value={query} onChange={(e) => { setQuery(e.target.value); setShown(20) }} placeholder="Search bill no., invoice or division…" aria-label="Search bills"
-          className={`${inputCls} w-full mb-3`} />
+        <>
+          <FilterBar className="mb-3" defs={BILL_FILTERS} values={filters} onChange={setBillFilters} />
+          <FiltersButton className="mb-3 sm:hidden" defs={BILL_FILTERS} values={filters} onChange={setBillFilters} />
+        </>
       )}
       {list.length === 0 && (
-        <p className="text-center py-10 text-sm text-muted-foreground">{q ? 'No bill matches.' : bills.length ? 'No open bills. Everything uploaded has been received.' : 'No bills yet. Upload the bill PDFs Relaxo sends by mail.'}</p>
+        <p className="text-center py-10 text-sm text-muted-foreground">{filtering ? 'No bill matches.' : bills.length ? 'No open bills. Everything uploaded has been received.' : 'No bills yet. Upload the bill PDFs Relaxo sends by mail.'}</p>
       )}
       {list.length > 0 && <p className="mb-1.5 text-[11px] text-muted-foreground">{all.length} bill{all.length === 1 ? '' : 's'}</p>}
       <div className={`rounded-xl border border-border divide-y divide-border overflow-hidden ${list.length ? '' : 'hidden'}`}>
@@ -613,23 +627,25 @@ function ResultLine({ item }: { item: LogItem }) {
 // ── Expected stock ────────────────────────────────────────────────────
 
 function ExpectedTab() {
-  const [rows, setRows] = useState<ExpectedStockRow[]>([])
-  const [search, setSearch] = useState('')
+  const [all, setAll] = useState<ExpectedStockRow[]>([])
+  const [filters, setFilters] = useState<FilterValues>({})
   const [error, setError] = useState('')
   const [busy, start] = useTransition()
-  const q = useDebounced(search)
+  // One query when the tab opens; filters work on the phone.
   useEffect(() => {
     start(async () => {
-      try { setRows(await getExpectedStock(q)); setError('') } catch (e) { setError(errText(e, 'Could not load.')) }
+      try { setAll(await getExpectedStock('')); setError('') } catch (e) { setError(errText(e, 'Could not load.')) }
     })
-  }, [q])
+  }, [])
+  const rows = applyColumnFilters(all, EXPECTED_FILTERS, filters)
   const today = new Date().toISOString().slice(0, 10)
   return (
     <div>
-      <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Article, colour…" aria-label="Search expected stock" className={`${inputCls} w-full mb-3`} />
+      <FilterBar className="mb-3" defs={EXPECTED_FILTERS} values={filters} onChange={setFilters} />
+      <FiltersButton className="mb-3 sm:hidden" defs={EXPECTED_FILTERS} values={filters} onChange={setFilters} />
       <p className="text-xs text-muted-foreground mb-2">Pairs on open bills not received yet. {rows.length ? `${num.format(rows.reduce((n, r) => n + r.pairs, 0))} pairs in ${rows.length} rows.` : ''}</p>
       {error && <p className="mb-2 text-xs text-red-600">{error}</p>}
-      {!busy && rows.length === 0 && <p className="text-center py-10 text-sm text-muted-foreground">Nothing expected.</p>}
+      {!busy && rows.length === 0 && <p className="text-center py-10 text-sm text-muted-foreground">{activeFilterCount(filters) ? 'Nothing matches.' : 'Nothing expected.'}</p>}
       <div className={`rounded-xl border border-border divide-y divide-border overflow-hidden ${rows.length ? '' : 'hidden'} ${busy ? 'opacity-70' : ''}`}>
         {rows.map((r) => (
           <div key={`${r.articleCode}|${r.colourCode}|${r.sizeFrom}|${r.sizeTo}`} className="flex items-center gap-3 px-3 py-2.5">
