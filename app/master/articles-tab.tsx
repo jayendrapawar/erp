@@ -1,13 +1,25 @@
 'use client'
 
 import { useState, useMemo, useTransition, useRef, useEffect } from 'react'
-import { fuzzyFilter } from '@/lib/fuzzy'
+import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { saveArticle, uploadArticleList, deleteArticle, getArticleSizes, getArticles, getArticleMrps, getMissingArticles, addSizeToArticleFromScans, setMissingArticleReview, setCatalogReviewItemStatus } from '@/app/actions/articles'
 import type { CatalogReviewItem, ArticleUploadResult } from '@/app/actions/articles'
 import { ARTICLE_UPLOAD_COLUMNS, articleTemplateCsv } from '@/lib/catalog/article-upload-columns'
 import type { MissingArticle } from '@/lib/catalog/missing-articles'
 import { expandSizeRange } from '@/lib/catalog/sizes'
 import { DIVISIONS, SEGMENTS } from '@/lib/catalog/assortments'
+
+const ARTICLE_FILTERS: ColumnFilterDef<Article>[] = [
+  { key: 'name', label: 'Article name', kind: 'text', get: a => a.artName },
+  { key: 'code', label: 'Article code', kind: 'text', get: a => a.artCode },
+  { key: 'segment', label: 'Segment', kind: 'select', options: SEGMENTS, get: a => a.segment },
+  { key: 'division', label: 'Division', kind: 'select', options: DIVISIONS, get: a => a.division },
+  { key: 'color', label: 'Color', kind: 'text', get: a => a.color },
+  { key: 'colorCode', label: 'Color code', kind: 'text', get: a => a.colorCode },
+  { key: 'min', label: 'Min size', kind: 'text', get: a => a.minSize },
+  { key: 'max', label: 'Max size', kind: 'text', get: a => a.maxSize },
+]
+const filterDef = (key: string) => ARTICLE_FILTERS.find(d => d.key === key)!
 import { divisionForArticleCode } from '@/lib/qr-config'
 import type { Article } from '@/app/actions/articles'
 import { NewArticleDialog } from '@/components/scanner/new-article-dialog'
@@ -130,7 +142,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
     onListChange?.(next)
   }
 
-  const [search, setSearch] = useState('')
+  const [filters, setFilters] = useState<FilterValues>({})
 
   // ── Modal state ──
   const [modalMode, setModalMode] = useState<'add' | 'edit' | null>(null)
@@ -194,8 +206,8 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
   }
 
   const filtered = useMemo(() =>
-    fuzzyFilter(showRetired ? articleList : articleList.filter(a => a.active), search, a => [a.artName, a.artCode, a.color, a.colorCode, a.segment ?? ''])
-  , [articleList, search, showRetired])
+    applyColumnFilters(showRetired ? articleList : articleList.filter(a => a.active), ARTICLE_FILTERS, filters)
+  , [articleList, filters, showRetired])
 
   function openAdd() {
     setForm(EMPTY_FORM)
@@ -312,14 +324,10 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
       />
 
       {/* ── Toolbar ── */}
-      <div className="mb-2">
-        <input
-          type="search"
-          placeholder="Search articles…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-        />
+      {/* Filters: under each column heading on wide screens; a Filters button on phones. */}
+      <FiltersButton className="mb-2 sm:hidden" defs={ARTICLE_FILTERS} values={filters} onChange={setFilters} />
+      <div className="mb-2 hidden sm:block">
+        <FilterSummary values={filters} onChange={setFilters} shown={filtered.length} total={showRetired ? articleList.length : articleList.filter(a => a.active).length} />
       </div>
       <div className="flex items-center gap-2 mb-4">
         <button
@@ -580,12 +588,18 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Article Name</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Article Code</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Segment</th>
+                <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Division</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Color</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Color Code</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Min Size</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Max Size</th>
                 <th className="pr-4 pl-2 py-2.5 w-[140px] text-right">Actions</th>
               </tr>
+              <FilterRow
+                columns={[null, filterDef('name'), filterDef('code'), filterDef('segment'), filterDef('division'), filterDef('color'), filterDef('colorCode'), filterDef('min'), filterDef('max'), null]}
+                values={filters}
+                onChange={setFilters}
+              />
             </thead>
             <tbody className="divide-y divide-border">
               {filtered.map(a => (
@@ -596,6 +610,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                   </td>
                   <td className="px-2 py-3 font-mono text-xs text-foreground whitespace-nowrap">{a.artCode || '—'}{mrpsByCode[mrpKey(a.artCode)]?.length ? <span className="block font-sans text-[10px] text-muted-foreground">MRPs: {mrpsByCode[mrpKey(a.artCode)].join(', ')}</span> : null}</td>
                   <td className="px-2 py-3 text-sm text-foreground whitespace-nowrap">{a.segment || <span className="text-muted-foreground">—</span>}</td>
+                  <td className="px-2 py-3 text-sm text-foreground whitespace-nowrap">{a.division || <span className="text-muted-foreground">—</span>}</td>
                   <td className="px-2 py-3 text-sm text-foreground whitespace-nowrap">{a.color || '—'}</td>
                   <td className="px-2 py-3 whitespace-nowrap">
                     {a.colorCode ? (

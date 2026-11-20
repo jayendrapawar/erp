@@ -193,7 +193,7 @@
   "Could not read the file.": "फ़ाइल पढ़ी नहीं जा सकी।",
   "Could not remove.": "हटा नहीं सके।",
   "Could not save.": "सेव नहीं हुआ।",
-  "Division": "डिवीजन",
+  "Division": "डिवीज़न",
   "Division, segment, pairs and code stay fixed. To change them, remove this assortment and add a new one.": "डिवीजन, सेगमेंट, जोड़ी और कोड नहीं बदलते। बदलने के लिए यह असॉर्टमेंट हटाकर नया जोड़ें।",
   "Download Excel": "Excel डाउनलोड करें",
   "Download the empty template": "खाली टेम्पलेट डाउनलोड करें",
@@ -1217,5 +1217,11 @@
   "Size range as on the carton: 610 = sizes 6–10, 305 = 3–5, 1101 = 11, 12, 13, 1.": "कार्टन पर लिखी साइज़ रेंज: 610 = साइज़ 6–10, 305 = 3–5, 1101 = 11, 12, 13, 1।",
   "One column per size: pairs of that size in the carton (blank = none). They must add up to Pairs per carton.": "हर साइज़ का एक कॉलम: कार्टन में उस साइज़ की जोड़ी (खाली = कोई नहीं)। कुल प्रति कार्टन जोड़ी के बराबर होना चाहिए।",
   "Optional check: sum of the sizes.": "वैकल्पिक जाँच: साइज़ का जोड़।",
-  "Optional remark.": "वैकल्पिक टिप्पणी।"
+  "Optional remark.": "वैकल्पिक टिप्पणी।",
+  "Filters": "फ़िल्टर",
+  "Filters ({0})": "फ़िल्टर ({0})",
+  "Clear filters": "फ़िल्टर हटाएँ",
+  "Filter…": "फ़िल्टर…",
+  "(blank)": "(खाली)",
+  "{0} of {1} shown · {2} filter(s) on": "{1} में से {0} दिख रहे · {2} फ़िल्टर लगे"
 }

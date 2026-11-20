@@ -1,11 +1,22 @@
 'use client'
 
 import { useState, useMemo, useTransition, useRef } from 'react'
-import { fuzzyFilter } from '@/lib/fuzzy'
+import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { saveVendor, importVendors } from '@/app/actions/vendors'
 import type { Vendor } from '@/app/actions/vendors'
 import { csvToCells, downloadCsv } from '@/lib/csv'
 import { UploadGuide, type UploadColumn } from '@/components/upload-guide'
+
+const RETAILER_FILTERS: ColumnFilterDef<Vendor>[] = [
+  { key: 'id', label: 'ID', kind: 'text', get: v => v.id },
+  { key: 'name', label: 'Party name', kind: 'text', get: v => v.partyName },
+  { key: 'gst', label: 'GST', kind: 'text', get: v => v.gst },
+  { key: 'phone', label: 'Phone', kind: 'text', get: v => v.phone },
+  { key: 'location', label: 'Location', kind: 'text', get: v => [v.address, v.area, v.city].filter(Boolean).join(' ') },
+  { key: 'day', label: 'Day', kind: 'text', get: v => v.day },
+  { key: 'salesman', label: 'Salesman', kind: 'text', get: v => v.salesman },
+  { key: 'status', label: 'Status', kind: 'select', options: ['active', 'inactive'], get: v => v.status },
+]
 
 const RETAILER_COLUMNS: UploadColumn[] = [
   { name: 'partyName', required: true, example: 'Shree Footwear', help: 'Retailer / shop name. A name already in the list is skipped.' },
@@ -111,8 +122,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
     onListChange?.(next)
   }
 
-  const [search, setSearch] = useState('')
-  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all')
+  const [filters, setFilters] = useState<FilterValues>({})
 
   // ── Modal state ──
   const [modalMode, setModalMode] = useState<'add' | 'edit' | null>(null)
@@ -158,11 +168,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
     reader.readAsText(file)
   }
 
-  const filtered = useMemo(() => {
-    let list = vendors
-    if (filterStatus !== 'all') list = list.filter(v => v.status === filterStatus)
-    return fuzzyFilter(list, search, v => [v.partyName, v.gst, v.city, v.area, v.salesman])
-  }, [vendors, search, filterStatus])
+  const filtered = useMemo(() => applyColumnFilters(vendors, RETAILER_FILTERS, filters), [vendors, filters])
 
   function openAdd() {
     setForm(EMPTY_FORM)
@@ -208,27 +214,10 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
       />
 
       {/* ── Toolbar ── */}
-      {/* Row 1: search (full width on mobile) */}
-      <div className="mb-2">
-        <input
-          type="search"
-          placeholder="Search retailers…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-        />
-      </div>
-      {/* Row 2: filter + actions */}
+      {/* Filters: under each column heading on wide screens; a Filters button on phones. */}
+      <FiltersButton className="mb-2 sm:hidden" defs={RETAILER_FILTERS} values={filters} onChange={setFilters} />
+      <div className="mb-2 hidden sm:block"><FilterSummary values={filters} onChange={setFilters} shown={filtered.length} total={vendors.length} /></div>
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        <select
-          value={filterStatus}
-          onChange={e => setFilterStatus(e.target.value as typeof filterStatus)}
-          className="rounded-lg border border-border bg-background px-2 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-        >
-          <option value="all">All</option>
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-        </select>
         {/* Import CSV */}
         <button
           onClick={() => csvInputRef.current?.click()}
@@ -347,6 +336,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Status</th>
                 <th className="pr-4 pl-2 py-2.5 w-[56px]"></th>
               </tr>
+              <FilterRow columns={[...RETAILER_FILTERS, null]} values={filters} onChange={setFilters} />
             </thead>
             <tbody className="divide-y divide-border">
               {filtered.map(v => (

@@ -5,6 +5,17 @@ import { applyAssortmentUpload, previewAssortmentUpload, retireAssortment, saveA
 import type { Assortment } from '@/lib/catalog/assortment-store'
 import { DIVISIONS, SEGMENTS, SIZE_COLUMNS, codeSizes, formatSizes, validateAssortment } from '@/lib/catalog/assortments'
 import { UploadGuide } from '@/components/upload-guide'
+import { activeFilterCount, applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
+
+const ASSORTMENT_FILTERS: ColumnFilterDef<Assortment>[] = [
+  { key: 'division', label: 'Division', kind: 'select', options: DIVISIONS, get: a => a.division },
+  { key: 'segment', label: 'Segment', kind: 'select', options: SEGMENTS, get: a => a.segment },
+  { key: 'packing', label: 'Pairs', kind: 'text', get: a => String(a.packing) },
+  { key: 'code', label: 'Code', kind: 'text', get: a => a.code },
+  { key: 'sizes', label: 'Pairs per size', kind: 'text', placeholder: 'e.g. 6×4', get: a => formatSizes(a.sizes) },
+  { key: 'version', label: 'Ver.', kind: 'text', get: a => `v${a.version}` },
+  { key: 'note', label: 'Note', kind: 'text', get: a => a.note },
+]
 
 const ASSORTMENT_COLUMNS = [
   { name: 'Division', required: true, example: 'Flite EVA', help: 'Sparx, Flite EVA, Flite PU or Bahamas.' },
@@ -49,8 +60,7 @@ const STATUS_LABEL = { new: 'New', changed: 'New version', same: 'No change', er
 export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
   const [list, setList] = useState<Assortment[]>(initialAssortments)
   const [division, setDivision] = useState<string>('all')
-  const [segment, setSegment] = useState<string>('all')
-  const [search, setSearch] = useState('')
+  const [filters, setFilters] = useState<FilterValues>({})
   const [form, setForm] = useState<Form | null>(null)
   const [formError, setFormError] = useState('')
   const [retiring, setRetiring] = useState<Assortment | null>(null)
@@ -67,11 +77,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
     for (const a of list) m.set(a.division, (m.get(a.division) ?? 0) + 1)
     return m
   }, [list])
-  const filtered = useMemo(() => {
-    const q = search.trim().toUpperCase()
-    return list.filter(a => (division === 'all' || a.division === division) && (segment === 'all' || a.segment === segment)
-      && (!q || a.code.includes(q) || String(a.packing) === q))
-  }, [list, division, segment, search])
+  const filtered = useMemo(() => applyColumnFilters(list.filter(a => division === 'all' || a.division === division), ASSORTMENT_FILTERS, filters), [list, division, filters])
 
   // ── Add / edit ─────────────────────────────────────────────
   const formInput = form && {
@@ -84,7 +90,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
   const rangeSizes = form ? codeSizes(form.code.trim().toUpperCase()) : null
 
   function openAdd() {
-    setForm({ ...EMPTY, division: division !== 'all' ? division : EMPTY.division, segment: segment !== 'all' ? segment : EMPTY.segment })
+    setForm({ ...EMPTY, division: division !== 'all' ? division : EMPTY.division, segment: filters.segment && filters.segment !== '__blank__' ? filters.segment : EMPTY.segment })
     setFormError('')
   }
   function openEdit(a: Assortment) {
@@ -153,13 +159,8 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
       </div>
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        <input type="search" placeholder="Code or pairs…" value={search} onChange={e => setSearch(e.target.value)}
-          className="flex-1 min-w-[120px] rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
-        <select value={segment} onChange={e => setSegment(e.target.value)} aria-label="Segment"
-          className="rounded-lg border border-border bg-background px-2 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring">
-          <option value="all">All segments</option>
-          {SEGMENTS.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <FiltersButton className="sm:hidden" defs={ASSORTMENT_FILTERS} values={filters} onChange={setFilters} />
+        <div className="hidden sm:block"><FilterSummary values={filters} onChange={setFilters} shown={filtered.length} total={list.length} /></div>
         <a href={exportHref} className="rounded-lg border border-border px-3 py-2 text-xs font-medium hover:bg-muted transition-colors">Download Excel</a>
         {canEdit && (
           <>
@@ -209,7 +210,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
       </div>
 
       {/* Desktop: table */}
-      {filtered.length > 0 && (
+      {(filtered.length > 0 || activeFilterCount(filters) > 0) && (
         <div className="hidden sm:block rounded-xl border border-border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -219,6 +220,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
                     <th key={h} className="text-left px-3 py-2.5 font-medium text-muted-foreground text-xs">{h}</th>
                   ))}
                 </tr>
+                <FilterRow columns={[...ASSORTMENT_FILTERS, ...(canEdit ? [null] : [])]} values={filters} onChange={setFilters} firstCellClass="px-3" cellClass="px-3" />
               </thead>
               <tbody className="divide-y divide-border">
                 {filtered.map(a => (
