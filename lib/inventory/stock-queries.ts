@@ -29,6 +29,13 @@ export interface StockVariant {
 export interface StockFilters {
   search?: string
   division?: string
+  /** Per-column filters (Inventory → Stock): "contains", ignoring case, spaces and dashes. */
+  name?: string
+  code?: string
+  color?: string
+  colorCode?: string
+  /** Exact segment; "__blank__" = no segment. */
+  segment?: string
   /** Default true: only variants whose pairs on hand are not zero. */
   inStockOnly?: boolean
   page?: number
@@ -68,6 +75,11 @@ const AVG_MRP = (skuFilter: SQL) => sql`
   GROUP BY x."skuId"
   HAVING sum(x.quantity) > 0`
 
+// Filters ignore case, spaces, dashes, underscores, slashes and dots (same as the screen's filters).
+const squash = (v: unknown) => String(v ?? '').toLowerCase().replace(/[\s\-_/.]+/g, '').slice(0, 60)
+const SQUASH_RE = '[[:space:]_/.-]+'
+const likeEscape = (v: string) => v.replace(/[%_\\]/g, (m) => `\\${m}`)
+
 /** One page of variants with their sizes, pairs and value. One query. */
 export async function listStock(db: DbOrTx, f: StockFilters): Promise<{ rows: StockVariant[]; total: number }> {
   const page = Math.max(0, Math.floor(f.page ?? 0))
@@ -77,7 +89,13 @@ export async function listStock(db: DbOrTx, f: StockFilters): Promise<{ rows: St
   const where = sql.join([
     sql`TRUE`,
     q ? sql`(a."artName" ILIKE ${like} OR a."artCode" ILIKE ${like} OR a.color ILIKE ${like} OR a."colorCode" ILIKE ${like})` : sql`TRUE`,
-    f.division ? sql`${DIVISION} = ${f.division}` : sql`TRUE`,
+    f.division ? (f.division === '__blank__' ? sql`${DIVISION} = ''` : sql`${DIVISION} = ${f.division}`) : sql`TRUE`,
+    ...([['name', sql`a."artName"`], ['code', sql`a."artCode"`], ['color', sql`a.color`], ['colorCode', sql`a."colorCode"`]] as const).map(([k, col]) => {
+      const v = squash((f as Record<string, unknown>)[k])
+      // Same rule as the screen: ignore case, spaces and dashes ("ss101" finds SS-101). % and _ are escaped.
+      return v ? sql`regexp_replace(lower(${col}), ${SQUASH_RE}, '', 'g') LIKE ${'%' + likeEscape(v) + '%'}` : sql`TRUE`
+    }),
+    f.segment ? (f.segment === '__blank__' ? sql`a.segment IS NULL` : sql`lower(a.segment) = lower(${f.segment})`) : sql`TRUE`,
     f.articleId ? sql`a.id = ${f.articleId}` : sql`TRUE`,
   ], sql` AND `)
   const r = await db.execute<Record<string, unknown>>(sql`

@@ -5,6 +5,18 @@ import { PageHeader } from '@/app/orders/_components/shared'
 import { PageNav } from '@/components/page-nav'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { OverviewTab } from './overview-tab'
+import { FilterBar, FiltersButton, activeFilterCount, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
+import { SEGMENTS } from '@/lib/catalog/assortments'
+
+// Inventory → Stock filters (applied in the database query; the list loads 50 at a time).
+const STOCK_FILTERS: ColumnFilterDef<StockVariant>[] = [
+  { key: 'name', label: 'Article', kind: 'text', get: v => v.artName },
+  { key: 'code', label: 'Article code', kind: 'text', get: v => v.artCode },
+  { key: 'color', label: 'Colour', kind: 'text', get: v => v.color },
+  { key: 'colorCode', label: 'Colour code', kind: 'text', get: v => v.colorCode },
+  { key: 'segment', label: 'Segment', kind: 'select', options: SEGMENTS, get: () => '' },
+  { key: 'division', label: 'Division', kind: 'select', options: DIVISIONS, get: v => v.division },
+]
 import { DIVISIONS } from '@/lib/catalog/assortments'
 import {
   correctStockAction, getMovements, getStockPage, getStockSummary, getUnscannedDispatch, getVariantDetail, undoCorrectionAction,
@@ -152,12 +164,15 @@ function StockTab({ initial, onOpen, patch }: { initial: { rows: StockVariant[];
   const [rows, setRows] = useState(initial.rows)
   const [total, setTotal] = useState(initial.total)
   const [page, setPage] = useState(0)
-  const [search, setSearch] = useState('')
-  const [division, setDivision] = useState('')
+  const [filters, setFilters] = useState<FilterValues>({})
   const [showEmpty, setShowEmpty] = useState(false)
   const [error, setError] = useState('')
   const [busy, start] = useTransition()
-  const q = useDebounced(search)
+  const fq = useDebounced(JSON.stringify(filters))
+  const query = (page: number) => {
+    const v = JSON.parse(fq) as FilterValues
+    return { name: v.name, code: v.code, color: v.color, colorCode: v.colorCode, segment: v.segment || undefined, division: v.division || undefined, inStockOnly: !showEmpty, page }
+  }
   const first = useRef(true)
   const req = useRef(0)
 
@@ -167,12 +182,12 @@ function StockTab({ initial, onOpen, patch }: { initial: { rows: StockVariant[];
     const id = ++req.current
     start(async () => {
       try {
-        const r = await getStockPage({ search: q, division: division || undefined, inStockOnly: !showEmpty, page: 0 })
+        const r = await getStockPage(query(0))
         if (id !== req.current) return
         setRows(r.rows); setTotal(r.total); setPage(0); setError('')
       } catch (e) { if (id === req.current) setError(errText(e, 'Could not load stock.')) }
     })
-  }, [q, division, showEmpty])
+  }, [fq, showEmpty])
 
   // A correction in the detail dialog: replace that row in place.
   useEffect(() => {
@@ -184,7 +199,7 @@ function StockTab({ initial, onOpen, patch }: { initial: { rows: StockVariant[];
     const id = ++req.current
     start(async () => {
       try {
-        const r = await getStockPage({ search: q, division: division || undefined, inStockOnly: !showEmpty, page: next })
+        const r = await getStockPage(query(next))
         if (id !== req.current) return
         setRows((rs) => [...rs, ...r.rows]); setTotal(r.total); setPage(next)
       } catch (e) { setError(errText(e, 'Could not load more.')) }
@@ -193,12 +208,9 @@ function StockTab({ initial, onOpen, patch }: { initial: { rows: StockVariant[];
 
   return (
     <div>
+      <FilterBar className="mb-2" defs={STOCK_FILTERS} values={filters} onChange={setFilters} />
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Article, code or colour…" aria-label="Search stock" className={`${inputCls} flex-1 min-w-[160px]`} />
-        <select value={division} onChange={(e) => setDivision(e.target.value)} aria-label="Division" className={`${inputCls} text-xs`}>
-          <option value="">All divisions</option>
-          {DIVISIONS.map((d) => <option key={d} value={d}>{d}</option>)}
-        </select>
+        <FiltersButton className="sm:hidden" defs={STOCK_FILTERS} values={filters} onChange={setFilters} />
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} className="accent-foreground" />
           Show articles with no stock
@@ -210,7 +222,7 @@ function StockTab({ initial, onOpen, patch }: { initial: { rows: StockVariant[];
       {error && <p className="mb-2 text-xs text-red-600">{error}</p>}
       {!busy && rows.length === 0 && (
         <p className="text-center py-10 text-sm text-muted-foreground">
-          {q || division ? 'Nothing matches.' : showEmpty ? 'No articles.' : 'No stock yet. Scanned boxes appear here.'}
+          {activeFilterCount(filters) ? 'Nothing matches.' : showEmpty ? 'No articles.' : 'No stock yet. Scanned boxes appear here.'}
         </p>
       )}
 

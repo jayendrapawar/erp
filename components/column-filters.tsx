@@ -106,6 +106,29 @@ export function FiltersButton<T>({ defs, values, onChange, className = '' }: {
   )
 }
 
+/** Wide screens, card lists (no table columns): the filters as a row of labelled boxes. */
+export function FilterBar<T>({ defs, values, onChange, className = '' }: {
+  defs: readonly ColumnFilterDef<T>[]
+  values: FilterValues
+  onChange: (values: FilterValues) => void
+  className?: string
+}) {
+  const n = activeFilterCount(values)
+  return (
+    <div className={`hidden items-end gap-2 sm:flex ${className}`}>
+      <div className="grid flex-1 gap-2" style={{ gridTemplateColumns: `repeat(${defs.length}, minmax(0, 1fr))` }}>
+        {defs.map(d => (
+          <label key={d.key} className="text-[11px] font-medium text-muted-foreground">
+            <span className="mb-0.5 block">{d.label}</span>
+            <FilterInput def={d} value={values[d.key] ?? ''} onChange={v => onChange({ ...values, [d.key]: v })} />
+          </label>
+        ))}
+      </div>
+      {n > 0 && <button type="button" onClick={() => onChange({})} className="pb-1.5 text-xs underline">Clear</button>}
+    </div>
+  )
+}
+
 /** Wide screens: shows how many filters are on, with Clear (the filter boxes are in the table). */
 export function FilterSummary({ values, onChange, shown, total }: { values: FilterValues; onChange: (v: FilterValues) => void; shown: number; total: number }) {
   const n = activeFilterCount(values)
