@@ -166,7 +166,7 @@
   "Saving…": "सेव हो रहा है…",
   "Search articles…": "आर्टिकल खोजें…",
   "Seen": "दिखा",
-  "Show": "दिखाएं",
+  "Show": "दिखाएँ",
   "Show retired": "बंद भी दिखाएं",
   "Size {0} added to {1} / {2}. {3} waiting scan(s) are now in stock.": "साइज़ {0} {1} / {2} में जुड़ गया। {3} रुके हुए स्कैन अब स्टॉक में हैं।",
   "Size not configured": "साइज़ सेट नहीं है",
@@ -1167,5 +1167,8 @@
   "Sold": "बिकीं",
   "% of sales": "बिक्री का %",
   "In stock": "स्टॉक में",
-  "% of stock": "स्टॉक का %"
+  "% of stock": "स्टॉक का %",
+  "{0} ignored missing article(s).": "{0} अनदेखे गायब आर्टिकल।",
+  "MRPs": "MRP",
+  "MRPs seen on scanned boxes of this article code": "इस आर्टिकल कोड के स्कैन किए बॉक्स पर दिखे MRP"
 }
