@@ -17,6 +17,7 @@ import { parseQr } from '@/lib/qr/parser'
 import { normalizeArticleValue } from '@/lib/article-utils'
 import { mainLocationId } from '@/lib/inventory/ledger'
 import { addDays, type ParsedBill } from './relaxo-bill'
+import { addArticleToAssortment } from '@/lib/catalog/assortment-store'
 
 export const DAYS_TO_ARRIVE = 5
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -65,6 +66,8 @@ async function resolveAssortments(tx: DbOrTx, billId: number): Promise<number> {
       JOIN purchase_bills b ON b.id = l2."billId"
       JOIN carton_assortments a ON a.active AND a.division = b.division AND a.packing = l2."pairsPerCarton"
         AND a.code = l2."sizeFrom" || lpad(l2."sizeTo", 2, '0')
+        -- "Only for" assortments are chosen automatically only for the articles they list.
+        AND (a."onlyFor" = '' OR l2."articleCode" = ANY(string_to_array(a."onlyFor", ',')))
       WHERE l2."billId" = ${billId} AND l2."assortmentId" IS NULL AND l2."sizeFrom" <> l2."sizeTo"
       GROUP BY l2.id
     ) x
@@ -135,7 +138,11 @@ export async function purchaseSummary(db: DbOrTx): Promise<PurchaseSummary> {
   }
 }
 
-export interface AssortmentOption { id: number; segment: string; version: number; sizes: AssortmentSize[] }
+export interface AssortmentOption {
+  id: number; segment: string; version: number; sizes: AssortmentSize[]
+  /** Article codes it is only for ('' = any); covers = it already applies to this line's article. */
+  onlyFor: string; covers: boolean
+}
 
 export interface BillLineDetail {
   id: number
@@ -188,8 +195,9 @@ export async function billDetail(db: DbOrTx, billId: number): Promise<BillDetail
            (SELECT count(*) FROM carton_receipts c WHERE c."billLineId" = l.id AND c.status = 'active')::int AS received,
            (SELECT count(*) FROM carton_receipts c WHERE c."billLineId" = l.id AND c.status = 'active' AND c."postedAt" IS NOT NULL)::int AS posted,
            (SELECT a."artName" FROM articles a WHERE ${NORM(sql`a."artCode"`)} = l."articleCode" AND ${NORM(sql`a."colorCode"`)} = l."colourCode" AND a.active LIMIT 1) AS "articleName",
-           (SELECT json_build_object('id', a.id, 'segment', a.segment, 'version', a.version, 'sizes', a.sizes) FROM carton_assortments a WHERE a.id = l."assortmentId") AS assortment,
-           (SELECT coalesce(json_agg(json_build_object('id', a.id, 'segment', a.segment, 'version', a.version, 'sizes', a.sizes) ORDER BY a.segment), '[]'::json)
+           (SELECT json_build_object('id', a.id, 'segment', a.segment, 'version', a.version, 'sizes', a.sizes, 'onlyFor', a."onlyFor", 'covers', true) FROM carton_assortments a WHERE a.id = l."assortmentId") AS assortment,
+           (SELECT coalesce(json_agg(json_build_object('id', a.id, 'segment', a.segment, 'version', a.version, 'sizes', a.sizes, 'onlyFor', a."onlyFor",
+                                                       'covers', (a."onlyFor" = '' OR l."articleCode" = ANY(string_to_array(a."onlyFor", ',')))) ORDER BY a.segment, a."onlyFor"), '[]'::json)
               FROM carton_assortments a
               WHERE l."assortmentId" IS NULL AND a.active AND a.division = b.division AND a.packing = l."pairsPerCarton"
                 AND a.code = l."sizeFrom" || lpad(l."sizeTo", 2, '0')) AS options
@@ -293,13 +301,18 @@ export async function setBillDivision(db: Db, actor: Actor, billId: number, divi
 }
 
 /** Choose the carton assortment of a line, for cartons received from now on. */
-export async function setLineAssortment(db: Db, actor: Actor, lineId: number, assortmentId: number): Promise<void> {
+export async function setLineAssortment(db: Db, actor: Actor, lineId: number, assortmentId: number, addArticle = false): Promise<void> {
   return db.transaction(async (tx) => {
-    const ok = await tx.execute<{ billId: number }>(sql`
-      SELECT l."billId" FROM purchase_bill_lines l JOIN purchase_bills b ON b.id = l."billId" JOIN carton_assortments a ON a.id = ${assortmentId}
+    const ok = await tx.execute<{ billId: number; articleCode: string; covers: boolean }>(sql`
+      SELECT l."billId", l."articleCode", (a."onlyFor" = '' OR l."articleCode" = ANY(string_to_array(a."onlyFor", ','))) AS covers
+      FROM purchase_bill_lines l JOIN purchase_bills b ON b.id = l."billId" JOIN carton_assortments a ON a.id = ${assortmentId}
       WHERE l.id = ${lineId} AND a.active AND a.division = b.division AND a.packing = l."pairsPerCarton"
         AND a.code = l."sizeFrom" || lpad(l."sizeTo", 2, '0')`)
     if (!ok.rows[0]) throw new Error('That assortment does not fit this line (division, pairs per carton and size range must match).')
+    if (!ok.rows[0].covers) {
+      if (!addArticle) throw new Error(`That assortment is only for other articles. Confirm using it for ${ok.rows[0].articleCode} too, or enter a new assortment.`)
+      await addArticleToAssortment(tx, actor, assortmentId, ok.rows[0].articleCode)
+    }
     await tx.update(purchaseBillLines).set({ assortmentId }).where(eq(purchaseBillLines.id, lineId))
     await audit(tx, { actor, action: 'purchase_bill.line_assortment', entityType: 'purchase_bill_line', entityId: lineId, after: { assortmentId } })
   })

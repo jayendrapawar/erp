@@ -15,6 +15,7 @@ const ASSORTMENT_FILTERS: ColumnFilterDef<Assortment>[] = [
   { key: 'sizes', label: 'Pairs per size', kind: 'text', placeholder: 'e.g. 6×4', get: a => formatSizes(a.sizes) },
   { key: 'version', label: 'Ver.', kind: 'text', get: a => `v${a.version}` },
   { key: 'note', label: 'Note', kind: 'text', get: a => a.note },
+  { key: 'onlyFor', label: 'Only for', kind: 'text', placeholder: 'article code', get: a => a.onlyFor || 'any' },
 ]
 
 const ASSORTMENT_COLUMNS = [
@@ -25,6 +26,7 @@ const ASSORTMENT_COLUMNS = [
   { name: '1 \u2026 13', required: true, example: '6', help: 'One column per size: pairs of that size in the carton (blank = none). They must add up to Pairs per carton.' },
   { name: 'Total', required: false, example: '24', help: 'Optional check: sum of the sizes.' },
   { name: 'Note', required: false, example: '', help: 'Optional remark.' },
+  { name: 'Only for articles', required: false, example: 'HC003G, TR002G', help: 'Article codes this assortment is only for (blank = any article). A note like "Hawaii only: HC003G, TR002G" is read the same way. Another article with the same pairs is asked: use this assortment too, or enter a new one.' },
 ]
 
 interface Props {
@@ -41,10 +43,11 @@ interface Form {
   code: string
   pairs: Record<string, string>
   note: string
+  onlyFor: string
 }
 
 const NEW_DIVISION = '__new__'
-const EMPTY: Form = { division: DIVISIONS[0], newDivision: '', segment: SEGMENTS[0], packing: '', code: '', pairs: {}, note: '' }
+const EMPTY: Form = { division: DIVISIONS[0], newDivision: '', segment: SEGMENTS[0], packing: '', code: '', pairs: {}, note: '', onlyFor: '' }
 const inputCls = 'w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60'
 const labelCls = 'text-[10px] font-medium text-muted-foreground uppercase tracking-wide block mb-1'
 
@@ -82,7 +85,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
   // ── Add / edit ─────────────────────────────────────────────
   const formInput = form && {
     division: form.division === NEW_DIVISION ? form.newDivision : form.division,
-    segment: form.segment, packing: Number(form.packing), code: form.code, note: form.note,
+    segment: form.segment, packing: Number(form.packing), code: form.code, note: form.note, onlyFor: form.onlyFor,
     sizes: SIZE_COLUMNS.map(size => ({ size, pairs: form.pairs[size]?.trim() ? Number(form.pairs[size]) : 0 })),
   }
   const check = formInput ? validateAssortment(formInput, form!.division === NEW_DIVISION ? [...divisions, form!.newDivision.trim()] : divisions) : null
@@ -95,7 +98,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
   }
   function openEdit(a: Assortment) {
     setForm({ id: a.id, division: a.division, newDivision: '', segment: a.segment, packing: String(a.packing), code: a.code,
-      pairs: Object.fromEntries(a.sizes.map(s => [s.size, String(s.pairs)])), note: a.note })
+      pairs: Object.fromEntries(a.sizes.map(s => [s.size, String(s.pairs)])), note: a.note, onlyFor: a.onlyFor.split(',').filter(Boolean).join(', ') })
     setFormError('')
   }
   function save() {
@@ -199,6 +202,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
             </div>
             <p className="mt-1 font-mono text-xs text-foreground">{formatSizes(a.sizes)}</p>
             {a.note && <p className="mt-1 text-xs text-muted-foreground">{a.note}</p>}
+            {a.onlyFor && <p className="mt-1 text-xs font-mono text-amber-700 dark:text-amber-400" data-no-translate>{`Only for ${a.onlyFor.split(',').join(', ')}`}</p>}
             {canEdit && (
               <div className="flex gap-2 pt-2 mt-2 border-t border-border">
                 <button onClick={() => openEdit(a)} className="flex-1 rounded-md border border-border px-2 py-1 text-xs font-medium hover:bg-muted">Edit</button>
@@ -216,7 +220,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
             <table className="w-full text-sm">
               <thead className="bg-muted/50">
                 <tr>
-                  {['Division', 'Segment', 'Pairs', 'Code', 'Pairs per size', 'Ver.', 'Note', ...(canEdit ? [''] : [])].map(h => (
+                  {['Division', 'Segment', 'Pairs', 'Code', 'Pairs per size', 'Ver.', 'Note', 'Only for', ...(canEdit ? [''] : [])].map(h => (
                     <th key={h} className="text-left px-3 py-2.5 font-medium text-muted-foreground text-xs">{h}</th>
                   ))}
                 </tr>
@@ -232,6 +236,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
                     <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{formatSizes(a.sizes)}</td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">v{a.version}</td>
                     <td className="px-3 py-2 text-xs text-muted-foreground max-w-[180px] truncate" title={a.note}>{a.note || '—'}</td>
+                    <td className="px-3 py-2 text-xs max-w-[200px]" data-no-translate>{a.onlyFor ? <span className="font-mono text-amber-700 dark:text-amber-400">{a.onlyFor.split(',').join(', ')}</span> : <span className="text-muted-foreground">any article</span>}</td>
                     {canEdit && (
                       <td className="px-3 py-2 whitespace-nowrap">
                         <button onClick={() => openEdit(a)} className="rounded-md border border-border px-2 py-0.5 text-xs font-medium hover:bg-muted">Edit</button>
@@ -310,6 +315,11 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
           <div>
             <label htmlFor="as-note" className={labelCls}>Note</label>
             <input id="as-note" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} className={inputCls} />
+          </div>
+          <div>
+            <label htmlFor="as-onlyfor" className={labelCls}>Only for articles (optional)</label>
+            <input id="as-onlyfor" value={form.onlyFor} onChange={e => setForm({ ...form, onlyFor: e.target.value })} placeholder="e.g. HC003G, TR002G — blank = any article" className={`${inputCls} font-mono`} />
+            <p className="mt-1 text-[11px] text-muted-foreground">Used automatically only for these article codes. For another article with the same pairs, the app asks whether to use it too or enter a new one.</p>
           </div>
           {(check.errors.length > 0 || check.warnings.length > 0) && (form.packing || form.code) && (
             <ul className="text-xs space-y-0.5">

@@ -16,7 +16,7 @@ export const DIVISIONS = ['Sparx', 'Flite EVA', 'Flite PU', 'Bahamas'] as const
 export const SEGMENTS = ['Gents', 'Ladies', 'Kids', 'Baby'] as const
 export const SIZE_COLUMNS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'] as const
 export const SHEET_NAME = 'Assortments'
-export const HEADERS = ['Division', 'Segment', 'Pairs per carton', 'Assortment code', ...SIZE_COLUMNS, 'Total', 'Note'] as const
+export const HEADERS = ['Division', 'Segment', 'Pairs per carton', 'Assortment code', ...SIZE_COLUMNS, 'Total', 'Note', 'Only for articles'] as const
 
 export interface AssortmentInput {
   division: string
@@ -25,6 +25,26 @@ export interface AssortmentInput {
   code: string
   sizes: AssortmentSize[]
   note?: string
+  /** Article codes this assortment is only for ("FIP002G" or "HC003G,TR002G"); '' = any article. */
+  onlyFor?: string
+}
+
+/** Article codes as stored: upper case, unique, sorted, comma-separated ('' = any article). */
+export function normalizeOnlyFor(raw: unknown): string {
+  return [...new Set(String(raw ?? '').toUpperCase().split(/[\s,;/]+/).map(x => x.trim()).filter(Boolean))].sort().join(',')
+}
+
+/** Article codes written in a note, e.g. "Hawaii only: HC003G, TR002G" or "only for FIP002G" ('' when none). */
+export function onlyForFromNote(note: unknown): string {
+  const m = /\bonly(?:\s+for)?\s*:?\s*([A-Za-z0-9][A-Za-z0-9 ,;/]*)$/i.exec(String(note ?? '').trim())
+  if (!m) return ''
+  const codes = normalizeOnlyFor(m[1]).split(',').filter(c => /^[A-Z]{1,6}[0-9][A-Z0-9]{1,8}$/.test(c))
+  return codes.join(',')
+}
+
+/** Does an assortment apply to this article code? ('' onlyFor = every article). */
+export function coversArticle(onlyFor: string | null | undefined, articleCode: string): boolean {
+  return !onlyFor || onlyFor.split(',').includes(articleCode.trim().toUpperCase())
 }
 
 export interface Validated {
@@ -41,8 +61,8 @@ function pick(list: readonly string[], raw: string): string | null {
   return list.find(x => x.toLowerCase() === k) ?? null
 }
 
-export function assortmentKey(a: { division: string; segment: string; packing: number; code: string }): string {
-  return `${a.division}|${a.segment}|${a.packing}|${a.code}`
+export function assortmentKey(a: { division: string; segment: string; packing: number; code: string; onlyFor?: string }): string {
+  return `${a.division}|${a.segment}|${a.packing}|${a.code}|${a.onlyFor ?? ''}`
 }
 
 /** "6×12 7×10 8×8" */
@@ -109,9 +129,12 @@ export function validateAssortment(raw: AssortmentInput, divisions: readonly str
   } else if (code && /^\d+$/.test(code) && !range) {
     warnings.push(`Code ${code} does not read as a size range, so the sizes cannot be cross-checked.`)
   }
+  const onlyFor = normalizeOnlyFor(raw.onlyFor)
+  const badCode = onlyFor.split(',').filter(Boolean).find(c => !/^[A-Z0-9]{3,14}$/.test(c))
+  if (badCode) errors.push(`"${badCode}" in Only for articles is not an article code.`)
 
   return {
-    value: { division: division ?? divisionRaw, segment: segment ?? segmentRaw, packing, code, sizes, note: norm(raw.note) },
+    value: { division: division ?? divisionRaw, segment: segment ?? segmentRaw, packing, code, sizes, note: norm(raw.note), onlyFor },
     errors, warnings,
   }
 }
@@ -133,9 +156,10 @@ export function parseAssortmentSheet(rows: { rowNumber: number; values: unknown[
     packing: col('pairs per carton', 'packing', 'pairs/carton', 'pairs'),
     code: col('assortment code', 'assortment', 'code'),
     total: col('total'), note: col('note', 'notes'),
+    onlyFor: col('only for articles', 'only for', 'only for article', 'articles'),
   }
   for (const [k, i] of Object.entries(c)) {
-    if (i === -1 && k !== 'total' && k !== 'note') errors.push(`Column "${HEADERS[['division', 'segment', 'packing', 'code'].indexOf(k)]}" is missing.`)
+    if (i === -1 && k !== 'total' && k !== 'note' && k !== 'onlyFor') errors.push(`Column "${HEADERS[['division', 'segment', 'packing', 'code'].indexOf(k)]}" is missing.`)
   }
   const sizeCols = SIZE_COLUMNS.map(s => [s, header.findIndex(h => h === s || h === `size ${s}`)] as const).filter(([, i]) => i !== -1)
   if (sizeCols.length === 0) errors.push('No size columns (1 … 13) found.')
@@ -153,6 +177,8 @@ export function parseAssortmentSheet(rows: { rowNumber: number; values: unknown[
       input: {
         division: norm(v(c.division)), segment: norm(v(c.segment)), packing: Number(v(c.packing)), code: norm(v(c.code)),
         note: norm(v(c.note)),
+        // "Only for articles" column; else codes written in the note ("Hawaii only: HC003G, TR002G").
+        onlyFor: normalizeOnlyFor(v(c.onlyFor)) || onlyForFromNote(v(c.note)),
         sizes: sizeCols.map(([size, i]) => ({ size, pairs: v(i) == null || norm(v(i)) === '' ? 0 : Number(v(i)) })),
       },
     })
@@ -182,13 +208,13 @@ export interface UploadLine {
   errors: string[]
   warnings: string[]
   /** Active assortment the line replaces (changed) or equals (same). */
-  current?: { id: number; version: number; sizes: AssortmentSize[]; note: string }
+  current?: { id: number; version: number; sizes: AssortmentSize[]; note: string; onlyFor?: string }
 }
 
 /** Compare sheet rows with the active assortments. Pure: the caller reads the database. */
 export function planAssortmentUpload(
   rows: SheetRow[],
-  active: { id: number; division: string; segment: string; packing: number; code: string; version: number; sizes: AssortmentSize[]; note: string }[],
+  active: { id: number; division: string; segment: string; packing: number; code: string; version: number; sizes: AssortmentSize[]; note: string; onlyFor?: string }[],
   divisions: readonly string[],
 ): UploadLine[] {
   const byKey = new Map(active.map(a => [assortmentKey(a), a]))
@@ -199,7 +225,7 @@ export function planAssortmentUpload(
       v.errors.push(`Total column says ${r.total}, sizes add up to ${v.value.sizes.reduce((n, s) => n + s.pairs, 0)}.`)
     }
     const key = assortmentKey(v.value)
-    if (!v.errors.length && seen.has(key)) v.errors.push(`Same division, segment, pairs and code as row ${seen.get(key)}.`)
+    if (!v.errors.length && seen.has(key)) v.errors.push(`Same division, segment, pairs, code and "only for" articles as row ${seen.get(key)}.`)
     seen.set(key, r.row)
     const cur = byKey.get(key)
     const current = cur ? { id: cur.id, version: cur.version, sizes: cur.sizes, note: cur.note } : undefined

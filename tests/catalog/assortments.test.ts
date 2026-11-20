@@ -62,7 +62,7 @@ describe('carton assortment rules', () => {
     assert.equal(plan[1].status, 'error') // Total column says 30, sizes add up to 36
     assert.match(plan[1].errors.join(), /Total column says 30/)
     assert.equal(plan[2].status, 'error') // same key twice in the file
-    assert.match(plan[2].errors.join(), /Same division, segment, pairs and code as row 2/)
+    assert.match(plan[2].errors.join(), /Same division, segment, pairs, code and "only for" articles as row 2/)
   })
 
   test('missing columns are reported', () => {

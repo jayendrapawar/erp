@@ -5,17 +5,17 @@ import ExcelJS from 'exceljs'
 import type { AssortmentSize } from '@/lib/db/schema'
 import { HEADERS, SEGMENTS, SHEET_NAME, SIZE_COLUMNS } from './assortments'
 
-export interface ExportRow { division: string; segment: string; packing: number; code: string; sizes: AssortmentSize[]; note?: string }
+export interface ExportRow { division: string; segment: string; packing: number; code: string; sizes: AssortmentSize[]; note?: string; onlyFor?: string }
 
 export function buildAssortmentWorkbook(rows: ExportRow[], divisions: readonly string[]): ExcelJS.Workbook {
   const wb = new ExcelJS.Workbook()
   const ws = wb.addWorksheet(SHEET_NAME, { views: [{ state: 'frozen', ySplit: 1 }] })
-  ws.columns = HEADERS.map(h => ({ header: h, key: h, width: h === 'Note' ? 30 : h.length > 3 ? Math.max(12, h.length + 2) : 6 }))
+  ws.columns = HEADERS.map(h => ({ header: h, key: h, width: h === 'Note' || h === 'Only for articles' ? 30 : h.length > 3 ? Math.max(12, h.length + 2) : 6 }))
   ws.getRow(1).font = { bold: true }
   ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } }
   for (const a of rows) {
     const bySize = new Map(a.sizes.map(s => [s.size, s.pairs]))
-    ws.addRow([a.division, a.segment, a.packing, a.code, ...SIZE_COLUMNS.map(s => bySize.get(s) ?? null), null, a.note || null])
+    ws.addRow([a.division, a.segment, a.packing, a.code, ...SIZE_COLUMNS.map(s => bySize.get(s) ?? null), null, a.note || null, a.onlyFor ? a.onlyFor.split(',').join(', ') : null])
   }
   // Total = sum of the size columns (with its value cached), so a typing mistake shows at once in Excel.
   const first = 5, last = first + SIZE_COLUMNS.length - 1
@@ -42,8 +42,9 @@ export function buildAssortmentWorkbook(rows: ExportRow[], divisions: readonly s
     ['1 … 13', 'Pairs of that size. Leave blank when the carton has none.'],
     ['Total', 'Filled in by Excel. Must equal Pairs per carton.'],
     ['Note', 'Optional.'],
+    ['Only for articles', 'Optional. Article codes this assortment is only for, e.g. HC003G, TR002G. Blank = any article of the division. A note like "Hawaii only: HC003G, TR002G" is read the same way. For another article with the same pairs the app asks whether to use this assortment for it too or to enter a new one.'],
     [],
-    ['What the upload does', 'New rows are added. Rows whose division + segment + pairs + code already exist and whose sizes differ become a new version (the old one is kept as history). Identical rows are skipped. Assortments not in the file are not touched — remove them on the screen.'],
+    ['What the upload does', 'New rows are added. Rows whose division + segment + pairs + code + only-for articles already exist and whose sizes differ become a new version (the old one is kept as history). Identical rows are skipped. Assortments not in the file are not touched — remove them on the screen.'],
     ['Errors', 'If any row has an error, nothing is saved; the screen lists every problem with its row number.'],
   ])
   help.getRow(1).font = { bold: true, size: 14 }

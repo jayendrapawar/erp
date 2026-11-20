@@ -17,6 +17,7 @@ import { parseQr } from '@/lib/qr/parser'
 import { normalizeArticleValue } from '@/lib/article-utils'
 import { expandSizeRange } from '@/lib/catalog/sizes'
 import { validateAssortment } from '@/lib/catalog/assortments'
+import { addArticleToAssortment } from '@/lib/catalog/assortment-store'
 import { outcomeFor, postReceivedCartons, refreshBillStatus, type ReceiveOutcome } from './store'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -36,7 +37,11 @@ export interface ManualBox {
   segment: string | null
 }
 
-export interface ManualAssortment { id: number; segment: string; sizes: AssortmentSize[] }
+export interface ManualAssortment {
+  id: number; segment: string; sizes: AssortmentSize[]
+  /** Article codes it is only for ('' = any); covers = it already applies to this box's article. */
+  onlyFor?: string; covers?: boolean
+}
 
 export interface ManualLine {
   lineId: number
@@ -91,7 +96,8 @@ export async function manualCartonOptions(db: DbOrTx, rawBox: string): Promise<M
       SELECT l.id, l."billId", b."refNo", b."billDate"::text AS "billDate", b.division, l."sizeFrom", l."sizeTo", l."packLetter", l."pairsPerCarton", l.mrp, l.cartons,
              (SELECT count(*) FROM carton_receipts c WHERE c."billLineId" = l.id AND c.status = 'active')::int AS received,
              l."assortmentId", a.segment AS "aSegment", a.sizes AS "aSizes",
-             (SELECT coalesce(json_agg(json_build_object('id', x.id, 'segment', x.segment, 'sizes', x.sizes) ORDER BY x.segment), '[]'::json)
+             (SELECT coalesce(json_agg(json_build_object('id', x.id, 'segment', x.segment, 'sizes', x.sizes, 'onlyFor', x."onlyFor",
+                                         'covers', (x."onlyFor" = '' OR l."articleCode" = ANY(string_to_array(x."onlyFor", ',')))) ORDER BY x.segment, x."onlyFor"), '[]'::json)
                 FROM carton_assortments x
                WHERE x.active AND x.division = b.division AND x.packing = l."pairsPerCarton" AND x.code = l."sizeFrom" || lpad(l."sizeTo", 2, '0')) AS options
         FROM purchase_bill_lines l JOIN purchase_bills b ON b.id = l."billId"
@@ -118,7 +124,7 @@ export async function manualCartonOptions(db: DbOrTx, rawBox: string): Promise<M
         mrp: Number(l.mrp), cartons: Number(l.cartons), received: Number(l.received), fitsBox: sizes.includes(box.size),
         single: l.sizeFrom === l.sizeTo,
         assortment: l.assortmentId != null && l.aSizes ? { id: Number(l.assortmentId), segment: l.aSegment ?? '', sizes: l.aSizes } : null,
-        options: (l.options ?? []).map((o) => ({ id: Number(o.id), segment: o.segment, sizes: o.sizes })),
+        options: (l.options ?? []).map((o) => ({ id: Number(o.id), segment: o.segment, sizes: o.sizes, onlyFor: o.onlyFor ?? '', covers: o.covers !== false })),
       }
     }),
   }
@@ -130,6 +136,8 @@ export type ManualReceiveInput = {
   lineId: number
   /** Use this active assortment (one of the line's options). */
   assortmentId?: number | null
+  /** The chosen assortment is "only for" other articles: use it for this article too. */
+  addArticle?: boolean
   /** Or create one (when the master has none that fits). */
   newAssortment?: { segment: string; sizes: AssortmentSize[] } | null
 }
@@ -175,23 +183,31 @@ export async function receiveManualCarton(db: Db, actor: Actor, input: ManualRec
     let assortmentId = line.assortmentId != null ? Number(line.assortmentId) : null
     if (assortmentId == null && !single) {
       if (input.assortmentId) {
-        const ok = await tx.execute(sql`SELECT 1 FROM carton_assortments WHERE id = ${input.assortmentId} AND active AND division = ${line.division} AND packing = ${line.pairsPerCarton} AND code = ${code}`)
+        const ok = await tx.execute<{ covers: boolean }>(sql`SELECT (carton_assortments."onlyFor" = '' OR ${line.articleCode} = ANY(string_to_array(carton_assortments."onlyFor", ','))) AS covers FROM carton_assortments WHERE id = ${input.assortmentId} AND active AND division = ${line.division} AND packing = ${line.pairsPerCarton} AND code = ${code}`)
         if (!ok.rows.length) throw new Error('That assortment does not fit this carton (division, pairs per carton and size range must match).')
+        if (!ok.rows[0].covers) {
+          if (!input.addArticle) throw new Error(`That assortment is only for other articles. Confirm using it for ${line.articleCode} too, or enter a new assortment.`)
+          await addArticleToAssortment(tx, actor, input.assortmentId, line.articleCode)
+        }
         assortmentId = input.assortmentId
       } else if (input.newAssortment) {
         if (!line.division) throw new Error(`Bill ${line.refNo} has no division. Set it on the bill first (Purchases → Bills).`)
-        const v = validateAssortment({ division: line.division, segment: input.newAssortment.segment, packing: Number(line.pairsPerCarton), code, sizes: input.newAssortment.sizes, note: `Entered at manual carton receiving (bill ${line.refNo})` })
+        const scoped = await tx.execute(sql`SELECT 1 FROM carton_assortments WHERE active AND division = ${line.division} AND packing = ${line.pairsPerCarton} AND code = ${code} AND "onlyFor" <> '' LIMIT 1`)
+        const v = validateAssortment({ division: line.division, segment: input.newAssortment.segment, packing: Number(line.pairsPerCarton), code, sizes: input.newAssortment.sizes,
+          note: `Entered at manual carton receiving (bill ${line.refNo})`,
+          // Same pairs as an "only for" assortment of other articles: this new one is only for this article.
+          onlyFor: scoped.rows.length ? line.articleCode : '' })
         if (v.errors.length) throw new Error(v.errors.join(' '))
         if (v.value.sizes.some((s) => !sizes.includes(s.size))) throw new Error(`Only sizes ${sizes.join(', ')} belong to this carton.`)
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('carton_assortments'))`)
         const same = await tx.execute<{ id: number }>(sql`
-          SELECT id FROM carton_assortments WHERE active AND division = ${v.value.division} AND segment = ${v.value.segment} AND packing = ${v.value.packing} AND code = ${v.value.code}`)
+          SELECT id FROM carton_assortments WHERE active AND division = ${v.value.division} AND segment = ${v.value.segment} AND packing = ${v.value.packing} AND code = ${v.value.code} AND "onlyFor" = ${v.value.onlyFor ?? ''}`)
         if (same.rows[0]) assortmentId = Number(same.rows[0].id)
         else {
           const ins = await tx.execute<{ id: number }>(sql`
-            INSERT INTO carton_assortments (division, segment, packing, code, sizes, note, source, "createdBy", version)
-            VALUES (${v.value.division}, ${v.value.segment}, ${v.value.packing}, ${v.value.code}, ${JSON.stringify(v.value.sizes)}::jsonb, ${v.value.note ?? ''}, 'manual', ${actor.id},
-                    (SELECT coalesce(max(version), 0) + 1 FROM carton_assortments WHERE division = ${v.value.division} AND segment = ${v.value.segment} AND packing = ${v.value.packing} AND code = ${v.value.code}))
+            INSERT INTO carton_assortments (division, segment, packing, code, sizes, note, "onlyFor", source, "createdBy", version)
+            VALUES (${v.value.division}, ${v.value.segment}, ${v.value.packing}, ${v.value.code}, ${JSON.stringify(v.value.sizes)}::jsonb, ${v.value.note ?? ''}, ${v.value.onlyFor ?? ''}, 'manual', ${actor.id},
+                    (SELECT coalesce(max(version), 0) + 1 FROM carton_assortments WHERE division = ${v.value.division} AND segment = ${v.value.segment} AND packing = ${v.value.packing} AND code = ${v.value.code} AND "onlyFor" = ${v.value.onlyFor ?? ''}))
             RETURNING id`)
           assortmentId = Number(ins.rows[0].id)
           await audit(tx, { actor, action: 'assortment.created', entityType: 'carton_assortment', entityId: assortmentId, after: { ...v.value, from: 'manual carton entry' } })
@@ -202,6 +218,7 @@ export async function receiveManualCarton(db: Db, actor: Actor, input: ManualRec
             FROM (SELECT l2.id AS "lineId", min(a.id) AS id, count(*) AS n
                     FROM purchase_bill_lines l2 JOIN purchase_bills b ON b.id = l2."billId"
                     JOIN carton_assortments a ON a.active AND a.division = b.division AND a.packing = l2."pairsPerCarton" AND a.code = l2."sizeFrom" || lpad(l2."sizeTo", 2, '0')
+                      AND (a."onlyFor" = '' OR l2."articleCode" = ANY(string_to_array(a."onlyFor", ',')))
                    WHERE b.status IN ('expected', 'partial') AND l2."assortmentId" IS NULL AND l2."sizeFrom" <> l2."sizeTo"
                      AND b.division = ${v.value.division} AND l2."pairsPerCarton" = ${v.value.packing} AND l2."sizeFrom" || lpad(l2."sizeTo", 2, '0') = ${v.value.code}
                    GROUP BY l2.id) x

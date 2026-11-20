@@ -72,8 +72,10 @@ export function ManualCartonPanel({ registerBoxHandler, cameraActive, onStartCam
   useEffect(() => {
     if (!line) { setChoice(null); return }
     if (line.assortment || line.single) { setChoice(null); return }
-    if (line.options.length === 1) { setChoice(line.options[0].id); return }
-    const bySeg = line.options.filter((o) => o.segment === box?.segment)
+    // Chosen automatically only among assortments that cover this article ("only for" others must be confirmed).
+    const covering = line.options.filter((o) => o.covers !== false)
+    if (covering.length === 1) { setChoice(covering[0].id); return }
+    const bySeg = covering.filter((o) => o.segment === box?.segment)
     if (bySeg.length === 1) { setChoice(bySeg[0].id); return }
     setChoice(line.options.length === 0 ? 'new' : null)
     setPairs({})
@@ -92,6 +94,8 @@ export function ManualCartonPanel({ registerBoxHandler, cameraActive, onStartCam
       const out = await receiveManualCartonAction({
         rawBox: box.raw, clientEventId: uuid(), lineId: line.lineId,
         assortmentId: typeof choice === 'number' ? choice : null,
+        // "Only for" other articles: choosing it means "use it for this article too".
+        addArticle: typeof choice === 'number' && line.options.find((o) => o.id === choice)?.covers === false,
         newAssortment: choice === 'new' ? { segment, sizes: line.sizes.map((s) => ({ size: s, pairs: Number(pairs[s]) || 0 })).filter((s) => s.pairs > 0) } : null,
       })
       if (out.status === 'needs_assortment') { setChoice('new'); setError(out.message); return }
@@ -167,7 +171,14 @@ export function ManualCartonPanel({ registerBoxHandler, cameraActive, onStartCam
                   {line.options.map((o) => (
                     <label key={o.id} className="flex items-center gap-2 text-xs">
                       <input type="radio" name="manual-assortment" checked={choice === o.id} onChange={() => setChoice(o.id)} />
-                      <span>{`${o.segment} · ${formatSizes(o.sizes)}`}</span>
+                      <span>
+                        {`${o.segment} · ${formatSizes(o.sizes)}`}
+                        {o.onlyFor && (
+                          <span className={`block text-[11px] ${o.covers === false ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`} data-no-translate>
+                            {o.covers === false ? `Only for ${o.onlyFor.split(',').join(', ')} — choose to use it for ${box?.articleCode} too` : `Only for ${o.onlyFor.split(',').join(', ')}`}
+                          </span>
+                        )}
+                      </span>
                     </label>
                   ))}
                   {line.options.length > 0 && (

@@ -16,6 +16,8 @@ export interface Assortment {
   sizes: AssortmentSize[]
   version: number
   note: string
+  /** Article codes this assortment is only for ('' = any article). */
+  onlyFor: string
   source: 'manual' | 'upload'
   createdAt: Date
 }
@@ -23,7 +25,7 @@ export interface Assortment {
 const COLUMNS = {
   id: cartonAssortments.id, division: cartonAssortments.division, segment: cartonAssortments.segment,
   packing: cartonAssortments.packing, code: cartonAssortments.code, sizes: cartonAssortments.sizes,
-  version: cartonAssortments.version, note: cartonAssortments.note, source: cartonAssortments.source,
+  version: cartonAssortments.version, note: cartonAssortments.note, onlyFor: cartonAssortments.onlyFor, source: cartonAssortments.source,
   createdAt: cartonAssortments.createdAt,
 }
 
@@ -42,7 +44,7 @@ const LOCK = sql`SELECT pg_advisory_xact_lock(hashtext('carton_assortments'))`
 
 function friendly(e: unknown): never {
   const code = (e as { code?: string; cause?: { code?: string } })?.cause?.code ?? (e as { code?: string })?.code
-  if (code === '23505') throw new Error('An active assortment with this division, segment, pairs per carton and code already exists. Edit that one instead.')
+  if (code === '23505') throw new Error('An active assortment with this division, segment, pairs per carton, code and "only for" articles already exists. Edit that one instead.')
   throw e
 }
 
@@ -63,14 +65,14 @@ export async function saveAssortment(db: Db, actor: Actor, input: AssortmentInpu
       if (input.id) {
         const cur = active.find(a => a.id === input.id)
         if (!cur) throw new Error('This assortment was changed or removed by someone else. Reload and try again.')
-        if (assortmentKey(cur) !== assortmentKey(value)) throw new Error('Division, segment, pairs per carton and code cannot be changed. Remove this assortment and add a new one.')
-        if (sameSizes(cur.sizes, value.sizes) && cur.note === (value.note ?? '')) return { id: cur.id, changed: false }
+        if (assortmentKey({ ...cur, onlyFor: '' }) !== assortmentKey({ ...value, onlyFor: '' })) throw new Error('Division, segment, pairs per carton and code cannot be changed. Remove this assortment and add a new one.')
+        if (sameSizes(cur.sizes, value.sizes) && cur.note === (value.note ?? '') && cur.onlyFor === (value.onlyFor ?? '')) return { id: cur.id, changed: false }
         const [next] = await replace(tx, actor, [{ current: cur, value, source: 'manual', sourceFile: null }])
         return { id: next, changed: true }
       }
       const [row] = await tx.insert(cartonAssortments).values({
         ...value, note: value.note ?? '', source: 'manual', createdBy: actor.id,
-        version: sql`(SELECT coalesce(max(version), 0) + 1 FROM carton_assortments WHERE division = ${value.division} AND segment = ${value.segment} AND packing = ${value.packing} AND code = ${value.code})`,
+        version: sql`(SELECT coalesce(max(version), 0) + 1 FROM carton_assortments WHERE division = ${value.division} AND segment = ${value.segment} AND packing = ${value.packing} AND code = ${value.code} AND "onlyFor" = ${value.onlyFor ?? ''})`,
       }).returning({ id: cartonAssortments.id })
       await audit(tx, { actor, action: 'assortment.created', entityType: 'carton_assortment', entityId: row.id, after: value })
       return { id: row.id, changed: true }
@@ -96,6 +98,20 @@ async function replace(tx: DbOrTx, actor: Actor, items: { current: { id: number;
       after: { version: i.current.version + 1, sizes: i.value.sizes, note: i.value.note ?? '' } })
   }
   return inserted.map(r => r.id)
+}
+
+/**
+ * "Use this assortment for this article too": add an article code to an "only for" assortment
+ * (owner, 20 Nov 2026). Sizes do not change, so no new version; audited. Inside the caller's transaction.
+ */
+export async function addArticleToAssortment(tx: DbOrTx, actor: Actor, id: number, articleCode: string): Promise<void> {
+  const code = articleCode.trim().toUpperCase()
+  const [row] = await tx.select({ onlyFor: cartonAssortments.onlyFor }).from(cartonAssortments).where(and(eq(cartonAssortments.id, id), eq(cartonAssortments.active, true))).for('update')
+  if (!row) throw new Error('That assortment is no longer active. Reload and try again.')
+  if (!row.onlyFor || row.onlyFor.split(',').includes(code)) return
+  const next = [...new Set([...row.onlyFor.split(','), code])].sort().join(',')
+  await tx.update(cartonAssortments).set({ onlyFor: next }).where(eq(cartonAssortments.id, id))
+  await audit(tx, { actor, action: 'assortment.article_added', entityType: 'carton_assortment', entityId: id, before: { onlyFor: row.onlyFor }, after: { onlyFor: next } })
 }
 
 /** Remove an assortment from use (kept as history). 1 transaction, 2 statements. */
@@ -135,7 +151,7 @@ export async function applyUpload(db: Db, actor: Actor, rows: SheetRow[], source
     if (created.length) {
       const ins = await tx.insert(cartonAssortments).values(created.map(l => ({
         ...l.value, note: l.value.note ?? '', source: 'upload' as const, sourceFile, createdBy: actor.id,
-        version: sql`(SELECT coalesce(max(version), 0) + 1 FROM carton_assortments WHERE division = ${l.value.division} AND segment = ${l.value.segment} AND packing = ${l.value.packing} AND code = ${l.value.code})`,
+        version: sql`(SELECT coalesce(max(version), 0) + 1 FROM carton_assortments WHERE division = ${l.value.division} AND segment = ${l.value.segment} AND packing = ${l.value.packing} AND code = ${l.value.code} AND "onlyFor" = ${l.value.onlyFor ?? ''})`,
       }))).returning({ id: cartonAssortments.id })
       await audit(tx, { actor, action: 'assortment.created', entityType: 'carton_assortment', entityId: ins.map(r => r.id).join(','), after: created.map(l => l.value), metadata: { sourceFile } })
     }

@@ -63,9 +63,9 @@ export async function voidCartonAction(receiptId: number, reason: string): Promi
   revalidatePath('/inventory')
 }
 
-export async function setLineAssortmentAction(lineId: number, assortmentId: number): Promise<void> {
+export async function setLineAssortmentAction(lineId: number, assortmentId: number, addArticle = false): Promise<void> {
   const u = await requirePermission('purchases.manage')
-  await store.setLineAssortment(db, actorOf(u), lineId, assortmentId)
+  await store.setLineAssortment(db, actorOf(u), lineId, assortmentId, addArticle)
 }
 
 export async function setBillDivisionAction(billId: number, division: string): Promise<void> {

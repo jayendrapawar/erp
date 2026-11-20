@@ -1231,5 +1231,10 @@
   "No": "नहीं",
   "e.g. 12 Nov": "जैसे 12 Nov",
   "e.g. 6-10": "जैसे 6-10",
-  "e.g. 20 Nov": "जैसे 20 Nov"
+  "e.g. 20 Nov": "जैसे 20 Nov",
+  "Only for": "केवल इनके लिए",
+  "any article": "कोई भी आर्टिकल",
+  "Only for articles (optional)": "केवल इन आर्टिकल के लिए (वैकल्पिक)",
+  "Enter a new assortment": "नया असॉर्टमेंट भरें",
+  "Used automatically only for these article codes. For another article with the same pairs, the app asks whether to use it too or enter a new one.": "केवल इन आर्टिकल कोड के लिए अपने-आप लगेगा। उसी जोड़ी वाले दूसरे आर्टिकल के लिए ऐप पूछेगा: यही लगाएँ या नया भरें।"
 }

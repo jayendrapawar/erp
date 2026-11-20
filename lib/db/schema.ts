@@ -502,6 +502,8 @@ export const cartonAssortments = pgTable('carton_assortments', {
   version:       integer('version').notNull().default(1),
   active:        boolean('active').notNull().default(true),
   note:          text('note').notNull().default(''),
+  /** Article codes this assortment is only for (sorted, comma-separated); '' = any article. Migration 0012. */
+  onlyFor:       text('onlyFor').notNull().default(''),
   source:        text('source').$type<'manual' | 'upload'>().notNull().default('manual'),
   sourceFile:    text('sourceFile'),
   createdBy:     text('createdBy').references(() => user.id, { onDelete: 'set null' }),
@@ -511,8 +513,8 @@ export const cartonAssortments = pgTable('carton_assortments', {
   retiredReason: text('retiredReason'),
   replacedById:  integer('replacedById'),
 }, (t) => [
-  uniqueIndex('carton_assortments_active_key').on(t.division, t.segment, t.packing, t.code).where(sql`active`),
-  uniqueIndex('carton_assortments_version_key').on(t.division, t.segment, t.packing, t.code, t.version),
+  uniqueIndex('carton_assortments_active_key').on(t.division, t.segment, t.packing, t.code, t.onlyFor).where(sql`active`),
+  uniqueIndex('carton_assortments_version_key').on(t.division, t.segment, t.packing, t.code, t.onlyFor, t.version),
 ])
 
 // --- Billing takes stock out (migration 0006) ---

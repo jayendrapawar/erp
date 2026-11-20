@@ -430,13 +430,26 @@ function BillDialog({ billId, canManage, onClose, onChanged }: { billId: number;
                         <p>Assortment: {l.assortment.segment} v{l.assortment.version} · <span className="font-mono">{formatSizes(l.assortment.sizes)}</span>{l.receivedCartons ? ` · ${l.postedCartons} of ${l.receivedCartons} received carton(s) added stock` : ''}</p>
                       ) : l.options.length ? (
                         <p className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-amber-700 dark:text-amber-400">Choose the carton assortment (for cartons received from now on):</span>
+                          <span className="text-amber-700 dark:text-amber-400">
+                            {l.options.some((o) => o.covers)
+                              ? 'Choose the carton assortment (for cartons received from now on):'
+                              : `Only an assortment for other articles has ${l.pairsPerCarton} pairs · code ${l.sizeFrom}${l.sizeTo.padStart(2, '0')}. Use it for ${l.articleCode} too, or enter a new assortment:`}
+                          </span>
                           {l.options.map((o) => (
-                            <button key={o.id} disabled={!canManage || busy} onClick={() => run(async () => { await setLineAssortmentAction(l.id, o.id); return 'Assortment saved. Cartons received from now on add stock.' })}
-                              className="rounded-md border border-border px-1.5 py-0.5 hover:bg-muted disabled:opacity-60">
+                            <button key={o.id} disabled={!canManage || busy}
+                              onClick={() => {
+                                // "Only for" other articles: ask before using it for this article as well.
+                                if (!o.covers && !window.confirm(`This assortment is only for ${o.onlyFor.split(',').join(', ')}.\n\nUse the same assortment for ${l.articleCode} too?\n\nOK = use it for ${l.articleCode} too · Cancel = keep it separate (enter a new assortment in Master → Assortments)`)) return
+                                run(async () => { await setLineAssortmentAction(l.id, o.id, !o.covers); return !o.covers ? `Assortment now also used for ${l.articleCode}. Cartons received from now on add stock.` : 'Assortment saved. Cartons received from now on add stock.' })
+                              }}
+                              className={`rounded-md border px-1.5 py-0.5 hover:bg-muted disabled:opacity-60 ${o.covers ? 'border-border' : 'border-amber-400 border-dashed'}`}>
                               {o.segment}: <span className="font-mono">{formatSizes(o.sizes)}</span>
+                              {o.onlyFor && <span className="ml-1 text-[10px] text-muted-foreground" data-no-translate>{`(only for ${o.onlyFor.split(',').join(', ')})`}</span>}
                             </button>
                           ))}
+                          {!l.options.some((o) => o.covers) && (
+                            <a href="/master" className="rounded-md border border-border px-1.5 py-0.5 text-xs underline hover:bg-muted">Enter a new assortment</a>
+                          )}
                         </p>
                       ) : (
                         <p className="text-amber-700 dark:text-amber-400">No carton assortment for {b.division || 'this division'} · {l.pairsPerCarton} pairs · code {l.sizeFrom}{l.sizeTo.padStart(2, '0')} — cartons are checked against the bill and stock comes from scanning their boxes. Add the assortment in Master → Assortments to add stock from the carton itself.</p>
