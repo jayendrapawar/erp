@@ -12,6 +12,7 @@ import type { Article } from './articles-tab'
 import type { CatalogReviewItem } from '@/app/actions/articles'
 import type { MissingArticle } from '@/lib/catalog/missing-articles'
 import { SetsTab } from './sets-tab'
+import { BillTemplateTab } from './bill-template-tab'
 import { SuppliersTab } from './suppliers-tab'
 import { AssortmentsTab } from './assortments-tab'
 import type { Assortment } from '@/lib/catalog/assortment-store'
@@ -250,6 +251,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
             <TabsTrigger value="articles" className="text-xs sm:text-sm">Articles ({articleList.length})</TabsTrigger>
             <TabsTrigger value="assortments" className="text-xs sm:text-sm">Assortments ({assortments.length})</TabsTrigger>
             {isAdmin && <TabsTrigger value="sets" className="text-xs sm:text-sm">Sets ({setList.length})</TabsTrigger>}
+            {isAdmin && <TabsTrigger value="bill" className="text-xs sm:text-sm">Bill template</TabsTrigger>}
           </TabsList>
 
           {/* ── Users tab — hidden for accountant ── */}
@@ -357,6 +359,13 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
           {isAdmin && (
             <TabsContent value="sets">
               <SetsTab initialSets={setList} onListChange={setSetList} />
+            </TabsContent>
+          )}
+
+          {/* ── Bill template (admin only): details printed on sale bills ── */}
+          {isAdmin && (
+            <TabsContent value="bill">
+              <BillTemplateTab />
             </TabsContent>
           )}
 

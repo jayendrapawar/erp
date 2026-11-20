@@ -11,6 +11,8 @@ import { parseQr, isValidWarehouseQr, normalizeQr } from '@/lib/qr-parser'
 import { SCAN_INTERVAL_MS } from '@/components/scanner/constants'
 import { articlesMatch } from '@/lib/billing-verification'
 import { printInvoices, type MrpLine, type PageSize, type BillType, type PrintConfig } from '@/lib/bill-html'
+import { getBillTemplate } from '@/app/actions/bill-template'
+import type { BillTemplate } from '@/lib/bill-template'
 import { BillingScannerPage, type BillingVendor } from '@/components/billing-scanner-page'
 
 type BillerTab = 'verify' | 'emergency' | 'generated'
@@ -61,6 +63,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
   // ── Tab state ────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<BillerTab>('verify')
+  // Shop / bank / QR details for printed bills (Master → Bill template). One query on open.
+  const [billTemplate, setBillTemplate] = useState<BillTemplate | undefined>(undefined)
+  useEffect(() => { getBillTemplate().then(setBillTemplate).catch(() => {}) }, [])
 
   // ── Print Bills state ────────────────────────────────────────────────────────
   const [printSelectedIds, setPrintSelectedIds] = useState<Set<number>>(new Set())
@@ -813,7 +818,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       lineDiscPct: LINE_DISC,
     }))
     setPrintConfigOpen(false)
-    await printInvoices(bills, printConfig)
+    await printInvoices(bills, printConfig, billTemplate)
   }
 
   // ── Mail selected bills as mailto: link ─────────────────────────────────────

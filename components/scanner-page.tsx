@@ -1,6 +1,6 @@
 'use client'
 
-import { playAlreadyScanned, playScanOk } from '@/lib/scan-sound'
+import { playAlreadyScanned, playNewArticle, playScanOk } from '@/lib/scan-sound'
 import jsQR from 'jsqr'
 import { User } from 'lucide-react'
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
@@ -530,6 +530,7 @@ export function ScannerPage() {
       if (masterCheck.status === 'unknown' || masterCheck.status === 'new_colour') {
         const parsed = parseQr(qrCode)
         articleDialogOpenRef.current = true
+        playNewArticle()
         setNewArticleDialog({
           rawQr: qrCode,
           clientEventId,
@@ -575,7 +576,9 @@ export function ScannerPage() {
   function completeCameraScan(scan: Omit<RecentScan, 'masterArtName' | 'masterColorName'> & Partial<Pick<RecentScan, 'masterArtName' | 'masterColorName'>>, message: string) {
     setLastCameraScan({ ...scan, masterArtName: scan.masterArtName ?? '—', masterColorName: scan.masterColorName ?? '—' })
     setDailyScanCount(incrementDailyScanCount())
-    playScanOk()
+    // A box whose article / size is not in the master gets the new-article chime instead of the beep.
+    if (message === MISSING_MESSAGE || scan.resolution !== 'resolved') playNewArticle()
+    else playScanOk()
     showSuccess(message)
     loadRecentScans()
   }

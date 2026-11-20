@@ -81,3 +81,13 @@ Designed for the biller (owner: "assume you are a biller"). `components/billing-
 - Checked in a browser on development with a simulated scanner: scans land in the bill with the
   cursor in the Scan box and with nothing focused; repeat scans are refused; −1 and Clear all free
   the boxes.
+
+## Sale bill template (20 Nov 2026)
+
+`lib/bill-html.ts` builds the printed bill: compact layout, the browser paginates (headings repeat,
+rows never split, totals kept together), no filler rows; A4 / A5; city (CGST + SGST) or outside city
+(IGST + transport). Shop, bank, UPI QR, terms, footer, Hindi retailer name and default paper come
+from **Master → Bill template** (admin; `lib/bill-template.ts`, app_settings key `bill.template`,
+audited; live preview). Discount 4.75 % and GST rates stay fixed (`BILL_RATES`): bills do not store
+their rates, so making them editable first needs the rates saved on each bill. The bill number
+printed is the order / bill number (was a time stamp).

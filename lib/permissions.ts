@@ -57,6 +57,7 @@ export const PERMISSIONS = {
   'purchases.receive': ['admin', 'supervisor', 'warehouse'],
   'purchases.manage': ['admin', 'supervisor', 'accountant'],
   'purchases.mail_start': ['admin'], // turn reading bills from mail on/off (start date)
+  'settings.bill': ['admin'], // Master → Bill template (shop, bank, QR, terms printed on bills)
   'suppliers.edit': ['admin', 'accountant'],
   'sets.view': STAFF,
   'orders.view': ['admin', 'accountant', 'salesman', 'picker', 'biller', 'dispatcher'],

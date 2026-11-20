@@ -1,6 +1,6 @@
 'use client'
 
-import { playAlreadyScanned, playScanOk } from '@/lib/scan-sound'
+import { playAlreadyScanned, playNewArticle, playScanOk } from '@/lib/scan-sound'
 import jsQR from 'jsqr'
 import {
   useCallback, useEffect, useId, useImperativeHandle, useMemo,
@@ -8,6 +8,8 @@ import {
 } from 'react'
 import { fuzzyFilter } from '@/lib/fuzzy'
 import { buildInvoiceHtml } from '@/lib/bill-html'
+import { getBillTemplate } from '@/app/actions/bill-template'
+import type { BillTemplate } from '@/lib/bill-template'
 import { SCAN_INTERVAL_MS, SCAN_MAX_DIM } from '@/components/scanner/constants'
 import { Button } from '@/components/ui/button'
 import { isValidWarehouseQr, parseQr, type ParsedQr } from '@/lib/qr-parser'
@@ -334,6 +336,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
     const key = `${parsed.articleCode}|${parsed.colorCode}`
     if (articleNotedRef.current.has(key)) return
     articleNotedRef.current.add(key)
+    playNewArticle()
     if (canCreate && !articleDialogRef.current) {
       articleDialogRef.current = true
       scanPausedRef.current = true
@@ -735,6 +738,9 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
   // ── Print (and optionally persist to DB as emergency bill) ─────────────────
 
   const [isSaving, setIsSaving] = useState(false)
+  // Standalone billing prints here: load the Bill template once (Direct Billing prints from Receipts).
+  const [billTemplate, setBillTemplate] = useState<BillTemplate | undefined>(undefined)
+  useEffect(() => { if (!onBillGenerated) getBillTemplate().then(setBillTemplate).catch(() => {}) }, [onBillGenerated])
 
   async function handlePrint() {
     if (!selectedVendor) { showError('Please select a vendor first.'); return }
@@ -773,6 +779,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
       order:       { orderNumber: '', billedAt: new Date() },
       lines,
       lineDiscPct: LINE_DISC_PCT,
+      template:    billTemplate,
     })
 
     const win = window.open('', '_blank', 'width=860,height=1000')

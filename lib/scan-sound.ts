@@ -51,3 +51,15 @@ export function playAlreadyScanned() {
   }
   vibrate([120, 80, 120])
 }
+
+/** New article detected (not in the article master): a rising three-note chime + long vibration. */
+export function playNewArticle() {
+  const c = audio()
+  if (c) {
+    const t = c.currentTime
+    tone(c, 523, t, 0.16, 'triangle', 0.35)
+    tone(c, 659, t + 0.17, 0.16, 'triangle', 0.35)
+    tone(c, 880, t + 0.34, 0.32, 'triangle', 0.35)
+  }
+  vibrate([60, 40, 60, 40, 220])
+}
