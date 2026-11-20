@@ -42,14 +42,16 @@ interface DetailItem {
   artNumber: string
   colorNumber: string | null
   sizeNumber: string | null
+  /** Exact article code when the order saved it (one name can cover several codes with the same sizes). */
+  artCode?: string | null
   quantityOrdered: number
   quantityPacked: number
   status: string
 }
 
-// Per-item scan tally key: artNumber|sizeNumber
-function itemKey(artNumber: string, sizeNumber: string | null) {
-  return `${artNumber}|${sizeNumber ?? ''}`
+// Per-item scan tally key: artNumber|sizeNumber|artCode (code empty on older orders)
+function itemKey(artNumber: string, sizeNumber: string | null, artCode?: string | null) {
+  return `${artNumber}|${sizeNumber ?? ''}|${(artCode ?? '').toUpperCase()}`
 }
 
 export function BillerDashboard({ orders: initialOrders, currentBillerId = '', embedded, vendors = [], articles = [] }: Props) {
@@ -289,7 +291,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     const candidates = scanItemsRef.current.filter(i => {
       const iArt  = i.artNumber.toUpperCase()
       const iSize = (i.sizeNumber ?? '').toUpperCase()
-      return articlesMatch(iArt, art) && iSize === size
+      // A line with a saved article code must match the box's code exactly (SS0101C 11 ≠ SS0101S 11).
+      const sameArticle = i.artCode ? i.artCode.toUpperCase().replace(/[^A-Z0-9]/g, '') === art.replace(/[^A-Z0-9]/g, '') : articlesMatch(iArt, art)
+      return sameArticle && iSize === size
     })
 
     if (candidates.length === 0) {
@@ -319,7 +323,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     // counter for all of them. Compute total packed capacity across the pool so
     // that e.g. FL02 RED sz:7 (packed=1) + FL02 GREY sz:7 (packed=1) allows 2
     // scans total — color is irrelevant until color validation is added.
-    const sharedKey  = itemKey(candidates[0].artNumber, candidates[0].sizeNumber)
+    const sharedKey  = itemKey(candidates[0].artNumber, candidates[0].sizeNumber, candidates[0].artCode)
     const current    = scannedMapRef.current[sharedKey] ?? 0
     const totalCap   = candidates.reduce((sum, i) => sum + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0)
 
@@ -506,7 +510,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     const price = typeof manualPrice === 'number' && manualPrice > 0 ? manualPrice : 0
     if (qty <= 0 || price <= 0) return
 
-    const key = itemKey(manualTarget.item.artNumber, manualTarget.item.sizeNumber)
+    const key = itemKey(manualTarget.item.artNumber, manualTarget.item.sizeNumber, manualTarget.item.artCode)
 
     if (manualTarget.isEdit) {
       // Edit mode: replace all existing manual entries for this key with new single entry.
@@ -875,7 +879,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     const keyTotals = new Map<string, number>()
     for (const item of scanItems) {
       if (item.status === 'out_of_stock') continue
-      const key = itemKey(item.artNumber, item.sizeNumber)
+      const key = itemKey(item.artNumber, item.sizeNumber, item.artCode)
       keyTotals.set(key, (keyTotals.get(key) ?? 0) + item.quantityPacked)
     }
     for (const [key, totalPacked] of keyTotals) {
@@ -907,14 +911,20 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     const artMap = new Map<string, Map<string, DetailItem[]>>()
     for (const item of scanItems) {
       if (!artMap.has(item.artNumber)) artMap.set(item.artNumber, new Map())
-      const sizeKey = item.sizeNumber ?? '—'
+      const sizeKey = `${item.sizeNumber ?? '—'}|${(item.artCode ?? '').toUpperCase()}`
       if (!artMap.get(item.artNumber)!.has(sizeKey)) artMap.get(item.artNumber)!.set(sizeKey, [])
       artMap.get(item.artNumber)!.get(sizeKey)!.push(item)
     }
-    return Array.from(artMap.entries()).map(([artNumber, sizeMap]) => ({
-      artNumber,
-      sizeGroups: Array.from(sizeMap.entries()).map(([size, items]) => ({ size, items })),
-    }))
+    return Array.from(artMap.entries()).map(([artNumber, sizeMap]) => {
+      const groups = Array.from(sizeMap.entries()).map(([k, items]) => ({ label: k.split('|')[0], code: k.split('|')[1], items }))
+      return {
+        artNumber,
+        sizeGroups: groups.map(g => ({
+          size: groups.filter(x => x.label === g.label).length > 1 && g.code ? `${g.label} (${g.code})` : g.label,
+          items: g.items,
+        })),
+      }
+    })
   })()
 
   // ── Derived lists ────────────────────────────────────────────────────────────
@@ -1748,7 +1758,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                 const totalPackedPairs   = allItems.reduce((s, i) => s + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0)
                 // Verified = sum of min(scannedMap[key], totalPackedForKey) per unique key
                 const totalVerifiedPairs = sizeGroups.reduce((s, { items }) => {
-                  const key        = itemKey(items[0].artNumber, items[0].sizeNumber)
+                  const key        = itemKey(items[0].artNumber, items[0].sizeNumber, items[0].artCode)
                   const totalPacked = items.reduce((p, i) => p + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0)
                   return s + Math.min(scannedMap[key] ?? 0, totalPacked)
                 }, 0)
@@ -1821,7 +1831,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                           </thead>
                           <tbody className="divide-y divide-border bg-card/40">
                             {sizeGroups.map(({ size, items: sizeItems }) => {
-                              const key        = itemKey(sizeItems[0].artNumber, sizeItems[0].sizeNumber)
+                              const key        = itemKey(sizeItems[0].artNumber, sizeItems[0].sizeNumber, sizeItems[0].artCode)
                               const totalOrd   = sizeItems.reduce((s, i) => s + i.quantityOrdered, 0)
                               const totalPkd   = sizeItems.reduce((s, i) => s + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0)
                               const verified   = Math.min(scannedMap[key] ?? 0, totalPkd)

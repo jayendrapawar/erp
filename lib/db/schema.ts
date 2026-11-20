@@ -345,6 +345,8 @@ export const orderItems = pgTable('order_items', {
   artNumber:        text('artNumber').notNull(),
   colorNumber:      text('colorNumber'),
   sizeNumber:       text('sizeNumber'),
+  /** Exact article code (SS0101S) when the name covers several codes. Migration 0011; NULL on older lines. */
+  artCode:          text('artCode'),
   quantityOrdered:  integer('quantityOrdered').notNull().default(1),
   quantityPacked:   integer('quantityPacked').notNull().default(0),
   status:           orderItemStatusEnum('status').notNull().default('pending'),

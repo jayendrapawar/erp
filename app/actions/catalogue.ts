@@ -101,7 +101,12 @@ export interface ArticleDetail {
   id: number        // id of first article row for this artName (stable key)
   artNumber: string // the artName
   colors: { id: number; articleId: number; colorName: string; colorHex: string | null }[]
-  sizes: { id: number; articleId: number; sizeLabel: string; sortOrder: number }[]
+  /**
+   * Sizes per colour (articleId = the colour's representative variant). When one colour of this name
+   * spans several article codes (SS-101 Black: SS0101C 11–13, 1 · SS0101G 6–10 · SS0101S 11–12),
+   * `key` is "CODE:size" so the children's 11 and the big 11 stay apart; otherwise key = sizeLabel.
+   */
+  sizes: { id: number; articleId: number; sizeLabel: string; sortOrder: number; artCode: string; key: string }[]
 }
 
 export async function getArticleDetailByName(artName: string): Promise<ArticleDetail | null> {
@@ -109,15 +114,14 @@ export async function getArticleDetailByName(artName: string): Promise<ArticleDe
 
   // All article rows for this artName (one per color)
   const artRows = await db
-    .select({ id: articles.id })
+    .select({ id: articles.id, artName: articles.artName, artCode: articles.artCode })
     .from(articles)
     .where(and(eq(articles.artName, artName), eq(articles.active, true)))
-    .orderBy(asc(articles.id))
+    .orderBy(asc(articles.artCode), asc(articles.id))
 
   if (artRows.length === 0) return null
 
   const ids = artRows.map(r => r.id)
-  const firstId = ids[0]
 
   // Use raw SQL with explicit int[] cast to avoid type mismatch errors
   const idList = ids.join(',')
@@ -137,10 +141,12 @@ export async function getArticleDetailByName(artName: string): Promise<ArticleDe
     `)),
   ])
 
-  const colors = colorsRes.rows as { id: number; articleId: number; colorName: string; colorHex: string | null }[]
-  const sizes  = sizesRes.rows  as { id: number; articleId: number; sizeLabel: string; sortOrder: number }[]
-
-  return { id: firstId, artNumber: artName, colors, sizes }
+  const byArt = <T extends { articleId: number }>(rows: T[]) => {
+    const m = new Map<number, T[]>()
+    for (const r of rows) { const k = Number(r.articleId); if (!m.has(k)) m.set(k, []); m.get(k)!.push({ ...r, articleId: k }) }
+    return m
+  }
+  return groupArticles(artRows, byArt(colorsRes.rows as ColourRow[]), byArt(sizesRes.rows as SizeRow[])).get(artName) ?? null
 }
 
 // ── Legacy compat — used by edit-order flow (load by artName string) ──────────
@@ -158,6 +164,69 @@ export async function getArticleDetail(articleId: number): Promise<ArticleDetail
     .limit(1)
   if (!row) return null
   return getArticleDetailByName(row.artName)
+}
+
+type ColourRow = { id: number; articleId: number; colorName: string; colorHex: string | null }
+type SizeRow = { id: number; articleId: number; sizeLabel: string; sortOrder: number }
+
+/** Shared by the bulk catalogue and the single-article loader. Pure (no queries). */
+function groupArticles(
+  artRows: { id: number; artName: string; artCode: string }[],
+  colorsByArt: Map<number, ColourRow[]>,
+  sizesByArt: Map<number, SizeRow[]>,
+): Map<string, ArticleDetail> {
+// One ArticleDetail per article name. Colours are merged by name; each colour keeps the sizes of
+// every code it comes in, keyed per code when there is more than one code.
+const normalizedLabel = (value: string) => value.trim().replace(/\s+/g, ' ').toLocaleLowerCase()
+const artDetailMap = new Map<string, ArticleDetail>()
+type Group = { rep: number; variants: { id: number; artCode: string }[] }
+const groupsByName = new Map<string, Map<string, Group>>()
+for (const row of artRows) {
+  if (!artDetailMap.has(row.artName)) artDetailMap.set(row.artName, { id: row.id, artNumber: row.artName, colors: [], sizes: [] })
+  const detail = artDetailMap.get(row.artName)!
+  if (!groupsByName.has(row.artName)) groupsByName.set(row.artName, new Map())
+  const groups = groupsByName.get(row.artName)!
+  const colours = colorsByArt.get(row.id) ?? []
+  if (!colours.length) {
+    // No colour configured: its sizes hang on the variant itself.
+    groups.set(`#${row.id}`, { rep: row.id, variants: [{ id: row.id, artCode: row.artCode }] })
+    continue
+  }
+  for (const c of colours) {
+    const key = normalizedLabel(c.colorName)
+    const g = groups.get(key)
+    if (!g) { groups.set(key, { rep: c.articleId, variants: [{ id: row.id, artCode: row.artCode }] }); detail.colors.push(c) }
+    else if (!g.variants.some(v => v.id === row.id)) g.variants.push({ id: row.id, artCode: row.artCode })
+  }
+}
+for (const [name, groups] of groupsByName) {
+  const detail = artDetailMap.get(name)!
+  for (const g of groups.values()) {
+    const multi = new Set(g.variants.map(v => v.artCode.trim().toUpperCase())).size > 1
+    const seen = new Set<string>()
+    const rows: ArticleDetail['sizes'] = []
+    for (const v of g.variants) {
+      for (const sz of sizesByArt.get(v.id) ?? []) {
+        const key = multi ? `${v.artCode.trim().toUpperCase()}:${sz.sizeLabel}` : sz.sizeLabel
+        if (seen.has(normalizedLabel(key))) continue
+        seen.add(normalizedLabel(key))
+        rows.push({ id: sz.id, articleId: g.rep, sizeLabel: sz.sizeLabel, sortOrder: sz.sortOrder, artCode: v.artCode.trim().toUpperCase(), key })
+      }
+    }
+    // Codes in a sensible order: children's runs (with sizes 1–5) first, then by smallest size
+    // (6–10 before big 11–12); sizes in chart order inside each code.
+    const rank = new Map<string, number>()
+    for (const code of new Set(rows.map(r => r.artCode))) {
+      const nums = rows.filter(r => r.artCode === code).map(r => Number(r.sizeLabel)).filter(n => Number.isFinite(n))
+      const kids = nums.some(n => n >= 1 && n <= 5)
+      rank.set(code, (kids ? 0 : 1000) + (nums.length ? Math.min(...nums) : 999))
+    }
+    rows.sort((a, b) => (multi ? (rank.get(a.artCode)! - rank.get(b.artCode)!) || a.artCode.localeCompare(b.artCode) : 0)
+      || a.sortOrder - b.sortOrder || a.sizeLabel.localeCompare(b.sizeLabel, undefined, { numeric: true }))
+    detail.sizes.push(...rows)
+  }
+}
+  return artDetailMap
 }
 
 // ── Bulk catalogue — load everything once for client-side search ──────────────
@@ -181,7 +250,7 @@ export async function loadCatalogue(): Promise<CatalogueData> {
   // All vendors (active) and all article data in parallel
   const [vendorRows, artRows, colorRows, sizeRows] = await Promise.all([
     getVendors(),
-    db.select({ id: articles.id, artName: articles.artName }).from(articles).where(eq(articles.active, true)).orderBy(asc(articles.artName)),
+    db.select({ id: articles.id, artName: articles.artName, artCode: articles.artCode }).from(articles).where(eq(articles.active, true)).orderBy(asc(articles.artName), asc(articles.artCode), asc(articles.id)),
     db.select({ id: articleColors.id, articleId: articleColors.articleId, colorName: articleColors.colorName, colorHex: articleColors.colorHex }).from(articleColors).orderBy(asc(articleColors.articleId), asc(articleColors.id)),
     db.select({ id: articleSizes.id, articleId: articleSizes.articleId, sizeLabel: articleSizes.sizeLabel, sortOrder: articleSizes.sortOrder }).from(articleSizes).where(eq(articleSizes.active, true)).orderBy(asc(articleSizes.articleId), asc(articleSizes.sortOrder)),
   ])
@@ -198,43 +267,7 @@ export async function loadCatalogue(): Promise<CatalogueData> {
     sizesByArt.get(s.articleId)!.push(s)
   }
 
-  // Build one ArticleDetail per unique artName (first article id = stable key)
-  const artDetailMap = new Map<string, ArticleDetail>()
-  const representativeArticleIds = new Map<string, number>()
-  const seenSizes = new Set<string>()
-  const normalizedLabel = (value: string) => value.trim().replace(/\s+/g, ' ').toLocaleLowerCase()
-  for (const row of artRows) {
-    if (!artDetailMap.has(row.artName)) {
-      artDetailMap.set(row.artName, { id: row.id, artNumber: row.artName, colors: [], sizes: [] })
-    }
-    const detail = artDetailMap.get(row.artName)!
-    const sizeArticleIds = new Set<number>()
-    for (const c of colorsByArt.get(row.id) ?? []) {
-      const key = `${row.artName}|${normalizedLabel(c.colorName)}`
-      const representativeId = representativeArticleIds.get(key)
-      if (representativeId === undefined) {
-        representativeArticleIds.set(key, c.articleId)
-        detail.colors.push(c)
-        sizeArticleIds.add(c.articleId)
-      } else {
-        sizeArticleIds.add(representativeId)
-      }
-    }
-    if (sizeArticleIds.size === 0) sizeArticleIds.add(row.id)
-    for (const s of sizesByArt.get(row.id) ?? []) {
-      for (const articleId of sizeArticleIds) {
-        const key = `${articleId}|${normalizedLabel(s.sizeLabel)}`
-        if (seenSizes.has(key)) continue
-        seenSizes.add(key)
-        detail.sizes.push({ ...s, articleId })
-      }
-    }
-  }
-
-  // SKU sortOrder already encodes the size chart (children's 11, 12, 13 come before 1).
-  for (const detail of artDetailMap.values()) {
-    detail.sizes.sort((a, b) => a.sortOrder - b.sortOrder || a.sizeLabel.localeCompare(b.sizeLabel, undefined, { numeric: true }))
-  }
+  const artDetailMap = groupArticles(artRows, colorsByArt, sizesByArt)
 
   const vendors: CatalogueVendor[] = vendorRows
     .filter(v => v.status === 'active')

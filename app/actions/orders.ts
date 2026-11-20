@@ -40,6 +40,8 @@ export interface OrderItemInput {
   artNumber: string
   colorNumber?: string
   sizeNumber?: string
+  /** Exact article code (the name can cover several codes with the same sizes). */
+  artCode?: string
   quantityOrdered: number
 }
 
@@ -72,6 +74,7 @@ export async function createOrder(input: CreateOrderInput) {
         artNumber: item.artNumber.toUpperCase(),
         colorNumber: item.colorNumber?.toUpperCase(),
         sizeNumber: item.sizeNumber?.toUpperCase(),
+        artCode: item.artCode?.trim().toUpperCase() || null,
         quantityOrdered: item.quantityOrdered,
       }))
     )
@@ -118,6 +121,7 @@ export async function updateOrder(orderId: number, input: CreateOrderInput) {
         artNumber: item.artNumber.toUpperCase(),
         colorNumber: item.colorNumber?.toUpperCase(),
         sizeNumber: item.sizeNumber?.toUpperCase(),
+        artCode: item.artCode?.trim().toUpperCase() || null,
         quantityOrdered: item.quantityOrdered,
       }))
     )

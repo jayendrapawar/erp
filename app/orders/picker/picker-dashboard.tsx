@@ -245,7 +245,7 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                           <div className="flex flex-wrap gap-x-3 gap-y-1">
                             {items.map(item => (
                               <span key={item.id} className="text-xs tabular-nums whitespace-nowrap">
-                                <span className="text-muted-foreground">{item.sizeNumber ?? '—'}</span>
+                                <span className="text-muted-foreground">{item.sizeNumber ?? '—'}{item.artCode ? <span className="text-[10px]" data-no-translate>{` ${item.artCode}`}</span> : null}</span>
                                 <span className="mx-0.5 text-muted-foreground">/</span>
                                 <span className="font-semibold text-foreground">{item.quantityOrdered}</span>
                               </span>
@@ -420,7 +420,7 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                           {/* Size / ordered row */}
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                              {item.sizeNumber ? `Size: ${item.sizeNumber}` : activeColorGroup.color}
+                              {item.sizeNumber ? `Size: ${item.sizeNumber}${item.artCode ? ` · ${item.artCode}` : ''}` : activeColorGroup.color}
                             </span>
                             <span className="text-xs text-muted-foreground">
                               Ordered: <span className="font-semibold text-foreground tabular-nums">{item.quantityOrdered}</span>

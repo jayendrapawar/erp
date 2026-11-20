@@ -1,9 +1,6 @@
 'use client'
 
-import {
-  useState, useTransition, useRef, useEffect, useMemo, useId, useCallback,
-  forwardRef, useImperativeHandle,
-} from 'react'
+import { useState, useTransition, useRef, useEffect, useMemo, useId, useCallback, forwardRef, useImperativeHandle, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAutoRefresh } from '@/lib/use-auto-refresh'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
@@ -55,8 +52,33 @@ interface OrderLine {
   colorId: number
   colorName: string
   colorHex: string | null
-  sizes: { id: number; sizeLabel: string; sortOrder: number }[]
-  quantities: Record<string, number> // sizeLabel → qty
+  sizes: SizeEntry[]
+  quantities: Record<string, number> // size key → qty (key = size, or "CODE:size" when a colour spans several codes)
+}
+
+/** A size of a colour. `key` is "CODE:size" when one colour spans several article codes (SS-101). */
+type SizeEntry = { id: number; sizeLabel: string; sortOrder: number; articleId?: number; artCode?: string; key?: string }
+const sizeKey = (s: SizeEntry) => s.key ?? s.sizeLabel
+const isMultiCode = (sizes: SizeEntry[]) => sizes.some(s => sizeKey(s) !== s.sizeLabel)
+
+/** A set (size → pairs) onto this colour's keys: the first size with that label gets it. */
+function toKeyed(q: Record<string, number>, sizes: SizeEntry[]): Record<string, number> {
+  if (!isMultiCode(sizes)) return { ...q }
+  const out: Record<string, number> = {}
+  for (const [label, n] of Object.entries(q)) {
+    const hit = sizes.find(s => s.sizeLabel === label && !(sizeKey(s) in out))
+    if (hit) out[sizeKey(hit)] = n
+  }
+  return out
+}
+/** Keys back to plain sizes (for "Last Used" sets). */
+function toLabelled(q: Record<string, number>, sizes: SizeEntry[]): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const [k, n] of Object.entries(q)) {
+    const label = sizes.find(s => sizeKey(s) === k)?.sizeLabel ?? k
+    if (!(label in out)) out[label] = n
+  }
+  return out
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -290,8 +312,9 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
               const isFirst = lineIdx === 0
               const isEditing = editingLineId === line.id
               const sizeCols = line.sizes
-                .filter((sz, i, arr) => arr.findIndex(s => s.sizeLabel === sz.sizeLabel) === i)
-                .filter(sz => (line.quantities[sz.sizeLabel] ?? 0) > 0)
+                .filter((sz, i, arr) => arr.findIndex(s => sizeKey(s) === sizeKey(sz)) === i)
+                .filter(sz => (line.quantities[sizeKey(sz)] ?? 0) > 0)
+              const showCode = isMultiCode(sizeCols)
 
               return (
                 <tr
@@ -326,8 +349,8 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
                   <td className="px-3 py-2.5 align-middle">
                     <span className="flex flex-wrap gap-x-2 gap-y-0.5">
                       {sizeCols.map(sz => (
-                        <span key={sz.sizeLabel} className="text-xs text-muted-foreground whitespace-nowrap">
-                          {sz.sizeLabel}/<span className="font-bold text-foreground">{line.quantities[sz.sizeLabel]}</span>
+                        <span key={sizeKey(sz)} className="text-xs text-muted-foreground whitespace-nowrap">
+                          {sz.sizeLabel}{showCode && sz.artCode ? <span className="text-[10px]" data-no-translate>{` (${sz.artCode})`}</span> : null}/<span className="font-bold text-foreground">{line.quantities[sizeKey(sz)]}</span>
                         </span>
                       ))}
                     </span>
@@ -355,7 +378,7 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
 const QUICK_QTYS = [1, 2, 3, 4, 5]
 
 interface SizeMatrixProps {
-  sizes: { id: number; sizeLabel: string; sortOrder: number }[]
+  sizes: SizeEntry[]
   quantities: Record<string, number>
   onChange: (quantities: Record<string, number>) => void
   /** Keyboard: Enter (shift = add and stay on this article), Shift+1…9 (colour N), Esc. */
@@ -469,7 +492,7 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
     if (e.shiftKey && digit && digit !== '0') { e.preventDefault(); onColour?.(Number(digit)); return }
     if (inInput || e.ctrlKey || e.metaKey || e.altKey || !sizes.length) return
     const r = Math.min(row, sizes.length - 1)
-    const label = sizes[r].sizeLabel
+    const label = sizeKey(sizes[r])
     const current = quantities[label] ?? 0
     setKbd(true)
     if (e.key === 'ArrowDown') { e.preventDefault(); setRow(Math.min(sizes.length - 1, r + 1)); typed.current.text = ''; return }
@@ -500,7 +523,8 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
     }
   }
 
-  const colorTotal = sizes.reduce((s, sz) => s + (quantities[sz.sizeLabel] ?? 0), 0)
+  const colorTotal = sizes.reduce((s, sz) => s + (quantities[sizeKey(sz)] ?? 0), 0)
+  const multi = isMultiCode(sizes)
 
   // Responsive column sizes: on very small screens chips shrink to 2rem, on sm+ stay 2.5rem
   const gridCols = 'minmax(2rem,auto) repeat(5, minmax(0,2.5rem)) minmax(0,3.5rem) 2.5rem'
@@ -520,12 +544,22 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
 
       {/* Size rows */}
       {sizes.map((sz, i) => {
-        const current = quantities[sz.sizeLabel] ?? 0
-        const isManual = manualActive[sz.sizeLabel]
+        const k = sizeKey(sz)
+        const current = quantities[k] ?? 0
+        const isManual = manualActive[k]
         const focused = kbd && i === Math.min(row, sizes.length - 1)
+        // One colour, several article codes: a heading per code (SS0101C 11–1 · SS0101G 6–10 · SS0101S 11–12).
+        const groupStart = multi && (i === 0 || sizes[i - 1].artCode !== sz.artCode)
+        const group = groupStart ? sizes.filter(x => x.artCode === sz.artCode) : []
         return (
+          <Fragment key={sz.id}>
+          {groupStart && (
+            <div className="mt-1.5 flex items-center gap-2 border-t border-border pt-1.5 text-[11px] font-semibold text-muted-foreground">
+              <span className="font-mono text-foreground" data-no-translate>{sz.artCode}</span>
+              <span>{`Sizes ${group[0].sizeLabel}–${group[group.length - 1].sizeLabel}`}</span>
+            </div>
+          )}
           <div
-            key={sz.id}
             onClick={() => setRow(i)}
             className={`grid items-center gap-y-0 gap-x-1 rounded-lg py-0.5 ${focused ? 'bg-primary/10 ring-2 ring-primary' : ''}`}
             style={{ gridTemplateColumns: gridCols }}
@@ -542,9 +576,9 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
                   key={q}
                   type="button"
                   tabIndex={-1}
-                  aria-label={`Set ${sz.sizeLabel} to ${q}`}
+                  aria-label={`Set ${sz.sizeLabel}${multi ? ` ${sz.artCode}` : ''} to ${q}`}
                   aria-pressed={isActive}
-                  onClick={() => handleQuickClick(sz.sizeLabel, q)}
+                  onClick={() => handleQuickClick(k, q)}
                   className={`h-8 w-full rounded-lg text-sm font-semibold border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${chipClass}`}
                 >
                   {q}
@@ -555,11 +589,11 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
               type="number"
               min={0}
               tabIndex={-1}
-              aria-label={`Manual quantity for size ${sz.sizeLabel}`}
+              aria-label={`Manual quantity for size ${sz.sizeLabel}${multi ? ` ${sz.artCode}` : ''}`}
               value={isManual ? (current === 0 ? '' : current) : (current > 5 ? current : '')}
               placeholder="0"
-              onChange={e => handleManualChange(sz.sizeLabel, e.target.value)}
-              onFocus={() => setManualActive(prev => ({ ...prev, [sz.sizeLabel]: true }))}
+              onChange={e => handleManualChange(k, e.target.value)}
+              onFocus={() => setManualActive(prev => ({ ...prev, [k]: true }))}
               className={`h-8 w-full rounded-lg border text-xs text-center font-medium bg-background focus:outline-none focus:ring-2 focus:ring-ring transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                 (isManual && current > 0) || current > 5
                   ? 'border-green-400 text-green-700 dark:text-green-400 dark:border-green-600'
@@ -570,6 +604,7 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
               {current}
             </span>
           </div>
+          </Fragment>
         )
       })}
 
@@ -689,6 +724,7 @@ interface DetailItem {
   artNumber: string
   colorNumber: string | null
   sizeNumber: string | null
+  artCode?: string | null
   quantityOrdered: number
   quantityPacked: number
   status: string
@@ -905,6 +941,11 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
     setColorQuantities(prev => ({ ...prev, [selectedColorId]: q }))
   }
 
+  const matrixSizes: SizeEntry[] = useMemo(
+    () => (selectedArt && selectedColor ? selectedArt.sizes.filter(s => s.articleId === selectedColor.articleId) : []),
+    [selectedArt, selectedColor],
+  )
+
   const currentColorTotal = useMemo(
     () => Object.values(currentQties).reduce((s, n) => s + n, 0),
     [currentQties],
@@ -1020,8 +1061,9 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
    * If the matrix already has quantities, show the replace-confirm dialog.
    * Otherwise, apply immediately.
    */
-  function handlePickSet(qties: Record<string, number>) {
+  function handlePickSet(labelled: Record<string, number>) {
     setSetPickerOpen(false)
+    const qties = toKeyed(labelled, matrixSizes)
     const hasAny = Object.values(currentQties).some(v => v > 0)
     if (hasAny) {
       setPendingSetQties(qties)
@@ -1073,14 +1115,14 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
         colorId: selectedColorId,
         colorName: selectedColor.colorName,
         colorHex: selectedColor.colorHex,
-        sizes: selectedArt.sizes,
+        sizes: matrixSizes,
         quantities: qties,
       }
       setLines(prev => [...prev, newLine])
     }
 
-    // Remember last used set globally
-    setLastUsedSet(qties)
+    // Remember last used set globally (plain sizes, so it fits any article)
+    setLastUsedSet(toLabelled(qties, matrixSizes))
 
     // Clear working quantities for this color and deselect
     setColorQuantities(prev => ({ ...prev, [selectedColorId]: {} }))
@@ -1126,7 +1168,7 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
                 colorId,
                 colorName: colorObj.colorName,
                 colorHex: colorObj.colorHex,
-                sizes: selectedArt.sizes,
+                sizes: selectedArt.sizes.filter(s => s.articleId === colorObj.articleId),
                 quantities: { ...qties },
               }]
             }
@@ -1136,7 +1178,7 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
         return next
       })
 
-      if (lastQties) setLastUsedSet(lastQties)
+      if (lastQties) setLastUsedSet(toLabelled(lastQties, selectedArt.sizes))
     }
 
     // Clear article and focus the search input
@@ -1213,12 +1255,16 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
     const items = lines.flatMap(l =>
       Object.entries(l.quantities)
         .filter(([, qty]) => qty > 0)
-        .map(([size, qty]) => ({
-          artNumber: l.artNumber,
-          colorNumber: l.colorName,
-          sizeNumber: size,
-          quantityOrdered: qty,
-        }))
+        .map(([k, qty]) => {
+          const entry = l.sizes.find(s => sizeKey(s) === k)
+          return {
+            artNumber: l.artNumber,
+            colorNumber: l.colorName,
+            sizeNumber: entry?.sizeLabel ?? k,
+            artCode: entry?.artCode,
+            quantityOrdered: qty,
+          }
+        })
     )
     if (items.length === 0) { setError('All items have zero quantity.'); return }
 
@@ -1281,12 +1327,16 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
             colorId: colorMatch?.id ?? 0,
             colorName: item.colorNumber ?? '',
             colorHex: colorMatch?.colorHex ?? null,
-            sizes: detail?.sizes ?? [],
+            sizes: (detail?.sizes ?? []).filter(s => !colorMatch || s.articleId === colorMatch.articleId),
             quantities: {},
           })
         }
         const line = lineMap.get(key)!
-        if (item.sizeNumber) line.quantities[item.sizeNumber] = item.quantityOrdered
+        if (item.sizeNumber) {
+          const code = (item.artCode ?? '').toUpperCase()
+          const entry = line.sizes.find(s => s.sizeLabel === item.sizeNumber && (!code || !s.artCode || s.artCode === code))
+          line.quantities[entry ? sizeKey(entry) : item.sizeNumber] = item.quantityOrdered
+        }
       }
       setLines(Array.from(lineMap.values()))
       setSelectedSk({ id: '', name: o.shopkeeperName, code: null, phone: null, address: null })
