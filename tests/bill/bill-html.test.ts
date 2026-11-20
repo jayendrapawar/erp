@@ -34,3 +34,12 @@ test('saved template is cleaned: defaults fill gaps, odd values are refused', ()
   assert.equal(t.terms, 'a\nb')
   assert.deepEqual(checkBillTemplate({ ...t, gstin: 'BAD', ifsc: 'X', upiId: 'nope' }).length, 3)
 })
+
+test('bill pages like the old ERP: page script, page height per paper size, article on every line', () => {
+  const many = Array.from({ length: 50 }, (_, i) => ({ artNumber: 'PUG' + (i % 5), mrp: 299, qty: 1 }))
+  const a4 = buildInvoiceHtml({ vendor: { name: 'X' }, order: { orderNumber: 'B-1' }, lines: many, template: DEFAULT_BILL_TEMPLATE })
+  const a5 = buildInvoiceHtml({ vendor: { name: 'X' }, order: { orderNumber: 'B-1' }, lines: many, pageSize: 'A5', template: DEFAULT_BILL_TEMPLATE })
+  assert.ok(a4.includes('data-ph="276"') && a5.includes('data-ph="195"'))
+  assert.ok(a4.includes('<script>') && a4.includes("'Continued on page '"))
+  assert.equal((a4.match(/data-art="PUG0"/g) ?? []).length, 10)   // the name to repeat at the top of a page
+})

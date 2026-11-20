@@ -84,10 +84,17 @@ Designed for the biller (owner: "assume you are a biller"). `components/billing-
 
 ## Sale bill template (20 Nov 2026)
 
-`lib/bill-html.ts` builds the printed bill: compact layout, the browser paginates (headings repeat,
-rows never split, totals kept together), no filler rows; A4 / A5; city (CGST + SGST) or outside city
+`lib/bill-html.ts` builds the printed bill: compact layout, no filler rows; A4 / A5; city (CGST + SGST) or outside city
 (IGST + transport). Shop, bank, UPI QR, terms, footer, Hindi retailer name and default paper come
 from **Master → Bill template** (admin; `lib/bill-template.ts`, app_settings key `bill.template`,
 audited; live preview). Discount 4.75 % and GST rates stay fixed (`BILL_RATES`): bills do not store
-their rates, so making them editable first needs the rates saved on each bill. The bill number
+their rates, so making them editable first needs the rates saved on each bill.
+
+Pages work like the old ERP bill: a small script inside the bill (`PAGINATE_JS`) measures the real
+heights for the paper size and fills each page with as many lines as fit (about 35 on A4, 28 on A5).
+Every page repeats the shop header, party, bill no. with "Page x of y" and the column headings;
+non-last pages end "Continued on page n". The totals block prints once on the last page; when it does
+not fit under the last lines, the lines stay and the totals go to the next page. The first line on a
+page repeats its article name. Without scripts the browser paginates instead.
+ The bill number
 printed is the order / bill number (was a time stamp).

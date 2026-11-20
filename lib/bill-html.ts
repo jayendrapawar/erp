@@ -4,8 +4,12 @@
  *   - A4 / A5; city bill (CGST + SGST) or outside-city bill (IGST + transport details).
  *   - Shop, bank, QR, terms and footer come from the Bill template (Master → Bill template,
  *     lib/bill-template.ts); defaults are the shop's current details.
- *   - The browser paginates: the column headings repeat on every page, rows never split, and the
- *     totals block stays together at the end. No blank filler rows.
+ *   - Pages like the old ERP bill (owner, 20 Nov 2026): a small script in the bill measures the real
+ *     heights for the paper size and fills each page with as many lines as fit. Every page repeats the
+ *     shop header, party, bill no. ("Page x of y") and column headings; non-last pages end with
+ *     "Continued on page n". The totals block is printed once, on the last page — when it does not fit
+ *     under the last lines, those lines stay on their page and the totals go to the next page.
+ *     Without scripts the browser paginates (headings repeat, rows never split).
  *   - Amounts: rate = ceil(MRP × (1 − line discount %)); sub total − 4.75 % discount + GST (fixed
  *     rates; see the note in lib/bill-template.ts).
  */
@@ -101,12 +105,22 @@ function css(isA5: boolean): string {
   return `
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: #fff; }
+  @media screen { html, body { background: #e9e9e9; } body { padding: 12px 0; } }
   body { font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-size: ${base}px; color: #111; line-height: 1.35;
          -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   @page { size: ${isA5 ? 'A5' : 'A4'} portrait; margin: ${isA5 ? '6mm' : '9mm'}; }
   .bill { break-after: page; }
   .bill:last-child { break-after: auto; }
-  @media screen { .bill { max-width: ${isA5 ? '148mm' : '210mm'}; margin: 0 auto 16px; padding: ${isA5 ? '6mm' : '9mm'}; border: 1px solid #ddd; } }
+  /* On screen the page box has the printed width, so the script measures what will print. */
+  @media screen {
+    .bill, .page { width: ${isA5 ? '148mm' : '210mm'}; margin: 0 auto 16px; padding: ${isA5 ? '6mm' : '9mm'}; background: #fff; box-shadow: 0 0 0 1px #ccc; }
+    .page { min-height: ${isA5 ? '210mm' : '297mm'}; }
+    .bill.paged { width: auto; padding: 0; background: none; box-shadow: none; margin: 0; }
+  }
+  .page { display: flex; flex-direction: column; break-after: page; }
+  .bill.paged .page:last-child { break-after: auto; }
+  .cont { margin-top: auto; padding-top: 5px; text-align: center; font-weight: 800; letter-spacing: .5px; font-size: ${base - 1}px; }
+  .pg { color: #444; font-weight: 700; }
 
   .tag { text-align: center; font-size: ${base - 2}px; font-weight: 700; letter-spacing: 1.5px; color: #333; margin-bottom: 3px; }
   .head { display: flex; justify-content: space-between; gap: 12px; border-bottom: 2px solid #111; padding-bottom: 5px; }
@@ -123,6 +137,8 @@ function css(isA5: boolean): string {
   .party-sub { color: #444; font-size: ${base - 1}px; }
 
   table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  table.lines { table-layout: fixed; } /* same columns on every page, even the totals-only one */
+  td.art { overflow-wrap: anywhere; }
   thead { display: table-header-group; }
   tr { break-inside: avoid; }
   th { font-size: ${base - 2}px; text-transform: uppercase; letter-spacing: .5px; color: #333; background: #f1f1f1;
@@ -144,7 +160,7 @@ function css(isA5: boolean): string {
   .bank { flex: 1; font-size: ${base - 1}px; line-height: 1.45; }
   .bank b { display: inline-block; min-width: ${isA5 ? 44 : 52}px; color: #555; font-weight: 600; }
   .qr { width: ${isA5 ? 58 : 74}px; text-align: center; font-size: ${base - 3}px; color: #555; }
-  .qr img { width: 100%; display: block; }
+  .qr img { width: 100%; height: ${isA5 ? 58 : 74}px; object-fit: contain; display: block; }
   .sum { flex: 1; border: 1px solid #bbb; }
   .sum div { display: flex; justify-content: space-between; padding: 2px 7px; }
   .sum .disc span:last-child { color: #b42318; }
@@ -183,7 +199,7 @@ function billBody(o: BuildInvoiceOptions, t: BillTemplate): string {
   const rows = [...groups].map(([art, ls]) => ls.map((l, i) => {
     n++
     const rate = Math.ceil(l.mrp * (1 - lineDiscPct / 100))
-    return `<tr${i === 0 && n > 1 ? ' class="group"' : ''}>
+    return `<tr data-art="${esc(art)}"${i === 0 && n > 1 ? ' class="group"' : ''}>
       <td class="c">${n}</td><td class="art">${i === 0 ? esc(art) : ''}</td>
       <td class="n">${l.mrp > 0 ? fmt(l.mrp) : '—'}</td><td class="qty">${l.qty}</td>
       <td class="n">${fmt(rate)}</td><td class="n">${fmt(rate * l.qty)}</td></tr>`
@@ -201,13 +217,14 @@ function billBody(o: BuildInvoiceOptions, t: BillTemplate): string {
       ${t.showQr ? `<div class="qr"><img src="${qrSrc}" alt="UPI QR" />Scan to pay</div>` : ''}
     </div>` : ''
 
-  return `<section class="bill">
+  return `<section class="bill" data-ph="${isA5 ? PAGE_H_MM.A5 : PAGE_H_MM.A4}">
+  <div class="bill-top">
   ${t.tagline ? `<div class="tag">${esc(t.tagline)}</div>` : ''}
   <div class="head">
     <div><div class="shop">${esc(t.shopName)}</div><div class="shop-sub">${shopLine}</div></div>
     <div class="doc"><div class="doc-title">TAX INVOICE</div>
       ${billType === 'outside' ? '<div class="doc-badge">OUTSIDE CITY</div>' : ''}
-      <div><span class="k">Bill No </span><span class="v">${esc(billNo)}</span></div>
+      <div><span class="k">Bill No </span><span class="v">${esc(billNo)}</span><span class="pg"></span></div>
       <div><span class="k">Date </span><span class="v">${dateStr}</span></div></div>
   </div>
   <div class="party">
@@ -216,9 +233,10 @@ function billBody(o: BuildInvoiceOptions, t: BillTemplate): string {
       <div class="party-sub">${[v.phone, v.area, v.address].filter(Boolean).map(esc).join(' · ') || '&nbsp;'}</div></div>
     <div style="text-align:right"><div class="k">Pairs</div><div class="party-name">${T.totalQty}</div></div>
   </div>
-  <table>
+  </div>
+  <table class="lines">
     <thead><tr><th class="c" style="width:${isA5 ? 22 : 30}px">#</th><th style="text-align:left">Article</th>
-      <th class="n">MRP ₹</th><th class="c" style="width:${isA5 ? 34 : 44}px">Qty</th><th class="n">Rate ₹</th><th class="n">Amount ₹</th></tr></thead>
+      <th class="n" style="width:${isA5 ? 62 : 80}px">MRP ₹</th><th class="c" style="width:${isA5 ? 34 : 44}px">Qty</th><th class="n" style="width:${isA5 ? 66 : 84}px">Rate ₹</th><th class="n" style="width:${isA5 ? 74 : 96}px">Amount ₹</th></tr></thead>
     <tbody>${rows}</tbody>
     <tfoot><tr><td></td><td>Total</td><td></td><td class="c">${T.totalQty}</td><td class="n">Disc ${lineDiscPct}%</td><td class="n">${fmt(T.subTotal)}</td></tr></tfoot>
   </table>
@@ -246,11 +264,59 @@ function billBody(o: BuildInvoiceOptions, t: BillTemplate): string {
 </section>`
 }
 
+// ─── Pages ────────────────────────────────────────────────────────────────────
+
+/** Printable height per page (paper − @page margins − 3 mm safety), in mm. */
+const PAGE_H_MM = { A4: 297 - 18 - 3, A5: 210 - 12 - 3 } as const
+
+/**
+ * Runs inside the bill window before printing. Measures the header, each line, the totals block and
+ * the "continued" line, then rebuilds every bill as fixed pages. Plain ES5 so any browser runs it.
+ */
+const PAGINATE_JS = `(function(){
+var MM=96/25.4;
+function h(el){var r=el.getBoundingClientRect(),s=getComputedStyle(el);return r.height+parseFloat(s.marginTop)+parseFloat(s.marginBottom);}
+var bills=document.querySelectorAll('section.bill[data-ph]');
+for(var b=0;b<bills.length;b++){(function(bill){
+  var H=parseFloat(bill.getAttribute('data-ph'))*MM;
+  var top=bill.querySelector('.bill-top'),table=bill.querySelector('table.lines'),end=bill.querySelector('.end');
+  if(!top||!table||!end||!table.tHead||!table.tBodies[0])return;
+  var rows=[].slice.call(table.tBodies[0].rows),foot=table.tFoot;
+  var probe=document.createElement('div');probe.className='cont';probe.textContent='Continued';bill.appendChild(probe);
+  var contH=h(probe);bill.removeChild(probe);
+  var topH=h(top),headH=table.tHead.getBoundingClientRect().height+parseFloat(getComputedStyle(table).marginTop);
+  var footH=foot?foot.getBoundingClientRect().height:0,endH=h(end);
+  var pages=[],cur=[],used=topH+headH,lim=H-contH;
+  for(var i=0;i<rows.length;i++){var rh=rows[i].getBoundingClientRect().height;
+    if(cur.length&&used+rh>lim){pages.push(cur);cur=[];used=topH+headH;}
+    cur.push(rows[i]);used+=rh;}
+  if(cur.length&&used+footH+endH>H){pages.push(cur);cur=[];}
+  pages.push(cur);
+  if(pages.length<2)return;
+  var n=pages.length,thead=table.tHead;
+  while(bill.firstChild)bill.removeChild(bill.firstChild);
+  for(var p=0;p<n;p++){
+    var pg=document.createElement('div');pg.className='page';
+    var t=top.cloneNode(true),slot=t.querySelector('.pg');if(slot)slot.textContent=' · Page '+(p+1)+' of '+n;pg.appendChild(t);
+    var tb=document.createElement('table');tb.className='lines';tb.appendChild(thead.cloneNode(true));
+    var body=document.createElement('tbody');
+    for(var j=0;j<pages[p].length;j++){var r=pages[p][j];
+      if(j===0){r.className='';var a=r.querySelector('td.art');if(a&&!a.textContent)a.textContent=r.getAttribute('data-art')||'';}
+      body.appendChild(r);}
+    tb.appendChild(body);
+    var last=p===n-1;if(last&&foot)tb.appendChild(foot);
+    pg.appendChild(tb);
+    if(last)pg.appendChild(end);else{var c=document.createElement('div');c.className='cont';c.textContent='Continued on page '+(p+2)+' \u2192';pg.appendChild(c);}
+    bill.appendChild(pg);}
+  bill.className+=' paged';
+})(bills[b]);}
+})();`
+
 export function buildInvoiceHtml(o: BuildInvoiceOptions): string {
   const t = normalizeBillTemplate(o.template ?? DEFAULT_BILL_TEMPLATE)
   const isA5 = (o.pageSize ?? t.defaultPageSize) === 'A5'
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Bill ${esc(o.order.orderNumber)} — ${esc(o.vendor.name)}</title>
-<style>${css(isA5)}</style></head><body>${billBody(o, t)}</body></html>`
+<style>${css(isA5)}</style></head><body>${billBody(o, t)}<script>${PAGINATE_JS}</script></body></html>`
 }
 
 // ─── Print helper ─────────────────────────────────────────────────────────────
@@ -290,7 +356,7 @@ export async function printInvoices(bills: Array<BuildInvoiceOptions>, config?: 
     vendor: { ...b.vendor, nameHindi: b.vendor.nameHindi ?? hindi.get(b.vendor.name) ?? null },
   }, t)).join('\n')
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${bills.length === 1 ? `Bill ${esc(bills[0].order.orderNumber)}` : `Bills (${bills.length})`}</title>
-<style>${css(pageSize === 'A5')}</style></head><body>${body}</body></html>`
+<style>${css(pageSize === 'A5')}</style></head><body>${body}<script>${PAGINATE_JS}</script></body></html>`
   const win = window.open('', '_blank', 'width=860,height=1000')
   if (!win) return
   win.document.write(html); win.document.close(); win.focus()
