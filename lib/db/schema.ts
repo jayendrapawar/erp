@@ -158,6 +158,27 @@ export const articleMrps = pgTable('article_mrps', {
   check('article_mrps_artCode_normalized_check', sql`${t.artCode} = upper(btrim(${t.artCode}))`),
 ])
 
+/**
+ * Photos of an article colour for the retailer shop (migration 0013). The file is in Vercel Blob;
+ * only its public link is stored. sortOrder 0 = main photo.
+ */
+export const articlePhotos = pgTable('article_photos', {
+  id:        serial('id').primaryKey(),
+  articleId: integer('articleId').notNull().references(() => articles.id, { onDelete: 'cascade' }),
+  url:       text('url').notNull().unique('article_photos_url_unique'),
+  pathname:  text('pathname').notNull(),
+  width:     integer('width'),
+  height:    integer('height'),
+  bytes:     integer('bytes'),
+  sortOrder: integer('sortOrder').notNull().default(0),
+  createdBy: text('createdBy').references(() => user.id, { onDelete: 'set null' }),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('article_photos_article_idx').on(t.articleId, t.sortOrder),
+])
+
+export type ArticlePhoto = typeof articlePhotos.$inferSelect
+
 export const articleScanLinks = pgTable('article_scan_links', {
   id: serial('id').primaryKey(),
   articleId: integer('articleId').notNull().references(() => articles.id, { onDelete: 'cascade' }),
@@ -394,7 +415,9 @@ export const auditEvents = pgTable('audit_events', {
   after:       jsonb('after'),
   reason:      text('reason'),
   metadata:    jsonb('metadata'),
-})
+}, (t) => [
+  index('audit_events_action_time_idx').on(t.action, t.occurredAt),
+])
 
 export const locations = pgTable('locations', {
   id:        serial('id').primaryKey(),

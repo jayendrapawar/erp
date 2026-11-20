@@ -23,6 +23,8 @@ const filterDef = (key: string) => ARTICLE_FILTERS.find(d => d.key === key)!
 import { divisionForArticleCode } from '@/lib/qr-config'
 import type { Article } from '@/app/actions/articles'
 import { NewArticleDialog } from '@/components/scanner/new-article-dialog'
+import { ArticlePhotosDialog } from '@/components/master/article-photos-dialog'
+import { getArticlePhotoCounts } from '@/app/actions/article-photos'
 import { parseQr } from '@/lib/qr-parser'
 
 export type { Article }
@@ -99,6 +101,10 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
   const mrpKey = (code: string) => code.trim().toUpperCase().replace(/\s+/g, ' ')
 
   useEffect(() => { getArticleMrps().then(setMrpsByCode).catch(() => setMrpsByCode({})) }, [])
+  // Photos for the retailer shop: count per article colour (1 query), dialog per row.
+  const [photoCounts, setPhotoCounts] = useState<Record<number, number>>({})
+  const [photoTarget, setPhotoTarget] = useState<Article | null>(null)
+  useEffect(() => { getArticlePhotoCounts().then(setPhotoCounts).catch(() => setPhotoCounts({})) }, [])
 
   const [showIgnored, setShowIgnored] = useState(false)
   const [missingBusy, setMissingBusy] = useState(false)
@@ -562,6 +568,12 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
             </div>
             <div className="border-t border-border px-4 py-3 flex gap-2">
               <button
+                onClick={() => setPhotoTarget(a)}
+                className="flex-1 rounded-xl border border-border bg-background py-2.5 text-sm font-medium hover:bg-muted active:scale-95 transition-all"
+              >
+                Photos{photoCounts[a.id] ? ` (${photoCounts[a.id]})` : ''}
+              </button>
+              <button
                 onClick={() => openEdit(a)}
                 className="flex-1 rounded-xl border border-border bg-background py-2.5 text-sm font-medium hover:bg-muted active:scale-95 transition-all"
               >
@@ -593,7 +605,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Color Code</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Min Size</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Max Size</th>
-                <th className="pr-4 pl-2 py-2.5 w-[140px] text-right">Actions</th>
+                <th className="pr-4 pl-2 py-2.5 w-[210px] text-right">Actions</th>
               </tr>
               <FilterRow
                 columns={[null, filterDef('name'), filterDef('code'), filterDef('segment'), filterDef('division'), filterDef('color'), filterDef('colorCode'), filterDef('min'), filterDef('max'), null]}
@@ -627,8 +639,9 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                   </td>
                   <td className="px-2 py-3 text-sm text-muted-foreground whitespace-nowrap">{a.minSize || '—'}</td>
                   <td className="px-2 py-3 text-sm text-muted-foreground whitespace-nowrap">{a.maxSize || '—'}</td>
-                  <td className="pr-4 pl-2 py-3 w-[140px]">
+                  <td className="pr-4 pl-2 py-3 w-[210px]">
                     <div className="flex items-center gap-1.5 justify-end">
+                      <button onClick={() => setPhotoTarget(a)} className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${photoCounts[a.id] ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200' : 'border-border hover:bg-muted'}`}>Photos{photoCounts[a.id] ? ` (${photoCounts[a.id]})` : ''}</button>
                       <button onClick={() => openEdit(a)} className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap">Edit</button>
                       <button onClick={() => setDeleteTarget(a)} className="rounded-md border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap">Delete</button>
                     </div>
@@ -921,6 +934,14 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
             </div>
           </div>
         </div>
+      )}
+
+      {photoTarget && (
+        <ArticlePhotosDialog
+          article={{ id: photoTarget.id, artName: photoTarget.artName, artCode: photoTarget.artCode, color: photoTarget.color, colorCode: photoTarget.colorCode }}
+          onClose={() => setPhotoTarget(null)}
+          onCountChange={(id, n) => setPhotoCounts((c) => ({ ...c, [id]: n }))}
+        />
       )}
 
       {/* ── Delete Confirmation Modal ── */}
