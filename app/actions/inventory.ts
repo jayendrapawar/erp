@@ -7,6 +7,7 @@ import {
   listMovements, listStock, listUnscannedDispatch, stockSummary,
   type Movement, type MovementFilters, type UnscannedDispatch, type StockFilters, type StockSummary, type StockVariant, type VariantDetail,
 } from '@/lib/inventory/stock-queries'
+import { inventoryInsights, type InventoryInsights } from '@/lib/inventory/insights'
 
 // Inventory screen. Reads: one query each. Writes: one transaction each.
 // No revalidatePath: the screen updates the affected rows itself.
@@ -57,4 +58,10 @@ export async function undoCorrectionAction(input: { articleId: number; movementI
 export async function getUnscannedDispatch(before?: number): Promise<{ rows: UnscannedDispatch[]; hasMore: boolean }> {
   await requirePermission('inventory.view.all')
   return listUnscannedDispatch(db, { before })
+}
+
+/** Inventory → Overview: old, cut-size, non-moving / dead, top movers, size mix, reorder. 2 reads in parallel. */
+export async function getInventoryInsights(): Promise<InventoryInsights> {
+  await requirePermission('inventory.view.all')
+  return inventoryInsights(db)
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
 import { PageHeader } from '@/app/orders/_components/shared'
 import { PageNav } from '@/components/page-nav'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { OverviewTab } from './overview-tab'
 import { DIVISIONS } from '@/lib/catalog/assortments'
 import {
   correctStockAction, getMovements, getStockPage, getStockSummary, getUnscannedDispatch, getVariantDetail, undoCorrectionAction,
@@ -52,7 +53,7 @@ const errText = (e: unknown, fallback: string) => (e instanceof Error && e.messa
 /** Inventory: stock on hand per article / colour / size, its value at MRP, and the movement history. */
 export function InventoryPage({ initialSummary, initialStock, staff, canAdjust }: Props) {
   const [summary, setSummary] = useState(initialSummary)
-  const [tab, setTab] = useState<string>('stock')
+  const [tab, setTab] = useState<string>('overview')
   const [openId, setOpenId] = useState<number | null>(null)
   const [stockPatch, setStockPatch] = useState<StockVariant | null>(null)
 
@@ -62,7 +63,7 @@ export function InventoryPage({ initialSummary, initialStock, staff, canAdjust }
     <div className="min-h-screen bg-background">
       <div className="max-w-5xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-2">
-          <PageHeader title="Inventory" subtitle="Stock on hand and every movement" />
+          <PageHeader title="Inventory" subtitle="Stock health, what sells, and every movement" />
           <PageNav />
         </div>
 
@@ -90,10 +91,14 @@ export function InventoryPage({ initialSummary, initialStock, staff, canAdjust }
 
         <Tabs value={tab} onValueChange={(v) => setTab(String(v))} className="w-full">
           <TabsList className="flex w-full mb-4">
+            <TabsTrigger value="overview" className="text-xs sm:text-sm">Overview</TabsTrigger>
             <TabsTrigger value="stock" className="text-xs sm:text-sm">Stock</TabsTrigger>
             <TabsTrigger value="movements" className="text-xs sm:text-sm">Movements</TabsTrigger>
             <TabsTrigger value="dispatch" className="text-xs sm:text-sm">Unscanned dispatch ({num.format(summary.unscannedDispatch)})</TabsTrigger>
           </TabsList>
+          <TabsContent value="overview">
+            {tab === 'overview' && <OverviewTab onOpen={setOpenId} />}
+          </TabsContent>
           <TabsContent value="stock">
             <StockTab initial={initialStock} onOpen={setOpenId} patch={stockPatch} />
           </TabsContent>

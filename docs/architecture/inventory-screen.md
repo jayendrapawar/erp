@@ -53,3 +53,21 @@ keeping the MRP value in a summary table.
 `lib/inventory/stock-queries.ts`, `lib/inventory/adjust.ts`, `app/actions/inventory.ts`,
 `app/inventory/page.tsx`, `components/inventory/inventory-page.tsx`, Home tile in
 `components/home-menu-page.tsx`. Tests: `tests/db/inventory-screen.test.ts`.
+
+## Overview tab (20 Nov 2026)
+
+Inventory opens on **Overview** (`lib/inventory/insights.ts`, `components/inventory/overview-tab.tsx`).
+Cards (tap one for its list; tap a row for the article dialog):
+
+| Section | Rule (owner's choice) |
+|---|---|
+| Top selling | Pairs billed in 7 / 30 / 90 days (undone bills subtracted), sold per size. Plus sizes and colours: share of 30-day sales vs share of stock; highlighted when sales share is 10+ points above stock share. |
+| Reorder sizes | Per size: 30-day sales rate; listed when stock covers < 30 days; suggested pairs cover 60 days. |
+| Cut size | Article colour in stock where a size has ≤ half the pairs of its fullest size (0 counts). Filters: any size ≤ half / sizes missing / half or more sizes short. |
+| Old stock | Age from the manufacturing month on boxes still in stock (scanned in, not billed): < 6, 6–12, 12+ months (old). Carton / hand-counted pairs = age unknown. |
+| Non-moving / Dead | In stock, no sale for 60+ / 180+ days, counted from the later of the last sale and the first stock-in. |
+
+Rules live in `INSIGHT_RULES`. Database: 2 queries in parallel per Overview open (~80 ms from a
+laptop in India to the development database, Nov 2026); period and filters switch on the phone.
+Both read the whole ledger; measure before adding a summary table if it grows large.
+Test: `tests/db/inventory-insights.test.ts`.
