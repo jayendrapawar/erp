@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useTransition, useMemo, useEffect, useCallback } from 'react'
-import { fuzzyFilter } from '@/lib/fuzzy'
+import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
 import { adminAssignPicker, adminUnassignPicker, getOrderWithItems, getPickerAssignments, deleteOrder, getBillLines } from '@/app/actions/orders'
 
@@ -60,10 +60,9 @@ const ALL_STATUSES = ['pending', 'assigned', 'packed', 'dispatched', 'delivered'
 
 export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = false, pickerMapOverride, onPickerChange }: Props) {
   const [isPending, startTransition] = useTransition()
-  const [search, setSearch] = useState('')
+  const [filters, setFilters] = useState<FilterValues>({})
 
   // ── Filter + sort ──
-  const [filterStatus, setFilterStatus] = useState<string>('all')
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'order'>('date-desc')
 
   // ── Picker assignments: orderId → pickerId ────────────────────────────────────
@@ -175,18 +174,22 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
     }
   }
 
+  // Orders list filters (one per column; phones: Filters button).
+  const orderFilters: ColumnFilterDef<OrderRow>[] = useMemo(() => [
+    { key: 'order', label: 'Order', kind: 'text', get: o => o.orderNumber },
+    { key: 'shop', label: 'Shopkeeper', kind: 'text', get: o => o.shopkeeperName },
+    { key: 'status', label: 'Status', kind: 'select', options: ALL_STATUSES, get: o => o.status },
+    { key: 'date', label: 'Date', kind: 'text', placeholder: 'e.g. 20 Nov', get: o => `${fmt(o.orderedAt)} ${fmt(o.updatedAt)}` },
+    { key: 'picker', label: 'Picker', kind: 'text', get: o => { const p = pickers.find(x => x.id === (pickerMap[o.id] ?? '')); return p ? (p.name ?? p.email) : '' } },
+  ], [pickers, pickerMap])
+
   const filteredOrders = useMemo(() => {
-    let list = fuzzyFilter(
-      orders.filter(o => !deletedIds.has(o.id)),
-      search,
-      o => [o.shopkeeperName, o.orderNumber]
-    )
-    if (filterStatus !== 'all') list = list.filter(o => o.status === filterStatus)
+    let list = applyColumnFilters(orders.filter(o => !deletedIds.has(o.id)), orderFilters, filters)
     if (sortBy === 'date-desc') list = [...list].sort((a, b) => new Date(b.orderedAt).getTime() - new Date(a.orderedAt).getTime())
     if (sortBy === 'date-asc')  list = [...list].sort((a, b) => new Date(a.orderedAt).getTime() - new Date(b.orderedAt).getTime())
     if (sortBy === 'order')     list = [...list].sort((a, b) => a.orderNumber.localeCompare(b.orderNumber))
     return list
-  }, [orders, deletedIds, search, filterStatus, sortBy])
+  }, [orders, deletedIds, orderFilters, filters, sortBy])
 
   return (
     <div className={embedded ? '' : 'min-h-screen bg-background'}>
@@ -606,28 +609,10 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
           </div>
         )}
 
-        {/* Search */}
-        <input
-          type="search"
-          placeholder="Search by order or shopkeeper…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="w-full mb-3 rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-        />
-
-        {/* Filter + Sort bar */}
-        <div className="flex items-center gap-2 mb-4">
-          <span className="text-xs text-muted-foreground">Filter:</span>
-          <select
-            value={filterStatus}
-            onChange={e => setFilterStatus(e.target.value)}
-            className="rounded-lg border border-border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-          >
-            <option value="all">All</option>
-            {ALL_STATUSES.map(s => (
-              <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-            ))}
-          </select>
+        {/* Filters (under each column on wide screens; Filters button on phones) + sort */}
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          <FiltersButton className="sm:hidden" defs={orderFilters} values={filters} onChange={setFilters} />
+          <div className="hidden sm:block"><FilterSummary values={filters} onChange={setFilters} shown={filteredOrders.length} total={orders.length - deletedIds.size} /></div>
           <span className="text-xs text-muted-foreground ml-auto">Sort:</span>
           <select
             value={sortBy}
@@ -691,6 +676,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                   <th className="text-left px-4 py-3 font-medium text-muted-foreground">Date</th>
                   <th className="text-left px-4 py-3 font-medium text-muted-foreground">Assign Picker</th>
                 </tr>
+                <FilterRow columns={orderFilters} values={filters} onChange={setFilters} firstCellClass="px-4" cellClass="px-4" />
               </thead>
               <tbody className="divide-y divide-border">
                 {filteredOrders.map(order => {
