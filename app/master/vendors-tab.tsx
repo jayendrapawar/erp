@@ -4,6 +4,20 @@ import { useState, useMemo, useTransition, useRef } from 'react'
 import { fuzzyFilter } from '@/lib/fuzzy'
 import { saveVendor, importVendors } from '@/app/actions/vendors'
 import type { Vendor } from '@/app/actions/vendors'
+import { csvToCells, downloadCsv } from '@/lib/csv'
+import { UploadGuide, type UploadColumn } from '@/components/upload-guide'
+
+const RETAILER_COLUMNS: UploadColumn[] = [
+  { name: 'partyName', required: true, example: 'Shree Footwear', help: 'Retailer / shop name. A name already in the list is skipped.' },
+  { name: 'gst', required: false, example: '24ABCDE1234F1Z5', help: 'GST number.' },
+  { name: 'phone', required: false, example: '9876543210', help: 'Phone number.' },
+  { name: 'address', required: false, example: 'Station Road', help: 'Address (commas are fine: Excel puts the cell in quotes when saving as CSV).' },
+  { name: 'city', required: false, example: 'Surat', help: 'City.' },
+  { name: 'area', required: false, example: 'Varachha', help: 'Area.' },
+  { name: 'day', required: false, example: 'Monday', help: 'Visit day.' },
+  { name: 'salesman', required: false, example: 'Ramesh', help: 'Salesman for this retailer.' },
+  { name: 'status', required: false, example: 'active', help: 'active or inactive (blank = active).' },
+]
 
 export type { Vendor }
 
@@ -14,14 +28,13 @@ type Day = typeof DAYS[number]
 // Expected columns (case-insensitive, order flexible):
 // partyName, gst, phone, address, city, area, day, salesman, status
 function parseCsv(text: string): Omit<Vendor, 'id' | 'createdAt' | 'updatedAt'>[] {
-  const lines = text.split(/\r?\n/).filter(l => l.trim())
-  if (lines.length < 2) return []
+  const rows = csvToCells(text)
+  if (rows.length < 2) return []
 
-  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/[^a-z]/g, ''))
+  const headers = rows[0].values.map(h => h.trim().toLowerCase().replace(/[^a-z]/g, ''))
   const idx = (name: string) => headers.indexOf(name.toLowerCase())
 
-  return lines.slice(1).flatMap(line => {
-    const cols = line.split(',').map(c => c.trim().replace(/^"|"$/g, ''))
+  return rows.slice(1).flatMap(({ values: cols }) => {
     const get = (name: string) => cols[idx(name)] ?? ''
     const partyName = get('partyname') || get('party')
     if (!partyName) return []
@@ -206,7 +219,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
         />
       </div>
       {/* Row 2: filter + actions */}
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex flex-wrap items-center gap-2 mb-4">
         <select
           value={filterStatus}
           onChange={e => setFilterStatus(e.target.value as typeof filterStatus)}
@@ -224,6 +237,16 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
         >
           {isImporting ? 'Importing…' : '↑ Import CSV'}
         </button>
+        <UploadGuide
+          title="How to upload a retailer list"
+          steps={[
+            'In Excel, fill one row per retailer with the column names below in the first row, then File → Save As → CSV.',
+            'Tap Import CSV and choose the file.',
+            'Retailers already in the list (same name) are skipped; nothing is deleted.',
+          ]}
+          columns={RETAILER_COLUMNS}
+          onTemplate={() => downloadCsv('retailer-template.csv', [RETAILER_COLUMNS.map(c => c.name), RETAILER_COLUMNS.map(c => c.example)])}
+        />
         <button
           onClick={openAdd}
           className="ml-auto rounded-lg bg-foreground text-background px-4 py-2 text-sm font-semibold hover:opacity-90 transition-opacity"

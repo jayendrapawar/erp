@@ -382,20 +382,30 @@ const SHORTCUTS: [string, string][] = [
   ['Ctrl + Enter', 'Create the order'],
 ]
 
-/** Keyboard guide on New Order (computers only); can be hidden, remembered on this device. */
+/** Keyboard guide on New Order (computers only): a "?" button (or the ? key) opens it. */
 function ShortcutGuide() {
-  const [open, setOpen] = useState(true)
-  useEffect(() => { try { if (localStorage.getItem('shayona.orderShortcuts') === 'hidden') setOpen(false) } catch { /* ignore */ } }, [])
-  function toggle() {
-    setOpen(o => { try { localStorage.setItem('shayona.orderShortcuts', o ? 'hidden' : 'shown') } catch { /* ignore */ } return !o })
-  }
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement
+      if (e.key === 'Escape') setOpen(false)
+      if (e.key !== '?' || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
+      e.preventDefault()
+      setOpen(o => !o)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   return (
-    <section className="hidden rounded-2xl border border-sky-300/60 bg-sky-50/60 p-3 dark:border-sky-800 dark:bg-sky-950/20 [@media(pointer:fine)]:block" aria-label="Keyboard shortcuts">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">⌨ Keyboard shortcuts</h2>
-        <button type="button" onClick={toggle} className="text-xs underline">{open ? 'Hide' : 'Show'}</button>
-      </div>
+    <div className="relative hidden justify-end [@media(pointer:fine)]:flex">
+      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open} aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)"
+        className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-card text-sm font-bold hover:bg-muted">?</button>
       {open && (
+        <section className="absolute right-0 top-10 z-30 w-[min(36rem,calc(100vw-2rem))] rounded-2xl border border-border bg-card p-4 shadow-xl" aria-label="Keyboard shortcuts">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">⌨ Keyboard shortcuts</h2>
+            <button type="button" onClick={() => setOpen(false)} aria-label="Close" className="flex h-7 w-7 items-center justify-center rounded-lg text-lg hover:bg-muted">×</button>
+          </div>
         <dl className="mt-2 grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
           {SHORTCUTS.map(([k, v]) => (
             <div key={k} className="flex gap-2">
@@ -404,8 +414,9 @@ function ShortcutGuide() {
             </div>
           ))}
         </dl>
+        </section>
       )}
-    </section>
+    </div>
   )
 }
 

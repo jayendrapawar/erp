@@ -4,6 +4,17 @@ import { useMemo, useRef, useState, useTransition } from 'react'
 import { applyAssortmentUpload, previewAssortmentUpload, retireAssortment, saveAssortment, type UploadPreview } from '@/app/actions/assortments'
 import type { Assortment } from '@/lib/catalog/assortment-store'
 import { DIVISIONS, SEGMENTS, SIZE_COLUMNS, codeSizes, formatSizes, validateAssortment } from '@/lib/catalog/assortments'
+import { UploadGuide } from '@/components/upload-guide'
+
+const ASSORTMENT_COLUMNS = [
+  { name: 'Division', required: true, example: 'Flite EVA', help: 'Sparx, Flite EVA, Flite PU or Bahamas.' },
+  { name: 'Segment', required: true, example: 'Gents', help: 'Gents, Ladies, Kids or Baby.' },
+  { name: 'Pairs per carton', required: true, example: '24', help: 'Total pairs in one carton (the proforma invoice\u2019s Pair/Ctn).' },
+  { name: 'Assortment code', required: true, example: '610', help: 'Size range as on the carton: 610 = sizes 6\u201310, 305 = 3\u20135, 1101 = 11, 12, 13, 1.' },
+  { name: '1 \u2026 13', required: true, example: '6', help: 'One column per size: pairs of that size in the carton (blank = none). They must add up to Pairs per carton.' },
+  { name: 'Total', required: false, example: '24', help: 'Optional check: sum of the sizes.' },
+  { name: 'Note', required: false, example: '', help: 'Optional remark.' },
+]
 
 interface Props {
   initialAssortments: Assortment[]
@@ -154,6 +165,17 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
           <>
             <button onClick={() => { setUploadOpen(true); setUpload(null); setUploadMsg('') }} className="rounded-lg border border-border px-3 py-2 text-xs font-medium hover:bg-muted transition-colors">Upload Excel</button>
             <button onClick={openAdd} className="rounded-lg bg-foreground text-background px-3 py-2 text-xs font-semibold hover:opacity-90 transition-opacity">+ Add</button>
+            <UploadGuide
+              title="How to upload assortments"
+              steps={[
+                'Download the template (or Download Excel for the current list) and fill one row per assortment.',
+                'The first row must hold the column names below; the sheet \u201cHow to fill\u201d in the template explains them too.',
+                'Tap Upload Excel and choose the file. You see every change first; nothing is saved until you confirm.',
+                'A changed assortment is saved as a new version; cartons already received keep the old one.',
+              ]}
+              columns={ASSORTMENT_COLUMNS}
+              templateHref="/api/assortments/export?template=1"
+            />
           </>
         )}
       </div>
