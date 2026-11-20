@@ -366,6 +366,47 @@ interface SizeMatrixProps {
 
 export interface SizeMatrixHandle { focus: () => void }
 
+const SHORTCUTS: [string, string][] = [
+  ['Enter', 'Go to the next step: vendor → article → colour → sizes → next article'],
+  ['↑ ↓', 'Move in a list (vendors, articles) or between sizes'],
+  ['1, 2, 3…', 'On colours: pick colour 1, 2, 3…'],
+  ['← →', 'On colours: move · On sizes: quantity −1 / +1'],
+  ['Numbers', 'On sizes: type the quantity (1 then 0 = 10)'],
+  ['Backspace', 'On sizes: remove the last digit'],
+  ['Shift + Enter', 'Add this colour and stay on the article'],
+  ['Shift + 1, 2…', 'From the sizes: switch to colour 1, 2…'],
+  ['Esc', 'Skip this article (nothing added)'],
+  ['Enter on empty article', 'Go to Create Order'],
+  ['Ctrl + Enter', 'Create the order'],
+]
+
+/** Keyboard guide on New Order (computers only); can be hidden, remembered on this device. */
+function ShortcutGuide() {
+  const [open, setOpen] = useState(true)
+  useEffect(() => { try { if (localStorage.getItem('shayona.orderShortcuts') === 'hidden') setOpen(false) } catch { /* ignore */ } }, [])
+  function toggle() {
+    setOpen(o => { try { localStorage.setItem('shayona.orderShortcuts', o ? 'hidden' : 'shown') } catch { /* ignore */ } return !o })
+  }
+  return (
+    <section className="hidden rounded-2xl border border-sky-300/60 bg-sky-50/60 p-3 dark:border-sky-800 dark:bg-sky-950/20 [@media(pointer:fine)]:block" aria-label="Keyboard shortcuts">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">⌨ Keyboard shortcuts</h2>
+        <button type="button" onClick={toggle} className="text-xs underline">{open ? 'Hide' : 'Show'}</button>
+      </div>
+      {open && (
+        <dl className="mt-2 grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
+          {SHORTCUTS.map(([k, v]) => (
+            <div key={k} className="flex gap-2">
+              <dt className="shrink-0"><kbd className="rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] font-semibold" data-no-translate>{k}</kbd></dt>
+              <dd className="text-muted-foreground">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </section>
+  )
+}
+
 // Keyboard (laptop / Bluetooth keyboard): ↑↓ size · ←→ quantity −1/+1 · type a number (12 = "1" then
 // "2" quickly) · 0 / Backspace clears · Enter add + next article · Shift+Enter add, stay ·
 // Shift+1…9 colour N · Esc next article without adding. Touch use is unchanged.
@@ -375,7 +416,8 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
   const [row, setRow] = useState(0)
   const [kbd, setKbd] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
-  const typed = useRef<{ row: number; text: string; at: number }>({ row: -1, text: '', at: 0 })
+  // Digits typed on the current size (cleared when the size changes): 1 then 0 = 10.
+  const typed = useRef<{ row: number; text: string }>({ row: -1, text: '' })
 
   useImperativeHandle(ref, () => ({ focus: () => { setKbd(true); boxRef.current?.focus({ preventScroll: false }) } }), [])
 
@@ -417,13 +459,20 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
       typed.current.text = ''
       return
     }
-    if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); setQty(label, 0); typed.current.text = ''; return }
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      e.preventDefault()
+      const t = typed.current
+      const text = t.row === r && e.key === 'Backspace' ? t.text.slice(0, -1) : ''
+      typed.current = { row: r, text }
+      setQty(label, text ? parseInt(text, 10) : 0)
+      return
+    }
     if (digit && !e.shiftKey) {
       e.preventDefault()
-      const now = Date.now()
       const t = typed.current
-      const text = t.row === r && now - t.at < 900 && t.text ? (t.text + digit).slice(-3) : digit
-      typed.current = { row: r, text, at: now }
+      // Keep adding digits on the same size (max 3); a 4th digit starts a new number.
+      const text = t.row === r && t.text && t.text.length < 3 ? (t.text === '0' ? digit : t.text + digit) : digit
+      typed.current = { row: r, text }
       setManualActive(prev => ({ ...prev, [label]: false }))
       setQty(label, parseInt(text, 10))
     }
@@ -507,9 +556,6 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
         <span className="text-sm text-muted-foreground">Total pairs for this color</span>
         <span className="text-xl font-bold text-foreground">{colorTotal}</span>
       </div>
-      <p className="hidden text-[11px] text-muted-foreground [@media(pointer:fine)]:block">
-        Keyboard: ↑↓ size · ←→ or type a number for quantity · Enter add + next article · Shift+Enter add, stay · Shift+1, 2… colour · Esc skip · Ctrl+Enter place order
-      </p>
     </div>
   )
 })
@@ -679,6 +725,17 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
   // Keyboard ordering: colour chips and the size matrix take focus in turn.
   const colourRefs = useRef<(HTMLButtonElement | null)[]>([])
   const matrixRef = useRef<SizeMatrixHandle>(null)
+  const skSearchRef = useRef<SearchComboboxHandle>(null)
+  const createOrderRef = useRef<HTMLButtonElement>(null)
+  const hasKeyboard = () => typeof window !== 'undefined' && window.matchMedia('(pointer: fine)').matches
+  // Keyboard start: on a computer the cursor begins in "Search vendor" (or the article search when
+  // the vendor is already chosen) whenever New Order opens.
+  useEffect(() => {
+    if (view !== 'new' || !hasKeyboard()) return
+    const t = setTimeout(() => (selectedSk ? artSearchRef.current : skSearchRef.current)?.focus(), 80)
+    return () => clearTimeout(t)
+  }, [view])
+
   // Ctrl+Enter anywhere on the new-order screen: place the order (opens the usual checks / confirmation).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1920,6 +1977,7 @@ ${bills}
         ════════════════════════════════════════════════════════════════ */}
         {view === 'new' && (
           <form id="new-order-form" onSubmit={handleSubmit} className="space-y-4" noValidate>
+            <ShortcutGuide />
 
             {/* ── 1. SHOPKEEPER ── */}
             <section aria-labelledby="sk-heading" className="rounded-2xl border border-border bg-card">
@@ -1939,13 +1997,14 @@ ${bills}
               <div className="p-4">
                 {!selectedSk ? (
                   <SearchCombobox<ShopkeeperResult>
+                    ref={skSearchRef}
                     id="sk-search"
                     label="Search Vendor"
                     required
                     placeholder="Search vendor..."
                     inputValue={skQuery}
                     onInputChange={setSkQuery}
-                    onSelect={sk => { setSelectedSk(sk); setSkQuery(sk.name) }}
+                    onSelect={sk => { setSelectedSk(sk); setSkQuery(sk.name); setTimeout(() => artSearchRef.current?.focus(), 50) }}
                     onClear={() => { setSelectedSk(null); setSkQuery('') }}
                     results={skResults}
                     loading={skLoading}
@@ -1986,7 +2045,12 @@ ${bills}
               </div>
 
               <div className="p-4 space-y-4">
-                {/* Article search */}
+                {/* Article search — Enter with nothing typed goes to Create Order */}
+                <div onKeyDown={e => {
+                  if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || artQuery.trim()) return
+                  e.preventDefault()
+                  if (lines.length) createOrderRef.current?.focus()
+                }}>
                 <SearchCombobox<ArticleResult>
                   ref={artSearchRef}
                   id="art-search"
@@ -2008,6 +2072,7 @@ ${bills}
                     </div>
                   )}
                 />
+                </div>
 
                 {selectedArt && (
                   <>
@@ -2380,7 +2445,7 @@ ${bills}
               className="shrink-0 rounded-xl border border-border px-3 sm:px-5 py-2.5 text-sm font-medium hover:bg-muted transition-colors">
               Cancel
             </button>
-            <button type="submit" form="new-order-form" disabled={!canSubmit}
+            <button ref={createOrderRef} type="submit" form="new-order-form" disabled={!canSubmit}
               className="shrink-0 rounded-xl bg-primary px-4 sm:px-6 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               {isPending ? (editingOrderId != null ? 'Saving…' : 'Creating…') : (editingOrderId != null ? 'Save Changes' : 'Create Order')}
             </button>

@@ -1175,6 +1175,18 @@
   "Choose the division.": "डिवीज़न चुनें।",
   "Division must be one of: {0}.": "डिवीज़न इनमें से एक होना चाहिए: {0}।",
   "Suggested from the article code. Change it if this article is from another division.": "आर्टिकल कोड से सुझाया गया। अगर यह आर्टिकल दूसरे डिवीज़न का है तो बदलें।",
-  "Keyboard: ↑↓ size · ←→ or type a number for quantity · Enter add + next article · Shift+Enter add, stay · Shift+1, 2… colour · Esc skip · Ctrl+Enter place order": "कीबोर्ड: ↑↓ साइज़ · ←→ या नंबर टाइप करें मात्रा के लिए · Enter जोड़ें + अगला आर्टिकल · Shift+Enter जोड़ें, यहीं रहें · Shift+1, 2… रंग · Esc छोड़ें · Ctrl+Enter ऑर्डर करें",
-  "Size matrix": "साइज़ मैट्रिक्स"
+  "Size matrix": "साइज़ मैट्रिक्स",
+  "⌨ Keyboard shortcuts": "⌨ कीबोर्ड शॉर्टकट",
+  "Go to the next step: vendor → article → colour → sizes → next article": "अगले चरण पर जाएँ: वेंडर → आर्टिकल → रंग → साइज़ → अगला आर्टिकल",
+  "Move in a list (vendors, articles) or between sizes": "सूची (वेंडर, आर्टिकल) में या साइज़ के बीच चलें",
+  "On colours: pick colour 1, 2, 3…": "रंगों पर: रंग 1, 2, 3… चुनें",
+  "On colours: move · On sizes: quantity −1 / +1": "रंगों पर: चलें · साइज़ पर: मात्रा −1 / +1",
+  "On sizes: type the quantity (1 then 0 = 10)": "साइज़ पर: मात्रा टाइप करें (1 फिर 0 = 10)",
+  "On sizes: remove the last digit": "साइज़ पर: आखिरी अंक हटाएँ",
+  "Add this colour and stay on the article": "यह रंग जोड़ें और इसी आर्टिकल पर रहें",
+  "From the sizes: switch to colour 1, 2…": "साइज़ से: रंग 1, 2… पर जाएँ",
+  "Skip this article (nothing added)": "यह आर्टिकल छोड़ें (कुछ नहीं जुड़ेगा)",
+  "Go to Create Order": "ऑर्डर बनाएँ पर जाएँ",
+  "Create the order": "ऑर्डर बनाएँ",
+  "Keyboard shortcuts": "कीबोर्ड शॉर्टकट"
 }
