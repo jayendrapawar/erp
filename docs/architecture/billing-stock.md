@@ -64,3 +64,20 @@ and `components/inventory/inventory-page.tsx`. Tests: `tests/db/billing-stock.te
 - Returns (a sold box coming back) — no flow yet; deleting the bill is the only way back.
 - If the warehouse scans a box that was already sold as Unscanned dispatch, the stocktake scan is
   accepted (it adds stock). Planned: warn in the warehouse scanner when a label is on a bill.
+
+## Direct Billing screen (redesign, 20 Nov 2026)
+
+Designed for the biller (owner: "assume you are a biller"). `components/billing-scanner-page.tsx`.
+
+- **Scan box** keeps the cursor (on computers; again whenever the panel becomes visible, and after
+  choosing the retailer, adding by hand, generating or closing a dialog). USB / Bluetooth scanners
+  type the code + Enter (Tab also accepted). Keys typed while no text box has the cursor are sent to
+  the Scan box, so a scan is never lost (the old listener ignored scans whenever any box had the
+  cursor and dropped codes when the scanner paused > 120 ms between characters).
+- The bill is always in view (two columns on computers; on phones a bottom bar with boxes, amount
+  and Generate). Each line: −1 box (a hand-added box first, else the last scanned box, freed on
+  the server) and remove. The last scan result stays on screen; **Undo last scan** while that box is
+  on the bill. Box without QR: fold-out form. No tabs.
+- Checked in a browser on development with a simulated scanner: scans land in the bill with the
+  cursor in the Scan box and with nothing focused; repeat scans are refused; −1 and Clear all free
+  the boxes.

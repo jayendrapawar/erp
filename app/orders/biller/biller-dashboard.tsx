@@ -940,7 +940,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
   return (
     <div className={embedded ? '' : 'min-h-screen bg-background'}>
-      <div className={embedded ? '' : 'max-w-2xl mx-auto px-4 py-6'}>
+      {/* Direct Billing needs room for the bill beside the scanner: wider page on that tab. */}
+      <div className={embedded ? '' : `${activeTab === 'emergency' ? 'max-w-6xl' : 'max-w-2xl'} mx-auto px-4 py-6`}>
         {!embedded && (
           <div className="flex items-center justify-between mb-6">
             <PageHeader title="Biller Dashboard" subtitle="Verify packed orders and generate bills" />
