@@ -15,7 +15,7 @@ import { sql } from 'drizzle-orm'
 import { articleColors, articles, articleSizes } from '@/lib/db/schema'
 import type { Actor, DbOrTx } from '@/lib/db/types'
 import { audit } from '@/lib/audit'
-import { normalizeArticleValue, parseSizeText } from '@/lib/article-utils'
+import { normalizeArticleName, normalizeArticleValue, parseSizeText } from '@/lib/article-utils'
 import { resolvePendingScans } from '@/lib/inventory/scan-service'
 import { expandSizeRange, normaliseSizeLabel, sizeSortOrders, sortSizes } from './sizes'
 import { SEGMENTS } from './assortments'
@@ -70,7 +70,7 @@ export function parseArticleSheet(cells: { rowNumber: number; values: unknown[] 
   const problems: UploadProblem[] = []
   for (const { rowNumber, values } of cells.slice(1)) {
     if (values.every((v) => v == null || String(v).trim() === '')) continue
-    const artName = text(values, 'artName').replace(/\s+/g, ' ')
+    const artName = normalizeArticleName(text(values, 'artName'))
     const artCode = normalizeArticleValue(text(values, 'artCode'))
     const color = text(values, 'color').replace(/\s+/g, ' ')
     const colorCode = normalizeArticleValue(text(values, 'colorCode'))

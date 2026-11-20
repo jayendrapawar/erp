@@ -2,6 +2,14 @@ export function normalizeArticleValue(value: string | null | undefined): string 
   return (value ?? '').trim().replace(/\s+/g, ' ').toUpperCase()
 }
 
+/**
+ * Article NAME as stored (owner, 20 Nov 2026): trimmed, inner spaces collapsed, capitals —
+ * "  fl-20 " and "FL-20" are the same article name.
+ */
+export function normalizeArticleName(value: string | null | undefined): string {
+  return (value ?? '').trim().replace(/\s+/g, ' ').toUpperCase()
+}
+
 export function parseSizeText(value: string): string[] {
   const text = value.trim()
   if (!text) return []

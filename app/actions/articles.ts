@@ -8,7 +8,7 @@ import { articles, articleSizes, articleColors, articleMrps, articleScanLinks, m
 import type { Tx } from '@/lib/db/types'
 import { AuthError, requirePermission, type SessionUser } from '@/lib/authz'
 import { audit } from '@/lib/audit'
-import { parseSizeText, normalizeArticleValue, hasArticleNumberMismatch } from '@/lib/article-utils'
+import { parseSizeText, normalizeArticleName, normalizeArticleValue, hasArticleNumberMismatch } from '@/lib/article-utils'
 import { parseQr, isValidWarehouseQr } from '@/lib/qr-parser'
 import { recordBoxScan, resolvePendingScans } from '@/lib/inventory/scan-service'
 import { expandSizeRange, sizeSortOrders, sortSizes } from '@/lib/catalog/sizes'
@@ -182,7 +182,7 @@ export async function saveArticle(
   const u = await requirePermission('articles.edit')
   const { customSizes, id, ...fields } = input
   const clean = {
-    artName: fields.artName.trim(),
+    artName: normalizeArticleName(fields.artName),
     artCode: normalizeArticleValue(fields.artCode),
     color: fields.color.trim(),
     colorCode: normalizeArticleValue(fields.colorCode),
@@ -219,6 +219,11 @@ export async function saveArticle(
       if (resyncSizes) {
         if (!labels.size) throw new Error('Enter a valid size range (for example 6–10, or 11–1 for children) or a list of sizes.')
         await syncSizes(tx, articleId, [...labels])
+        // Size ranges recorded from the catalogue that are no longer all in use are switched off
+        // (e.g. a wrong 11–13 range removed from a 6–10 article), so the master stays consistent.
+        await tx.execute(sql`UPDATE article_size_ranges SET active = false
+          WHERE "articleId" = ${articleId} AND active
+            AND NOT (sizes <@ ARRAY(SELECT json_array_elements_text(${JSON.stringify([...labels])}::json)))`)
         const ordered = sortSizeLabels([...labels])
         await tx.update(articles).set({ minSize: ordered[0], maxSize: ordered[ordered.length - 1] }).where(eq(articles.id, articleId))
       }
@@ -366,7 +371,7 @@ async function linkOrCreateArticleOnce(input: LinkInput): Promise<LinkResult> {
   const parsed = parseQr(input.rawQr)
   const artCode = normalizeArticleValue(parsed.articleCode)
   const colorCode = normalizeArticleValue(parsed.colorCode)
-  const name = input.artName.trim()
+  const name = normalizeArticleName(input.artName)
   const color = input.colorName.trim()
   if (!name || !color) return { ok: false, error: 'NAME_REQUIRED' }
   const segment = cleanSegment(input.segment)
