@@ -2074,9 +2074,11 @@ ${bills}
 
               <div className="p-4 space-y-4">
                 {/* Article search — Enter with nothing typed goes to Create Order */}
-                <div onKeyDown={e => {
+                <div onKeyDownCapture={e => {
+                  // Runs before the search box: with nothing typed, Enter must not pick an article.
                   if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || artQuery.trim()) return
                   e.preventDefault()
+                  e.stopPropagation()
                   if (lines.length) createOrderRef.current?.focus()
                 }}>
                 <SearchCombobox<ArticleResult>
