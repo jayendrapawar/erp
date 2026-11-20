@@ -1174,5 +1174,7 @@
   "Choose a division": "डिवीज़न चुनें",
   "Choose the division.": "डिवीज़न चुनें।",
   "Division must be one of: {0}.": "डिवीज़न इनमें से एक होना चाहिए: {0}।",
-  "Suggested from the article code. Change it if this article is from another division.": "आर्टिकल कोड से सुझाया गया। अगर यह आर्टिकल दूसरे डिवीज़न का है तो बदलें।"
+  "Suggested from the article code. Change it if this article is from another division.": "आर्टिकल कोड से सुझाया गया। अगर यह आर्टिकल दूसरे डिवीज़न का है तो बदलें।",
+  "Keyboard: ↑↓ size · ←→ or type a number for quantity · Enter add + next article · Shift+Enter add, stay · Shift+1, 2… colour · Esc skip · Ctrl+Enter place order": "कीबोर्ड: ↑↓ साइज़ · ←→ या नंबर टाइप करें मात्रा के लिए · Enter जोड़ें + अगला आर्टिकल · Shift+Enter जोड़ें, यहीं रहें · Shift+1, 2… रंग · Esc छोड़ें · Ctrl+Enter ऑर्डर करें",
+  "Size matrix": "साइज़ मैट्रिक्स"
 }

@@ -358,11 +358,26 @@ interface SizeMatrixProps {
   sizes: { id: number; sizeLabel: string; sortOrder: number }[]
   quantities: Record<string, number>
   onChange: (quantities: Record<string, number>) => void
+  /** Keyboard: Enter (shift = add and stay on this article), Shift+1…9 (colour N), Esc. */
+  onEnter?: (shift: boolean) => void
+  onColour?: (n: number) => void
+  onEscape?: () => void
 }
 
-function SizeMatrix({ sizes, quantities, onChange }: SizeMatrixProps) {
+export interface SizeMatrixHandle { focus: () => void }
+
+// Keyboard (laptop / Bluetooth keyboard): ↑↓ size · ←→ quantity −1/+1 · type a number (12 = "1" then
+// "2" quickly) · 0 / Backspace clears · Enter add + next article · Shift+Enter add, stay ·
+// Shift+1…9 colour N · Esc next article without adding. Touch use is unchanged.
+const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMatrix({ sizes, quantities, onChange, onEnter, onColour, onEscape }, ref) {
   // manualActive[size] = true means manual input controls it
   const [manualActive, setManualActive] = useState<Record<string, boolean>>({})
+  const [row, setRow] = useState(0)
+  const [kbd, setKbd] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
+  const typed = useRef<{ row: number; text: string; at: number }>({ row: -1, text: '', at: 0 })
+
+  useImperativeHandle(ref, () => ({ focus: () => { setKbd(true); boxRef.current?.focus({ preventScroll: false }) } }), [])
 
   function setQty(sizeLabel: string, qty: number) {
     onChange({ ...quantities, [sizeLabel]: Math.max(0, qty) })
@@ -382,13 +397,46 @@ function SizeMatrix({ sizes, quantities, onChange }: SizeMatrixProps) {
     setQty(sizeLabel, isNaN(n) || n < 0 ? 0 : n)
   }
 
+  function handleKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    const inInput = (e.target as HTMLElement).tagName === 'INPUT'
+    const digit = /^(Digit|Numpad)([0-9])$/.exec(e.code)?.[2]
+    if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); onEnter?.(e.shiftKey); return }
+    if (e.key === 'Escape') { e.preventDefault(); onEscape?.(); return }
+    if (e.shiftKey && digit && digit !== '0') { e.preventDefault(); onColour?.(Number(digit)); return }
+    if (inInput || e.ctrlKey || e.metaKey || e.altKey || !sizes.length) return
+    const r = Math.min(row, sizes.length - 1)
+    const label = sizes[r].sizeLabel
+    const current = quantities[label] ?? 0
+    setKbd(true)
+    if (e.key === 'ArrowDown') { e.preventDefault(); setRow(Math.min(sizes.length - 1, r + 1)); typed.current.text = ''; return }
+    if (e.key === 'ArrowUp') { e.preventDefault(); setRow(Math.max(0, r - 1)); typed.current.text = ''; return }
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault()
+      setManualActive(prev => ({ ...prev, [label]: false }))
+      setQty(label, current + (e.key === 'ArrowRight' ? 1 : -1))
+      typed.current.text = ''
+      return
+    }
+    if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); setQty(label, 0); typed.current.text = ''; return }
+    if (digit && !e.shiftKey) {
+      e.preventDefault()
+      const now = Date.now()
+      const t = typed.current
+      const text = t.row === r && now - t.at < 900 && t.text ? (t.text + digit).slice(-3) : digit
+      typed.current = { row: r, text, at: now }
+      setManualActive(prev => ({ ...prev, [label]: false }))
+      setQty(label, parseInt(text, 10))
+    }
+  }
+
   const colorTotal = sizes.reduce((s, sz) => s + (quantities[sz.sizeLabel] ?? 0), 0)
 
   // Responsive column sizes: on very small screens chips shrink to 2rem, on sm+ stay 2.5rem
   const gridCols = 'minmax(2rem,auto) repeat(5, minmax(0,2.5rem)) minmax(0,3.5rem) 2.5rem'
 
   return (
-    <div className="space-y-1">
+    <div ref={boxRef} tabIndex={-1} onKeyDown={handleKey} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setKbd(false) }}
+      className="space-y-1 rounded-lg outline-none" aria-label="Size matrix">
       {/* Header row */}
       <div className="grid items-center gap-y-0 gap-x-1" style={{ gridTemplateColumns: gridCols }}>
         <span className="text-xs font-medium text-muted-foreground leading-tight">Size</span>
@@ -400,13 +448,15 @@ function SizeMatrix({ sizes, quantities, onChange }: SizeMatrixProps) {
       </div>
 
       {/* Size rows */}
-      {sizes.map(sz => {
+      {sizes.map((sz, i) => {
         const current = quantities[sz.sizeLabel] ?? 0
         const isManual = manualActive[sz.sizeLabel]
+        const focused = kbd && i === Math.min(row, sizes.length - 1)
         return (
           <div
             key={sz.id}
-            className="grid items-center gap-y-0 gap-x-1 rounded-lg py-0.5"
+            onClick={() => setRow(i)}
+            className={`grid items-center gap-y-0 gap-x-1 rounded-lg py-0.5 ${focused ? 'bg-primary/10 ring-2 ring-primary' : ''}`}
             style={{ gridTemplateColumns: gridCols }}
           >
             <span className="text-sm font-medium text-foreground truncate pr-1 leading-tight">{sz.sizeLabel}</span>
@@ -420,6 +470,7 @@ function SizeMatrix({ sizes, quantities, onChange }: SizeMatrixProps) {
                 <button
                   key={q}
                   type="button"
+                  tabIndex={-1}
                   aria-label={`Set ${sz.sizeLabel} to ${q}`}
                   aria-pressed={isActive}
                   onClick={() => handleQuickClick(sz.sizeLabel, q)}
@@ -432,6 +483,7 @@ function SizeMatrix({ sizes, quantities, onChange }: SizeMatrixProps) {
             <input
               type="number"
               min={0}
+              tabIndex={-1}
               aria-label={`Manual quantity for size ${sz.sizeLabel}`}
               value={isManual ? (current === 0 ? '' : current) : (current > 5 ? current : '')}
               placeholder="0"
@@ -455,9 +507,12 @@ function SizeMatrix({ sizes, quantities, onChange }: SizeMatrixProps) {
         <span className="text-sm text-muted-foreground">Total pairs for this color</span>
         <span className="text-xl font-bold text-foreground">{colorTotal}</span>
       </div>
+      <p className="hidden text-[11px] text-muted-foreground [@media(pointer:fine)]:block">
+        Keyboard: ↑↓ size · ←→ or type a number for quantity · Enter add + next article · Shift+Enter add, stay · Shift+1, 2… colour · Esc skip · Ctrl+Enter place order
+      </p>
     </div>
   )
-}
+})
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ConfirmDialog
@@ -621,6 +676,21 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
   // ── Per-color entry state ──
   // selectedColorId: which color chip is active
   const [selectedColorId, setSelectedColorId] = useState<number | null>(null)
+  // Keyboard ordering: colour chips and the size matrix take focus in turn.
+  const colourRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const matrixRef = useRef<SizeMatrixHandle>(null)
+  // Ctrl+Enter anywhere on the new-order screen: place the order (opens the usual checks / confirmation).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return
+      const form = document.getElementById('new-order-form') as HTMLFormElement | null
+      if (!form) return
+      e.preventDefault()
+      form.requestSubmit()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   // colorQuantities: preserved per-color quantities while user navigates
   // key = colorId, value = sizeLabel→qty
   const [colorQuantities, setColorQuantities] = useState<Record<number, Record<string, number>>>({})
@@ -766,6 +836,77 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
     setSelectedArt(detail)
     setSelectedColorId(null)
     setColorQuantities({})
+    // Keyboard: continue on the colours (1, 2, 3… or arrows, then Enter).
+    setTimeout(() => colourRefs.current[0]?.focus({ preventScroll: true }), 50)
+  }
+
+  // ── Choose a colour (chip tap, number key, or Shift+number in the matrix) ──
+  function selectColour(c: { id: number }) {
+    if (!selectedArt) return
+    // Only seed from saved line if there are no working quantities
+    // already — preserves any unsaved edits the user made before switching away.
+    const hasWorking = Object.values(colorQuantities[c.id] ?? {}).some(v => v > 0)
+    if (!hasWorking) {
+      const savedLine = lines.find(l => l.articleId === selectedArt.id && l.colorId === c.id)
+      if (savedLine) setColorQuantities(prev => ({ ...prev, [c.id]: { ...savedLine.quantities } }))
+    }
+    setSelectedColorId(c.id)
+  }
+
+  /** Keyboard on the colour chips: ←→↑↓ move, 1…9 pick colour N, Enter open its sizes, Esc skip. */
+  function handleColourKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (!selectedArt) return
+    const colours = selectedArt.colors
+    const at = colourRefs.current.findIndex(b => b === document.activeElement)
+    const digit = /^(Digit|Numpad)([1-9])$/.exec(e.code)?.[2]
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1
+      colourRefs.current[(Math.max(0, at) + step + colours.length) % colours.length]?.focus()
+    } else if (digit && !e.ctrlKey && !e.altKey) {
+      const c = colours[Number(digit) - 1]
+      if (!c) return
+      e.preventDefault()
+      selectColour(c)
+      colourRefs.current[Number(digit) - 1]?.focus()
+    } else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault()
+      const c = colours[Math.max(0, at)]
+      if (!c) return
+      selectColour(c)
+      setTimeout(() => matrixRef.current?.focus(), 50)
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      skipArticle()
+    }
+  }
+
+  /** Esc: next article without adding what is typed for this one. */
+  function skipArticle() {
+    setArtQuery('')
+    setArtResults([])
+    setSelectedArt(null)
+    setSelectedColorId(null)
+    setColorQuantities({})
+    setEditingLineId(null)
+    setError('')
+    setMatrixKey(k => k + 1)
+    setTimeout(() => artSearchRef.current?.focus(), 50)
+  }
+
+  /** Enter in the matrix: add + next article. Shift+Enter: add this colour, stay on the article. */
+  function handleMatrixEnter(stay: boolean) {
+    if (!stay) { handleNextArticle(); return }
+    if (currentColorTotal === 0) { setError('Add at least one pair before adding this item.'); return }
+    handleAddToOrder()
+    setTimeout(() => colourRefs.current[0]?.focus({ preventScroll: true }), 50)
+  }
+
+  function handleMatrixColour(n: number) {
+    const c = selectedArt?.colors[n - 1]
+    if (!c) return
+    selectColour(c)
+    setTimeout(() => matrixRef.current?.focus(), 50)
   }
 
   function clearArticle() {
@@ -1884,8 +2025,8 @@ ${bills}
                     {selectedArt.colors.length > 0 ? (
                       <div>
                         <p className="text-xs font-medium text-muted-foreground mb-2">Available Colors</p>
-                        <div className="flex flex-wrap gap-2">
-                          {selectedArt.colors.map(c => {
+                        <div className="flex flex-wrap gap-2" onKeyDown={handleColourKey}>
+                          {selectedArt.colors.map((c, i) => {
                             const active = selectedColorId === c.id
                             const hasData = Object.values(colorQuantities[c.id] ?? {}).some(v => v > 0)
                             const savedLine = lines.find(l => l.articleId === selectedArt.id && l.colorId === c.id)
@@ -1899,28 +2040,18 @@ ${bills}
                             return (
                               <button
                                 key={c.id}
+                                ref={el => { colourRefs.current[i] = el }}
                                 type="button"
                                 aria-pressed={active}
-                                onClick={() => {
-                                  // Only seed from saved line if there are no working quantities
-                                  // already — preserves any unsaved edits the user made before switching away.
-                                  const hasWorking = Object.values(colorQuantities[c.id] ?? {}).some(v => v > 0)
-                                  if (!hasWorking) {
-                                    const savedLine = lines.find(
-                                      l => l.articleId === selectedArt.id && l.colorId === c.id
-                                    )
-                                    if (savedLine) {
-                                      setColorQuantities(prev => ({ ...prev, [c.id]: { ...savedLine.quantities } }))
-                                    }
-                                  }
-                                  setSelectedColorId(c.id)
-                                }}
+                                aria-keyshortcuts={i < 9 ? String(i + 1) : undefined}
+                                onClick={() => selectColour(c)}
                                 className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                                   active
                                     ? 'border-primary bg-primary/10 text-foreground ring-1 ring-primary'
                                     : 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
                                 }`}
                               >
+                                {i < 9 && <span className="hidden text-[10px] font-bold text-muted-foreground [@media(pointer:fine)]:inline" aria-hidden>{i + 1}</span>}
                                 <span className="w-3.5 h-3.5 rounded-full border border-white/30 flex-shrink-0"
                                   style={{ background: swatch(c.colorHex, c.colorName) }} aria-hidden />
                                 {c.colorName}
@@ -1979,9 +2110,13 @@ ${bills}
 
                         <SizeMatrix
                           key={matrixKey}
+                          ref={matrixRef}
                           sizes={selectedArt.sizes.filter(s => s.articleId === selectedColor.articleId)}
                           quantities={currentQties}
                           onChange={setCurrentQties}
+                          onEnter={handleMatrixEnter}
+                          onColour={handleMatrixColour}
+                          onEscape={skipArticle}
                         />
 
                         {/* Error for this section */}
