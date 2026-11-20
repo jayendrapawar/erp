@@ -126,3 +126,14 @@ Loaded 19 Nov 2026: `Relaxo filled Article.xlsx` (Sparx, Flite PU, Flite EVA; 3 
 Segment (migration 0010, 20 Nov 2026): `articles.segment` (Gents / Ladies / Kids / Baby), shown and
 edited in Master → Articles; the upload's Segment column fills a blank segment and lists, but never
 overwrites, a different one. Used to choose the carton assortment when several fit.
+
+## One name, several codes in New Order (20 Nov 2026)
+
+An article NAME can cover several CODES with overlapping sizes (SS-101: SS0101C children 11–13, 1;
+SS0101G 6–10; SS0101S big 11–12). New Order merges colours by name, so `lib/catalog/order-catalogue.ts`
+keys every size of such a colour as "CODE:size" and the size matrix shows a block per code. Order
+lines save `order_items.artCode` (migration 0011); biller and picker use it; detail views and the
+procurement shortfall add the code where a size appears for two codes (`lib/orders/size-label.ts`).
+The rule applies to every article, existing and new. Check any database with
+`npx tsx scripts/catalog/check-order-sizes.ts --env-file <file>` (read-only; collisions must be 0).
+On development (20 Nov 2026): 0 collisions; 14 colours in 10 names shown as code blocks.

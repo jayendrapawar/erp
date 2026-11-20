@@ -1,5 +1,6 @@
 'use client'
 
+import { sizeWithCode } from '@/lib/orders/size-label'
 import { useState, useTransition } from 'react'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
 import { markDispatched, markDelivered, getOrderWithItems } from '@/app/actions/orders'
@@ -23,6 +24,7 @@ interface DetailItem {
   artNumber: string
   colorNumber: string | null
   sizeNumber: string | null
+  artCode?: string | null
   quantityOrdered: number
   quantityPacked: number
   status: string
@@ -313,7 +315,7 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
                                         key={item.id}
                                         className="inline-flex items-baseline gap-0.5 tabular-nums whitespace-nowrap"
                                       >
-                                        <span className="text-xs text-muted-foreground">{item.sizeNumber ?? '—'}</span>
+                                        <span className="text-xs text-muted-foreground">{sizeWithCode(item, items)}</span>
                                         <span className="text-[10px] text-muted-foreground/50 mx-px">/</span>
                                         {/* ord = salesman → always muted */}
                                         <span className="text-xs font-bold text-muted-foreground">{item.quantityOrdered}</span>

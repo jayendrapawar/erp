@@ -719,21 +719,33 @@ export async function getProcurementShortfall(opts?: {
       artNumber:   orderItems.artNumber,
       colorNumber: orderItems.colorNumber,
       sizeNumber:  orderItems.sizeNumber,
+      artCode:     orderItems.artCode,
       vendorName:  orders.shopkeeperName,
       shortfall:   sql<number>`cast(sum(${orderItems.quantityOrdered} - ${orderItems.quantityPacked}) as int)`,
     })
     .from(orderItems)
     .innerJoin(orders, eq(orderItems.orderId, orders.id))
     .where(and(...conditions))
-    .groupBy(orderItems.artNumber, orderItems.colorNumber, orderItems.sizeNumber, orders.shopkeeperName)
+    .groupBy(orderItems.artNumber, orderItems.colorNumber, orderItems.sizeNumber, orderItems.artCode, orders.shopkeeperName)
     .having(sql`sum(${orderItems.quantityOrdered} - ${orderItems.quantityPacked}) > 0`)
     .orderBy(orderItems.artNumber, orderItems.colorNumber, orderItems.sizeNumber, orders.shopkeeperName)
 
-  return rows.map(r => ({
-    artNumber:   r.artNumber,
-    colorNumber: r.colorNumber ?? '—',
-    sizeNumber:  r.sizeNumber  ?? '—',
-    vendorName:  r.vendorName,
-    shortfall:   r.shortfall,
-  }))
+  // One name can cover several codes with the same sizes (SS-101 children 11 vs big 11): where a size
+  // appears for two codes, the code is added to the size so the two never merge.
+  const codesPer = new Map<string, Set<string>>()
+  for (const r of rows) {
+    const k = `${r.vendorName}|${r.artNumber}|${r.colorNumber ?? ''}|${r.sizeNumber ?? ''}`
+    if (!codesPer.has(k)) codesPer.set(k, new Set())
+    codesPer.get(k)!.add((r.artCode ?? '').toUpperCase())
+  }
+  return rows.map(r => {
+    const clash = (codesPer.get(`${r.vendorName}|${r.artNumber}|${r.colorNumber ?? ''}|${r.sizeNumber ?? ''}`)?.size ?? 0) > 1
+    return {
+      artNumber:   r.artNumber,
+      colorNumber: r.colorNumber ?? '—',
+      sizeNumber:  clash && r.artCode ? `${r.sizeNumber ?? '—'} (${r.artCode})` : (r.sizeNumber ?? '—'),
+      vendorName:  r.vendorName,
+      shortfall:   r.shortfall,
+    }
+  })
 }

@@ -1,5 +1,6 @@
 'use client'
 
+import { sizeWithCode } from '@/lib/orders/size-label'
 import { useState, useTransition, useRef, useEffect, useMemo, useId, useCallback, forwardRef, useImperativeHandle, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAutoRefresh } from '@/lib/use-auto-refresh'
@@ -1953,7 +1954,7 @@ ${bills}
                                   {items.map(item => {
                                     if (!showPacked) return (
                                       <span key={item.id} className="text-xs tabular-nums whitespace-nowrap">
-                                        <span className="text-muted-foreground">{item.sizeNumber ?? '—'}</span>
+                                        <span className="text-muted-foreground">{sizeWithCode(item, items)}</span>
                                         <span className="mx-0.5 text-muted-foreground">/</span>
                                         <span className="font-semibold text-foreground">{item.quantityOrdered}</span>
                                       </span>
@@ -1963,7 +1964,7 @@ ${bills}
                                     const verified = isBilled ? pkd : 0
                                     return (
                                       <span key={item.id} className="inline-flex items-baseline gap-0.5 tabular-nums whitespace-nowrap">
-                                        <span className="text-xs text-muted-foreground">{item.sizeNumber ?? '—'}</span>
+                                        <span className="text-xs text-muted-foreground">{sizeWithCode(item, items)}</span>
                                         <span className="text-[10px] text-muted-foreground/50 mx-px">/</span>
                                         <span className="text-xs font-bold text-muted-foreground">{item.quantityOrdered}</span>
                                         <span className="text-[10px] text-muted-foreground/40">→</span>
