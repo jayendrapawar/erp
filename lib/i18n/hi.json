@@ -1168,7 +1168,11 @@
   "% of sales": "बिक्री का %",
   "In stock": "स्टॉक में",
   "% of stock": "स्टॉक का %",
-  "{0} ignored missing article(s).": "{0} अनदेखे गायब आर्टिकल।",
   "MRPs": "MRP",
-  "MRPs seen on scanned boxes of this article code": "इस आर्टिकल कोड के स्कैन किए बॉक्स पर दिखे MRP"
+  "MRPs seen on scanned boxes of this article code": "इस आर्टिकल कोड के स्कैन किए बॉक्स पर दिखे MRP",
+  "{0} ignored missing article(s).": "{0} अनदेखे गायब आर्टिकल।",
+  "Choose a division": "डिवीज़न चुनें",
+  "Choose the division.": "डिवीज़न चुनें।",
+  "Division must be one of: {0}.": "डिवीज़न इनमें से एक होना चाहिए: {0}।",
+  "Suggested from the article code. Change it if this article is from another division.": "आर्टिकल कोड से सुझाया गया। अगर यह आर्टिकल दूसरे डिवीज़न का है तो बदलें।"
 }

@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { getArticleSegment, getColoursForName, linkOrCreateArticle, searchArticleNames } from '@/app/actions/articles'
-import { SEGMENTS } from '@/lib/catalog/assortments'
+import { getArticleDefaults, getColoursForName, linkOrCreateArticle, searchArticleNames } from '@/app/actions/articles'
+import { DIVISIONS, SEGMENTS } from '@/lib/catalog/assortments'
 import type { ParsedQr } from '@/lib/qr-parser'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -32,6 +32,8 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
   const [colourChoice, setColourChoice] = useState('')
   const [otherColour, setOtherColour] = useState('')
   const [segment, setSegment] = useState('')
+  const [division, setDivision] = useState('')
+  const [divisionSuggested, setDivisionSuggested] = useState(false)
   const [sizes, setSizes] = useState(initialSizes ?? suggestSizes(parsed.articleCode))
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [colours, setColours] = useState<string[]>([])
@@ -50,7 +52,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
   const hasKnownName = selectedKnownName || Boolean(matchingName)
   const showSizes = mode === 'unknown'
   const colourName = colours.length === 0 || colourChoice === '__other__' ? otherColour.trim() : colourChoice
-  const canSubmit = articleName.trim().length > 0 && colourName.length > 0 && segment.length > 0 && (!showSizes || sizes.trim().length > 0)
+  const canSubmit = articleName.trim().length > 0 && colourName.length > 0 && segment.length > 0 && division.length > 0 && (!showSizes || sizes.trim().length > 0)
   const readOnlyRows = useMemo(() => [
     ['Article code', parsed.articleCode],
     ['Colour code', parsed.colorCode],
@@ -93,10 +95,14 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
     return () => { cancelled = true; clearTimeout(timer) }
   }, [articleName, matchingName, selectedKnownName, parsed.articleCode])
 
-  // Prefill the segment when this article code already has one.
+  // Prefill segment and division from this article code (division suggested from the code if unknown).
   useEffect(() => {
     let cancelled = false
-    getArticleSegment(parsed.articleCode).then((s) => { if (!cancelled && s) setSegment((cur) => cur || s) }).catch(() => {})
+    getArticleDefaults(parsed.articleCode).then((d) => {
+      if (cancelled) return
+      if (d.segment) setSegment((cur) => cur || d.segment!)
+      if (d.division) { setDivision((cur) => cur || d.division!); setDivisionSuggested(d.divisionSuggested) }
+    }).catch(() => {})
     return () => { cancelled = true }
   }, [parsed.articleCode])
 
@@ -127,6 +133,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
         colorName: colourName,
         sizesText: sizes.trim(),
         segment,
+        division,
         addScannedSize,
         confirmWarnings,
         flag,
@@ -148,6 +155,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
           SIZES_REQUIRED: 'Enter at least one size before creating this article.',
           NAME_REQUIRED: 'Enter both an article name and a colour name.',
           SEGMENT_REQUIRED: 'Choose the segment (Gents, Ladies, Kids or Baby).',
+          DIVISION_REQUIRED: 'Choose the division.',
           ALREADY_EXISTS: 'An article with this article code and colour code already exists.',
           FORBIDDEN: 'You do not have access to link this article.',
           INVALID_QR: 'This QR code format is not recognised.',
@@ -238,6 +246,15 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
               <option value="">Choose a segment</option>
               {SEGMENTS.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="new-article-division">Division</Label>
+            <select id="new-article-division" value={division} disabled={loading} onChange={(event) => { setDivision(event.target.value); setDivisionSuggested(false) }} className="h-12 w-full rounded-lg border border-input bg-background px-3 text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <option value="">Choose a division</option>
+              {DIVISIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+            {divisionSuggested && division && <p className="text-xs text-muted-foreground">Suggested from the article code. Change it if this article is from another division.</p>}
           </div>
 
           {showSizes && (

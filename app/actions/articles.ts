@@ -12,7 +12,8 @@ import { parseSizeText, normalizeArticleValue, hasArticleNumberMismatch } from '
 import { parseQr, isValidWarehouseQr } from '@/lib/qr-parser'
 import { recordBoxScan, resolvePendingScans } from '@/lib/inventory/scan-service'
 import { expandSizeRange, sizeSortOrders, sortSizes } from '@/lib/catalog/sizes'
-import { SEGMENTS } from '@/lib/catalog/assortments'
+import { DIVISIONS, SEGMENTS } from '@/lib/catalog/assortments'
+import { divisionForArticleCode } from '@/lib/qr-config'
 import { listMissingArticles, type MissingArticle } from '@/lib/catalog/missing-articles'
 import { applyArticleUpload, csvToCells, parseArticleSheet, planArticleUpload, summarise, xlsxToCells, type UploadSummary } from '@/lib/catalog/article-upload'
 
@@ -38,12 +39,28 @@ function friendlyUniqueError(error: unknown): never {
   throw error
 }
 
-/** Segment already set for an article code (prefills the New Article form). 1 query. */
-export async function getArticleSegment(artCode: string): Promise<string | null> {
+/**
+ * Segment and division already set for an article code (prefill the New Article form); the division
+ * falls back to the suggestion from the code (S Sparx, P Flite PU, F Flite EVA, else Bahamas). 1 query.
+ */
+export async function getArticleDefaults(artCode: string): Promise<{ segment: string | null; division: string | null; divisionSuggested: boolean }> {
   await requirePermission('articles.view')
-  const [row] = await db.select({ segment: articles.segment }).from(articles)
-    .where(sql`${NORM(articles.artCode)} = ${normalizeArticleValue(artCode)} AND ${articles.segment} IS NOT NULL`).limit(1)
-  return row?.segment ?? null
+  const code = normalizeArticleValue(artCode)
+  const r = await db.execute<{ segment: string | null; division: string | null }>(sql`
+    SELECT (SELECT segment FROM articles WHERE ${NORM(articles.artCode)} = ${code} AND segment IS NOT NULL LIMIT 1) AS segment,
+           (SELECT division FROM articles WHERE ${NORM(articles.artCode)} = ${code} AND nullif(btrim(division), '') IS NOT NULL LIMIT 1) AS division`)
+  const row = r.rows[0]
+  const known = row?.division ?? null
+  return { segment: row?.segment ?? null, division: known ?? (divisionForArticleCode(code) || null), divisionSuggested: !known }
+}
+
+/** One of the four divisions in the list's spelling; blank → null; anything else is refused. */
+function cleanDivision(v: string | null | undefined): string | null {
+  const t = (v ?? '').trim()
+  if (!t) return null
+  const hit = DIVISIONS.find((d) => d.toLowerCase() === t.toLowerCase())
+  if (!hit) throw new Error(`Division must be one of: ${DIVISIONS.join(', ')}.`)
+  return hit
 }
 
 /** Gents / Ladies / Kids / Baby in the list's spelling; blank → null; anything else is refused. */
@@ -172,7 +189,7 @@ export async function saveArticle(
     minSize: fields.minSize,
     maxSize: fields.maxSize,
     // Only when given: the edit form does not send division, and must not wipe it.
-    ...(fields.division !== undefined ? { division: fields.division?.trim() || null } : {}),
+    ...(fields.division !== undefined ? { division: cleanDivision(fields.division) } : {}),
     ...(fields.segment !== undefined ? { segment: cleanSegment(fields.segment) } : {}),
   }
 
@@ -309,13 +326,15 @@ export async function addSizeToArticleFromScans(articleCode: string, colourCode:
 
 // ── Feature 01: create or link an article from a scanned box (admin only) ───
 
-type LinkResult = { ok: true; articleId: number } | { ok: false; error: 'SIZE_NOT_IN_ARTICLE'; sizes: string[] } | { ok: false; error: 'NUMBER_MISMATCH' | 'DUPLICATE_QR' | 'SIZES_REQUIRED' | 'NAME_REQUIRED' | 'SEGMENT_REQUIRED' | 'ALREADY_EXISTS' | 'FORBIDDEN' | 'INVALID_QR' }
+type LinkResult = { ok: true; articleId: number } | { ok: false; error: 'SIZE_NOT_IN_ARTICLE'; sizes: string[] } | { ok: false; error: 'NUMBER_MISMATCH' | 'DUPLICATE_QR' | 'SIZES_REQUIRED' | 'NAME_REQUIRED' | 'SEGMENT_REQUIRED' | 'DIVISION_REQUIRED' | 'ALREADY_EXISTS' | 'FORBIDDEN' | 'INVALID_QR' }
 
 interface LinkInput {
   rawQr: string; artName: string; colorName: string; sizesText: string; addScannedSize: boolean; confirmWarnings: boolean
   flag?: string; notes?: string; saveScan?: boolean; clientEventId?: string
   /** Gents / Ladies / Kids / Baby — asked on the New Article form. */
   segment?: string
+  /** Sparx / Flite PU / Flite EVA / Bahamas — asked on the New Article form (suggested from the code). */
+  division?: string
 }
 
 class LinkAbort extends Error { constructor(public result: LinkResult) { super('link aborted') } }
@@ -352,6 +371,8 @@ async function linkOrCreateArticleOnce(input: LinkInput): Promise<LinkResult> {
   if (!name || !color) return { ok: false, error: 'NAME_REQUIRED' }
   const segment = cleanSegment(input.segment)
   if (!segment) return { ok: false, error: 'SEGMENT_REQUIRED' }
+  const division = cleanDivision(input.division)
+  if (!division) return { ok: false, error: 'DIVISION_REQUIRED' }
   if (!input.confirmWarnings && hasArticleNumberMismatch(name, artCode)) return { ok: false, error: 'NUMBER_MISMATCH' }
 
   try {
@@ -429,7 +450,7 @@ async function linkOrCreateArticleOnce(input: LinkInput): Promise<LinkResult> {
         if (!articleId) {
           const ordered = sortSizeLabels(sizes)
           const [inserted] = await tx.insert(articles).values({
-            artName: storedName, artCode, color, colorCode, segment,
+            artName: storedName, artCode, color, colorCode, segment, division,
             minSize: ordered[0] ?? '', maxSize: ordered[ordered.length - 1] ?? '',
             reviewStatus: 'approved', source: 'scan_dialog',
           }).returning({ id: articles.id })
@@ -438,7 +459,7 @@ async function linkOrCreateArticleOnce(input: LinkInput): Promise<LinkResult> {
           await tx.insert(articleColors).values({ articleId, colorName: color, colorHex: colorCode || null })
           await syncSizes(tx, articleId, sizes)
           await ensureCatalogArticle(tx, articleId, artCode, storedName, 'scan_dialog')
-          await audit(tx, { actor, action: 'article.created_from_scan', entityType: 'article', entityId: articleId, after: { artName: storedName, artCode, color, colorCode, segment, sizes }, metadata: { rawQr: input.rawQr } })
+          await audit(tx, { actor, action: 'article.created_from_scan', entityType: 'article', entityId: articleId, after: { artName: storedName, artCode, color, colorCode, segment, division, sizes }, metadata: { rawQr: input.rawQr } })
         }
       }
 
@@ -452,8 +473,9 @@ async function linkOrCreateArticleOnce(input: LinkInput): Promise<LinkResult> {
       if (linkAction) {
         await tx.insert(articleScanLinks).values({ articleId: articleId!, action: linkAction, rawQr: input.rawQr, userName: actor.name, userId: actor.id, scanEventId })
       }
-      // Segment belongs to the article: fill it on every colour of this code that has none.
-      await tx.execute(sql`UPDATE articles SET segment = ${segment} WHERE ${NORM(articles.artCode)} = ${artCode} AND segment IS NULL`)
+      // Segment and division belong to the article: fill them on every colour of this code that has none.
+      await tx.execute(sql`UPDATE articles SET segment = coalesce(segment, ${segment}), division = coalesce(nullif(btrim(division), ''), ${division})
+        WHERE ${NORM(articles.artCode)} = ${artCode} AND (segment IS NULL OR nullif(btrim(division), '') IS NULL)`)
       await resolvePendingScans(tx, actor, artCode, colorCode)
       return articleId!
     })

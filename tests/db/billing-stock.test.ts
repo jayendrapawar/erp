@@ -156,4 +156,14 @@ describe('billing takes stock out (integration)', { skip: !harnessEnabled() && '
     const after = new Set((await listMissingArticles(h.db)).map((m) => `${m.artCode}|${m.colorCode}`))
     assert.ok(!after.has('SS0999G|NBOR'))
   })
+
+  test('billing remembers the MRP of a known article (several MRPs allowed); unknown articles are not added', async () => {
+    await h.db.execute(sql`DELETE FROM article_mrps`)
+    const d = await createDraft(h.db, biller)
+    assert.equal((await add(d, BOX_SIZE_8)).status, 'added')
+    assert.equal((await add(d, 'A1SS0999G-NBOR0007-1026R05MA0-649.00-1005-QA7MP-1020609999')).status, 'added')
+    const rows = (await h.db.execute<{ artCode: string; mrp: string }>(sql`SELECT "artCode", mrp::text FROM article_mrps ORDER BY 1`)).rows
+    assert.deepEqual(rows, [{ artCode: 'PUGN42G', mrp: '339.50' }])
+    await discardDraft(h.db, biller, d)
+  })
 })
