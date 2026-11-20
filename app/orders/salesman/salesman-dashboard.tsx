@@ -367,7 +367,8 @@ interface SizeMatrixProps {
 export interface SizeMatrixHandle { focus: () => void }
 
 const SHORTCUTS: [string, string][] = [
-  ['Enter', 'Go to the next step: vendor → article → colour → sizes → next article'],
+  ['Enter', 'Go to the next step: vendor → article → colour → sizes'],
+  ['Enter on sizes', 'Next size; on the last size: add the colour and go to the next article'],
   ['↑ ↓', 'Move in a list (vendors, articles) or between sizes'],
   ['1, 2, 3…', 'On colours: pick colour 1, 2, 3…'],
   ['← →', 'On colours: move · On sizes: quantity −1 / +1'],
@@ -407,8 +408,8 @@ function ShortcutGuide() {
   )
 }
 
-// Keyboard (laptop / Bluetooth keyboard): ↑↓ size · ←→ quantity −1/+1 · type a number (12 = "1" then
-// "2" quickly) · 0 / Backspace clears · Enter add + next article · Shift+Enter add, stay ·
+// Keyboard (laptop / Bluetooth keyboard): ↑↓ size · ←→ quantity −1/+1 · type a number (1 then 0 = 10)
+// · Backspace removes a digit · Enter next size (last size: add + next article) · Shift+Enter add, stay ·
 // Shift+1…9 colour N · Esc next article without adding. Touch use is unchanged.
 const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMatrix({ sizes, quantities, onChange, onEnter, onColour, onEscape }, ref) {
   // manualActive[size] = true means manual input controls it
@@ -442,7 +443,16 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
   function handleKey(e: React.KeyboardEvent<HTMLDivElement>) {
     const inInput = (e.target as HTMLElement).tagName === 'INPUT'
     const digit = /^(Digit|Numpad)([0-9])$/.exec(e.code)?.[2]
-    if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); onEnter?.(e.shiftKey); return }
+    if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault()
+      // Enter: next size; on the last size, add this colour and go to the next article.
+      // Shift+Enter: add this colour now and stay on the article.
+      const last = sizes.length - 1
+      const at = Math.min(row, last)
+      if (!e.shiftKey && at < last) { setKbd(true); setRow(at + 1); typed.current = { row: -1, text: '' }; return }
+      onEnter?.(e.shiftKey)
+      return
+    }
     if (e.key === 'Escape') { e.preventDefault(); onEscape?.(); return }
     if (e.shiftKey && digit && digit !== '0') { e.preventDefault(); onColour?.(Number(digit)); return }
     if (inInput || e.ctrlKey || e.metaKey || e.altKey || !sizes.length) return

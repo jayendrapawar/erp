@@ -1188,5 +1188,7 @@
   "Skip this article (nothing added)": "यह आर्टिकल छोड़ें (कुछ नहीं जुड़ेगा)",
   "Go to Create Order": "ऑर्डर बनाएँ पर जाएँ",
   "Create the order": "ऑर्डर बनाएँ",
-  "Keyboard shortcuts": "कीबोर्ड शॉर्टकट"
+  "Keyboard shortcuts": "कीबोर्ड शॉर्टकट",
+  "Go to the next step: vendor → article → colour → sizes": "अगले चरण पर जाएँ: वेंडर → आर्टिकल → रंग → साइज़",
+  "Next size; on the last size: add the colour and go to the next article": "अगला साइज़; आखिरी साइज़ पर: रंग जोड़ें और अगले आर्टिकल पर जाएँ"
 }
