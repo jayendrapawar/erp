@@ -20,6 +20,15 @@ import { ROLE_LABELS, ROLES as ALL_ROLES } from '@/lib/permissions'
 import type { OrderSet } from './sets-tab'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { PageNav } from '@/components/page-nav'
+import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
+
+type UserRow = { id: string; name: string | null; email: string; role: string | null; createdAt: Date }
+const USER_FILTERS: ColumnFilterDef<UserRow>[] = [
+  { key: 'name', label: 'Name', kind: 'text', get: u => u.name },
+  { key: 'email', label: 'Email', kind: 'text', get: u => u.email },
+  { key: 'role', label: 'Current role', kind: 'text', placeholder: 'e.g. biller', get: u => (u.role ?? '').split(',').map(r => `${r} ${(ROLE_LABELS as Record<string, string>)[r] ?? ''}`).join(' ') },
+  { key: 'joined', label: 'Joined', kind: 'text', placeholder: 'e.g. Nov', get: u => fmt(u.createdAt) },
+]
 
 interface RoleSelectorProps {
   userId: string
@@ -187,16 +196,12 @@ const ROLES: AppRole[] = [...ALL_ROLES, 'user']
 
 export function MasterDashboard({ users, currentUserId, vendors: initialVendors, articles: initialArticles, missingArticles, catalogReviewItems, sets: initialSets, suppliers, assortments, isAccountant = false }: Props) {
   const [isPending, startTransition] = useTransition()
-  const [search, setSearch] = useState('')
+  const [userFilters, setUserFilters] = useState<FilterValues>({})
   const [vendorList, setVendorList] = useState<Vendor[]>(initialVendors)
   const [articleList, setArticleList] = useState<Article[]>(initialArticles)
   const [setList, setSetList] = useState<OrderSet[]>(initialSets)
 
-  const filteredUsers = users.filter(u =>
-    !search ||
-    (u.name ?? '').toLowerCase().includes(search.toLowerCase()) ||
-    u.email.toLowerCase().includes(search.toLowerCase())
-  )
+  const filteredUsers = applyColumnFilters(users, USER_FILTERS, userFilters)
 
   function handleRoleChange(userId: string, role: string) {
     startTransition(async () => {
@@ -250,13 +255,8 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
           {/* ── Users tab — hidden for accountant ── */}
           {!isAccountant && (
           <TabsContent value="users">
-            <input
-              type="search"
-              placeholder="Search by name or email…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-full mb-4 rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-            />
+            <FiltersButton className="mb-4 sm:hidden" defs={USER_FILTERS} values={userFilters} onChange={setUserFilters} />
+            <div className="mb-2 hidden sm:block"><FilterSummary values={userFilters} onChange={setUserFilters} shown={filteredUsers.length} total={users.length} /></div>
 
             {filteredUsers.length === 0 && (
               <p className="text-center py-8 text-sm text-muted-foreground">No users found</p>
@@ -304,6 +304,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
                       <th className="text-left px-4 py-3 font-medium text-muted-foreground">Joined</th>
                       <th className="text-left px-4 py-3 font-medium text-muted-foreground">Assign Role</th>
                     </tr>
+                    <FilterRow columns={[...USER_FILTERS, null]} values={userFilters} onChange={setUserFilters} firstCellClass="px-4" cellClass="px-4" />
                   </thead>
                   <tbody className="divide-y divide-border">
                     {filteredUsers.map(u => (

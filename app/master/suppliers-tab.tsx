@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState, useTransition } from 'react'
-import { fuzzyFilter } from '@/lib/fuzzy'
+import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { saveSupplier, type Supplier, type SupplierInput } from '@/app/actions/suppliers'
 
 type Form = Omit<SupplierInput, 'divisions' | 'paymentTermsDays'> & { divisionsText: string; paymentTermsText: string }
@@ -29,22 +29,27 @@ interface Props {
   onListChange?: (list: Supplier[]) => void
 }
 
+const SUPPLIER_FILTERS: ColumnFilterDef<Supplier>[] = [
+  { key: 'name', label: 'Name', kind: 'text', get: s => s.name },
+  { key: 'contact', label: 'Contact', kind: 'text', get: s => s.contactPerson },
+  { key: 'phone', label: 'Phone', kind: 'text', get: s => s.phone },
+  { key: 'gst', label: 'GSTIN', kind: 'text', get: s => s.gst },
+  { key: 'divisions', label: 'Divisions', kind: 'text', get: s => s.divisions.join(' ') },
+  { key: 'credit', label: 'Credit', kind: 'text', get: s => (s.paymentTermsDays != null ? `${s.paymentTermsDays} days` : '') },
+  { key: 'status', label: 'Status', kind: 'select', options: ['active', 'inactive'], get: s => s.status },
+]
+
 /** Supplier master (companies we buy from). Saved to the database; changes are audited. */
 export function SuppliersTab({ initialSuppliers, readOnly = false, onListChange }: Props) {
   const [suppliers, setSuppliers] = useState<Supplier[]>(initialSuppliers)
-  const [search, setSearch] = useState('')
-  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all')
+  const [filters, setFilters] = useState<FilterValues>({})
   const [modalMode, setModalMode] = useState<'add' | 'edit' | null>(null)
   const [editId, setEditId] = useState<number | null>(null)
   const [form, setForm] = useState<Form>(EMPTY_FORM)
   const [formError, setFormError] = useState('')
   const [saving, startSaving] = useTransition()
 
-  const filtered = useMemo(() => {
-    let list = suppliers
-    if (filterStatus !== 'all') list = list.filter(s => s.status === filterStatus)
-    return fuzzyFilter(list, search, s => [s.name, s.contactPerson, s.city, s.divisions.join(' '), s.gst])
-  }, [suppliers, search, filterStatus])
+  const filtered = useMemo(() => applyColumnFilters(suppliers, SUPPLIER_FILTERS, filters), [suppliers, filters])
 
   function openAdd() {
     setForm(EMPTY_FORM); setFormError(''); setEditId(null); setModalMode('add')
@@ -92,22 +97,8 @@ export function SuppliersTab({ initialSuppliers, readOnly = false, onListChange 
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        <input
-          type="search"
-          placeholder="Search suppliers…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="flex-1 min-w-[160px] rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-        />
-        <select
-          value={filterStatus}
-          onChange={e => setFilterStatus(e.target.value as typeof filterStatus)}
-          className="rounded-lg border border-border bg-background px-2 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-        >
-          <option value="all">All</option>
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-        </select>
+        <FiltersButton className="sm:hidden" defs={SUPPLIER_FILTERS} values={filters} onChange={setFilters} />
+        <div className="hidden sm:block"><FilterSummary values={filters} onChange={setFilters} shown={filtered.length} total={suppliers.length} /></div>
         {!readOnly && (
           <button onClick={openAdd} className="rounded-lg bg-foreground text-background px-3 py-2 text-xs font-semibold hover:opacity-90 transition-opacity">
             + Add Supplier
@@ -158,6 +149,7 @@ export function SuppliersTab({ initialSuppliers, readOnly = false, onListChange 
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
                 {!readOnly && <th className="text-left px-4 py-3 font-medium text-muted-foreground">Actions</th>}
               </tr>
+              <FilterRow columns={[...SUPPLIER_FILTERS, ...(readOnly ? [] : [null])]} values={filters} onChange={setFilters} firstCellClass="px-4" cellClass="px-4" />
             </thead>
             <tbody className="divide-y divide-border">
               {filtered.map(s => (
