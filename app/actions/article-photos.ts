@@ -12,6 +12,7 @@ import { audit } from '@/lib/audit'
 import { PHOTO_MAX_BYTES, PHOTO_MONTHLY_UPLOAD_LIMIT, isArticlePhotoPath, isBlobUrl } from '@/lib/photos/limits'
 import { photoUploadsThisMonth } from '@/lib/photos/uploads-this-month'
 import { revalidateShopCatalogue } from '@/lib/shop/cache'
+import { blobAuth, blobStoreReady } from '@/lib/photos/store'
 
 export interface ArticlePhotoItem { id: number; url: string; width: number | null; height: number | null; bytes: number | null }
 export interface ArticlePhotoList { photos: ArticlePhotoItem[]; uploadsThisMonth: number; monthlyLimit: number; storeReady: boolean }
@@ -32,7 +33,7 @@ export async function getArticlePhotos(articleId: number): Promise<ArticlePhotoL
       .from(articlePhotos).where(eq(articlePhotos.articleId, articleId)).orderBy(asc(articlePhotos.sortOrder), asc(articlePhotos.id)),
     photoUploadsThisMonth(db),
   ])
-  return { photos, uploadsThisMonth: used, monthlyLimit: PHOTO_MONTHLY_UPLOAD_LIMIT, storeReady: Boolean(process.env.BLOB_READ_WRITE_TOKEN) }
+  return { photos, uploadsThisMonth: used, monthlyLimit: PHOTO_MONTHLY_UPLOAD_LIMIT, storeReady: blobStoreReady() }
 }
 
 /** Save the link of a photo the browser just uploaded to Blob. Added last (not main) unless it is the first. 1 transaction. */
@@ -79,7 +80,7 @@ export async function deleteArticlePhoto(photoId: number): Promise<ArticlePhotoL
     return r
   })
   // The link is already gone from the shop; a file left behind only takes storage.
-  try { await del(row.url) } catch (e) { console.error('[article-photos] Blob delete failed', row.url, e) }
+  try { await del(row.url, blobAuth()) } catch (e) { console.error('[article-photos] Blob delete failed', row.url, e) }
   revalidateShopCatalogue()
   return getArticlePhotos(row.articleId)
 }

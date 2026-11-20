@@ -4,7 +4,7 @@
 // Photos are shrunk in the browser and uploaded straight to Vercel Blob; then the link is saved.
 
 import { useEffect, useRef, useState } from 'react'
-import { upload } from '@vercel/blob/client'
+import { uploadPresigned } from '@vercel/blob/client'
 import { addArticlePhoto, deleteArticlePhoto, getArticlePhotos, makeMainArticlePhoto, type ArticlePhotoList } from '@/app/actions/article-photos'
 import { shrinkPhoto } from '@/lib/photos/shrink'
 
@@ -49,7 +49,7 @@ export function ArticlePhotosDialog({ article, onClose, onCountChange }: {
       try {
         const p = await shrinkPhoto(files[i])
         const slug = `${article.artCode}-${article.colorCode || 'colour'}`.replace(/[^A-Za-z0-9-]/g, '').slice(0, 40) || 'photo'
-        const blob = await upload(`articles/${article.id}/${slug}.${p.ext}`, p.blob, {
+        const blob = await uploadPresigned(`articles/${article.id}/${slug}.${p.ext}`, p.blob, {
           access: 'public',
           handleUploadUrl: '/api/article-photos/upload',
           clientPayload: JSON.stringify({ articleId: article.id }),

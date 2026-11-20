@@ -26,6 +26,9 @@ Orders as "to confirm". Owner decisions are kept in this file as the shop is bui
   `audit_events_action_time_idx`), files cached for a year (links never change).
 - Queries: photo counts 1; open photos 2 (parallel); add photo 1 transaction; make main 1 + audit;
   delete 1 transaction. Every change invalidates the cached shop catalogue (`lib/shop/cache.ts`).
-- Setup: Vercel dashboard → Storage → Create → Blob (public) → connect to the project; this adds
-  `BLOB_READ_WRITE_TOKEN`. Local development needs the same variable in `.env.local`. Without it the
-  Photos dialog says the store is not connected.
+- Setup (done 21 Nov 2026): Vercel Blob store connected to the project. On Vercel the app uses OIDC
+  (`BLOB_STORE_ID`; no long-lived secret). Locally `.env.local` holds `BLOB_READ_WRITE_TOKEN`;
+  `lib/photos/store.ts` passes it explicitly, because the library otherwise tries OIDC first and
+  fails in development. Uploads use the presigned flow (`handleUploadPresigned` + `issueSignedToken`),
+  which works with both. Without either variable the Photos dialog says the store is not connected.
+- Deleted files can still be served from Vercel's CDN for about a minute.
