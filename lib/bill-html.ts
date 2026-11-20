@@ -168,7 +168,7 @@ function css(isA5: boolean): string {
   .sum { flex: 1; border: 1px solid #bbb; }
   .sum div { display: flex; justify-content: space-between; padding: 2px 7px; }
   .sum .disc span:last-child { color: #b42318; }
-  .sum .net { background: #111; color: #fff; font-weight: 900; font-size: ${base + 3}px; padding: 4px 7px; margin-top: 2px; }
+  .sum .net { background: #fff; color: #111; border: 1.5px solid #111; font-weight: 900; font-size: ${base + 3}px; padding: 4px 7px; margin: 3px 4px 4px; }
   .transport { display: flex; gap: 10px; margin-top: 5px; border: 1px solid #ccc; padding: 3px 6px; }
   .transport div { flex: 1; } .transport .line { border-bottom: 1px solid #bbb; height: ${base + 4}px; }
   .sign { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-top: 8px; }
