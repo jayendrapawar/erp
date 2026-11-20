@@ -368,7 +368,8 @@ export interface SizeMatrixHandle { focus: () => void }
 
 const SHORTCUTS: [string, string][] = [
   ['Enter', 'Go to the next step: vendor → article → colour → sizes'],
-  ['Enter on sizes', 'Next size; on the last size: add the colour and go to the next article'],
+  ['Enter on sizes', 'Next size; after the last size: go to Next Article / Add to Order'],
+  ['← → on buttons', 'Switch between Next Article and Add to Order (Enter presses, ↑ back to sizes)'],
   ['↑ ↓', 'Move in a list (vendors, articles) or between sizes'],
   ['1, 2, 3…', 'On colours: pick colour 1, 2, 3…'],
   ['← →', 'On colours: move · On sizes: quantity −1 / +1'],
@@ -409,7 +410,7 @@ function ShortcutGuide() {
 }
 
 // Keyboard (laptop / Bluetooth keyboard): ↑↓ size · ←→ quantity −1/+1 · type a number (1 then 0 = 10)
-// · Backspace removes a digit · Enter next size (last size: add + next article) · Shift+Enter add, stay ·
+// · Backspace removes a digit · Enter next size (after the last: Next Article / Add buttons, ←→) · Shift+Enter add, stay ·
 // Shift+1…9 colour N · Esc next article without adding. Touch use is unchanged.
 const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMatrix({ sizes, quantities, onChange, onEnter, onColour, onEscape }, ref) {
   // manualActive[size] = true means manual input controls it
@@ -737,6 +738,8 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
   const matrixRef = useRef<SizeMatrixHandle>(null)
   const skSearchRef = useRef<SearchComboboxHandle>(null)
   const createOrderRef = useRef<HTMLButtonElement>(null)
+  const nextArtBtnRef = useRef<HTMLButtonElement>(null)
+  const addBtnRef = useRef<HTMLButtonElement>(null)
   const hasKeyboard = () => typeof window !== 'undefined' && window.matchMedia('(pointer: fine)').matches
   // Keyboard start: on a computer the cursor begins in "Search vendor" (or the article search when
   // the vendor is already chosen) whenever New Order opens.
@@ -963,10 +966,25 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
 
   /** Enter in the matrix: add + next article. Shift+Enter: add this colour, stay on the article. */
   function handleMatrixEnter(stay: boolean) {
-    if (!stay) { handleNextArticle(); return }
+    // Enter after the last size: go to the buttons (Next Article / Add to Order), ←→ between them.
+    if (!stay) { nextArtBtnRef.current?.focus(); return }
     if (currentColorTotal === 0) { setError('Add at least one pair before adding this item.'); return }
     handleAddToOrder()
     setTimeout(() => colourRefs.current[0]?.focus({ preventScroll: true }), 50)
+  }
+
+  /** Keyboard on Next Article / Add to Order: ←→ switch, ↑ back to the sizes, Esc skip. */
+  function handleActionKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    const btns = [nextArtBtnRef.current, addBtnRef.current].filter((b): b is HTMLButtonElement => !!b && !b.disabled)
+    const at = btns.findIndex(b => b === document.activeElement)
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault()
+      btns[(Math.max(0, at) + (e.key === 'ArrowRight' ? 1 : -1) + btns.length) % btns.length]?.focus()
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault(); matrixRef.current?.focus()
+    } else if (e.key === 'Escape') {
+      e.preventDefault(); skipArticle()
+    }
   }
 
   function handleMatrixColour(n: number) {
@@ -2200,8 +2218,9 @@ ${bills}
                         )}
 
                         {/* Add to Order + Next Article — full-width on mobile, auto-width on wider */}
-                        <div className="flex items-center gap-2 pt-1">
+                        <div className="flex items-center gap-2 pt-1" onKeyDown={handleActionKey}>
                           <button
+                            ref={nextArtBtnRef}
                             type="button"
                             onClick={handleNextArticle}
                             className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-xl border border-border bg-background px-4 py-2.5 text-sm font-semibold text-foreground hover:bg-muted transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -2212,8 +2231,13 @@ ${bills}
                             Next Article
                           </button>
                           <button
+                            ref={addBtnRef}
                             type="button"
-                            onClick={handleAddToOrder}
+                            onClick={e => {
+                              handleAddToOrder()
+                              // From the keyboard (Enter), continue on this article's colours.
+                              if (e.detail === 0) setTimeout(() => colourRefs.current[0]?.focus({ preventScroll: true }), 50)
+                            }}
                             disabled={currentColorTotal === 0}
                             className="flex-1 sm:flex-none flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >

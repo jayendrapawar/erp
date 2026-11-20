@@ -1190,5 +1190,6 @@
   "Create the order": "ऑर्डर बनाएँ",
   "Keyboard shortcuts": "कीबोर्ड शॉर्टकट",
   "Go to the next step: vendor → article → colour → sizes": "अगले चरण पर जाएँ: वेंडर → आर्टिकल → रंग → साइज़",
-  "Next size; on the last size: add the colour and go to the next article": "अगला साइज़; आखिरी साइज़ पर: रंग जोड़ें और अगले आर्टिकल पर जाएँ"
+  "Next size; after the last size: go to Next Article / Add to Order": "अगला साइज़; आखिरी साइज़ के बाद: Next Article / Add to Order पर जाएँ",
+  "Switch between Next Article and Add to Order (Enter presses, ↑ back to sizes)": "Next Article और Add to Order के बीच बदलें (Enter दबाता है, ↑ साइज़ पर वापस)"
 }
