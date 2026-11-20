@@ -2230,24 +2230,27 @@ ${bills}
                             </svg>
                             Next Article
                           </button>
-                          <button
-                            ref={addBtnRef}
-                            type="button"
-                            onClick={e => {
-                              handleAddToOrder()
-                              // From the keyboard (Enter), continue on this article's colours.
-                              if (e.detail === 0) setTimeout(() => colourRefs.current[0]?.focus({ preventScroll: true }), 50)
-                            }}
-                            disabled={currentColorTotal === 0}
-                            className="flex-1 sm:flex-none flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                            </svg>
-                            {(editingLineId || lines.some(l => l.articleId === selectedArt.id && l.colorId === selectedColorId))
-                              ? 'Save Changes'
-                              : 'Add to Order'}
-                          </button>
+                          {/* One colour only: Next Article saves it, so it is the only button. */}
+                          {selectedArt.colors.length > 1 && (
+                            <button
+                              ref={addBtnRef}
+                              type="button"
+                              onClick={e => {
+                                handleAddToOrder()
+                                // From the keyboard (Enter), continue on this article's colours.
+                                if (e.detail === 0) setTimeout(() => colourRefs.current[0]?.focus({ preventScroll: true }), 50)
+                              }}
+                              disabled={currentColorTotal === 0}
+                              className="flex-1 sm:flex-none flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                              </svg>
+                              {(editingLineId || lines.some(l => l.articleId === selectedArt.id && l.colorId === selectedColorId))
+                                ? 'Save Changes'
+                                : 'Add to Order'}
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}
