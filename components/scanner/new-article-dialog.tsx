@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { getColoursForName, linkOrCreateArticle, searchArticleNames } from '@/app/actions/articles'
+import { getArticleSegment, getColoursForName, linkOrCreateArticle, searchArticleNames } from '@/app/actions/articles'
+import { SEGMENTS } from '@/lib/catalog/assortments'
 import type { ParsedQr } from '@/lib/qr-parser'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -30,6 +31,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
   const [articleName, setArticleName] = useState(existingName ?? '')
   const [colourChoice, setColourChoice] = useState('')
   const [otherColour, setOtherColour] = useState('')
+  const [segment, setSegment] = useState('')
   const [sizes, setSizes] = useState(initialSizes ?? suggestSizes(parsed.articleCode))
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [colours, setColours] = useState<string[]>([])
@@ -48,7 +50,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
   const hasKnownName = selectedKnownName || Boolean(matchingName)
   const showSizes = mode === 'unknown'
   const colourName = colours.length === 0 || colourChoice === '__other__' ? otherColour.trim() : colourChoice
-  const canSubmit = articleName.trim().length > 0 && colourName.length > 0 && (!showSizes || sizes.trim().length > 0)
+  const canSubmit = articleName.trim().length > 0 && colourName.length > 0 && segment.length > 0 && (!showSizes || sizes.trim().length > 0)
   const readOnlyRows = useMemo(() => [
     ['Article code', parsed.articleCode],
     ['Colour code', parsed.colorCode],
@@ -91,6 +93,13 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
     return () => { cancelled = true; clearTimeout(timer) }
   }, [articleName, matchingName, selectedKnownName, parsed.articleCode])
 
+  // Prefill the segment when this article code already has one.
+  useEffect(() => {
+    let cancelled = false
+    getArticleSegment(parsed.articleCode).then((s) => { if (!cancelled && s) setSegment((cur) => cur || s) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [parsed.articleCode])
+
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !loading) onClose()
@@ -117,6 +126,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
         artName: articleName.trim(),
         colorName: colourName,
         sizesText: sizes.trim(),
+        segment,
         addScannedSize,
         confirmWarnings,
         flag,
@@ -137,6 +147,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
           DUPLICATE_QR: 'This QR code has already been scanned.',
           SIZES_REQUIRED: 'Enter at least one size before creating this article.',
           NAME_REQUIRED: 'Enter both an article name and a colour name.',
+          SEGMENT_REQUIRED: 'Choose the segment (Gents, Ladies, Kids or Baby).',
           ALREADY_EXISTS: 'An article with this article code and colour code already exists.',
           FORBIDDEN: 'You do not have access to link this article.',
           INVALID_QR: 'This QR code format is not recognised.',
@@ -219,6 +230,14 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
             {pendingColours.includes(colourChoice) && <p className="text-xs text-muted-foreground">{`This colour is in the master without a colour code. Saving gives it code ${parsed.colorCode}.`}</p>}
             {pendingColours.length > 0 && !colourChoice && <p className="text-xs text-amber-700 dark:text-amber-400">Colours under &quot;No colour code yet&quot; are waiting for their code. If this box is one of them, choose it.</p>}
             {colourChoice === '__other__' && <Input autoFocus value={otherColour} onChange={(event) => setOtherColour(event.target.value)} disabled={loading} className="h-12 text-base" placeholder="Enter colour name" />}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="new-article-segment">Segment</Label>
+            <select id="new-article-segment" value={segment} disabled={loading} onChange={(event) => setSegment(event.target.value)} className="h-12 w-full rounded-lg border border-input bg-background px-3 text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <option value="">Choose a segment</option>
+              {SEGMENTS.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
           </div>
 
           {showSizes && (

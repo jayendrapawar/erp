@@ -236,6 +236,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
     if (!form.artName.trim()) { setFormError('Article name is required.'); return }
     
     if (modalMode === 'add') {
+      if (!form.segment) { setFormError('Choose the segment (Gents, Ladies, Kids or Baby).'); return }
       const emptyColorIdx = colors.findIndex(c => !c.color.trim())
       if (emptyColorIdx !== -1) {
         setFormError(`Color name is required (Color #${emptyColorIdx + 1}).`)

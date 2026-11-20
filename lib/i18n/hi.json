@@ -1116,5 +1116,7 @@
   "Only sizes {0} belong to this carton.": "इस कार्टन में केवल साइज़ {0} हैं।",
   "Enter the pairs in each size of this carton (the master has no assortment for it yet).": "इस कार्टन के हर साइज़ की जोड़ी भरें (मास्टर में इसका असॉर्टमेंट अभी नहीं है)।",
   "Already received (saved twice at the same moment).": "पहले ही प्राप्त (एक ही समय पर दो बार सेव हुआ)।",
-  "Entered by hand (carton label not scanned).": "हाथ से दर्ज (कार्टन लेबल स्कैन नहीं हुआ)।"
+  "Entered by hand (carton label not scanned).": "हाथ से दर्ज (कार्टन लेबल स्कैन नहीं हुआ)।",
+  "Choose a segment": "सेगमेंट चुनें",
+  "Choose the segment (Gents, Ladies, Kids or Baby).": "सेगमेंट चुनें (Gents, Ladies, Kids या Baby)।"
 }
