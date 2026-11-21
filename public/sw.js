@@ -1,16 +1,18 @@
 /**
- * Shayona Inventory — Service Worker v4
+ * Shayona Inventory — Service Worker v5
  *
  * Strategies:
  *   - App shell JS/CSS (_next/static)          → CacheFirst  (versioned hashes, safe forever)
- *   - Page HTML (all app routes)               → NetworkFirst with 5 s timeout → cache fallback
+ *   - Page HTML + page data (all app routes)   → Network; the saved copy ONLY when offline.
+ *     (v5, 21 Nov 2026: the old 5 s timeout served old pages and old orders / stock whenever the
+ *     database was waking up. Page data for in-app navigation (RSC) is never saved.)
  *   - Images / icons / manifest                → CacheFirst
  *   - Catalogue API route (/api/catalogue)     → StaleWhileRevalidate (30 min TTL)
  *   - Server Actions (POST)                    → NetworkOnly (never cache mutations)
- *   - Everything else                          → NetworkFirst
+ *   - Everything else                          → Network; saved copy only when offline
  */
 
-const CACHE_VERSION  = 'v4'
+const CACHE_VERSION  = 'v5'
 const CACHE_NAME     = `shayona-${CACHE_VERSION}`
 const STATIC_CACHE   = `shayona-static-${CACHE_VERSION}`
 const PAGES_CACHE    = `shayona-pages-${CACHE_VERSION}`
@@ -88,24 +90,24 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // All HTML pages — NetworkFirst with 5 s timeout
+  // Pages and their data — always from the server; the saved copy only when there is no connection
   const isHtmlPage =
     request.headers.get('accept')?.includes('text/html') ||
     PAGE_PATHS.some((p) => url.pathname === p || url.pathname.startsWith(p + '/'))
 
   if (isHtmlPage) {
-    event.respondWith(networkFirstWithTimeout(request, PAGES_CACHE, 5000))
+    event.respondWith(networkFirst(request, PAGES_CACHE))
     return
   }
 
   // _next/data and internal Next routes
   if (url.pathname.startsWith('/_next/')) {
-    event.respondWith(networkFirstWithTimeout(request, CACHE_NAME, 5000))
+    event.respondWith(networkFirst(request, CACHE_NAME))
     return
   }
 
   // Default
-  event.respondWith(networkFirstWithTimeout(request, CACHE_NAME, 5000))
+  event.respondWith(networkFirst(request, CACHE_NAME))
 })
 
 // ── Strategies ────────────────────────────────────────────────────────────────
@@ -121,19 +123,23 @@ async function cacheFirst(request, cacheName) {
   return response
 }
 
-async function networkFirstWithTimeout(request, cacheName, timeoutMs) {
-  const controller = new AbortController()
-  const timeoutId  = setTimeout(() => controller.abort(), timeoutMs)
+/**
+ * Network first with no time limit: a slow answer (database waking up) still shows fresh data. The
+ * saved copy is used only when the network fails (offline). In-app page data (RSC) is never saved:
+ * it changes with every order and scan.
+ */
+async function networkFirst(request, cacheName) {
+  const url = new URL(request.url)
+  const isRsc = request.headers.get('RSC') === '1' || url.searchParams.has('_rsc')
   try {
-    const response = await fetch(request, { signal: controller.signal })
-    clearTimeout(timeoutId)
-    if (response.ok) {
+    const response = await fetch(request)
+    if (response.ok && !isRsc) {
       const cache = await caches.open(cacheName)
       cache.put(request, response.clone())
     }
     return response
   } catch {
-    clearTimeout(timeoutId)
+    if (isRsc) return Response.error()
     const cached = await caches.match(request)
     if (cached) return cached
     if (request.headers.get('accept')?.includes('text/html')) {

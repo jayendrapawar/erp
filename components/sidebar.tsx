@@ -103,9 +103,12 @@ export function Sidebar({ sections }: { sections: SideSection[] }) {
 
   return (
     <>
+      {/* Keeps the page clear of the pinned menu (same width). The menu itself is fixed to the screen:
+          "sticky" does not work here because <html>/<body> hide sideways overflow. */}
+      <div aria-hidden className={`hidden shrink-0 md:block ${collapsed ? 'w-[72px]' : 'w-64'}`} />
       <aside
         aria-label="Main menu"
-        className={`sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex ${collapsed ? 'w-[72px]' : 'w-64'}`}
+        className={`fixed inset-y-0 left-0 z-30 hidden h-dvh flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex ${collapsed ? 'w-[72px]' : 'w-64'}`}
       >
         <div className={`flex items-center gap-2.5 px-4 pb-3 pt-4 ${collapsed ? 'justify-center px-2' : ''}`}>
           <Link href="/home" className="flex min-w-0 items-center gap-2.5" aria-label="Shayona home">
