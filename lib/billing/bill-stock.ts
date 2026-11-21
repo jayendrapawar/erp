@@ -172,11 +172,12 @@ export async function addDraftScan(db: DbOrTx, actor: Actor, draftId: number, ra
       UPDATE direct_bill_drafts SET "updatedAt" = now() WHERE id = ${draftId} AND EXISTS (SELECT 1 FROM ins)
     ), mrp AS (
       -- An article can sell at several MRPs: remember each one seen on a billed box (known articles only).
-      INSERT INTO article_mrps ("artCode", mrp)
-      SELECT ${b.articleCode}, ${b.mrp}::numeric
+      -- (lastSeenAt: the shop shows the latest MRP — migration 0015)
+      INSERT INTO article_mrps ("artCode", mrp, "lastSeenAt")
+      SELECT ${b.articleCode}, ${b.mrp}::numeric, now()
       WHERE ${b.mrp}::numeric IS NOT NULL AND EXISTS (SELECT 1 FROM ins)
         AND EXISTS (SELECT 1 FROM articles a WHERE ${NORM(sql`a."artCode"`)} = ${b.articleCode})
-      ON CONFLICT DO NOTHING
+      ON CONFLICT ("artCode", mrp) DO UPDATE SET "lastSeenAt" = now()
     )
     SELECT (SELECT id FROM ins) AS id,
       ${b.unique} AND EXISTS (SELECT 1 FROM scan_events e WHERE e."dedupeKey" = ${b.dedupeKey} AND e.status = 'active' AND e.resolution = 'resolved') AS "inStock",
@@ -394,10 +395,10 @@ export async function recordOrderScans(tx: Tx, actor: Actor, orderId: number, or
     const ins = await tx.execute<{ dedupeKey: string }>(sql`
       WITH mrp AS (
         -- Remember each MRP seen on a billed box (known articles only); an article can have several.
-        INSERT INTO article_mrps ("artCode", mrp)
-        SELECT DISTINCT m.art, m.mrp FROM json_to_recordset(${J(rows)}::json) AS m(art text, mrp numeric)
+        INSERT INTO article_mrps ("artCode", mrp, "lastSeenAt")
+        SELECT DISTINCT m.art, m.mrp, now() FROM json_to_recordset(${J(rows)}::json) AS m(art text, mrp numeric)
         WHERE m.mrp IS NOT NULL AND EXISTS (SELECT 1 FROM articles a WHERE ${NORM(sql`a."artCode"`)} = m.art)
-        ON CONFLICT DO NOTHING
+        ON CONFLICT ("artCode", mrp) DO UPDATE SET "lastSeenAt" = now()
       )
       INSERT INTO bill_scans ("clientEventId", "orderId", "orderNumber", "rawInput", "dedupeKey", "articleCode", "colourCode", "sizeLabel", mrp, "userId", "userName")
       SELECT x."clientEventId"::uuid, ${orderId}, ${orderNumberText}, x.raw, x.key, x.art, x.colour, x.size, x.mrp, ${actor.id}, ${actor.name}

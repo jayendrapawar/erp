@@ -9,8 +9,12 @@ import { eq, asc, ilike, or, sql } from 'drizzle-orm'
 import { requirePermission } from '@/lib/authz'
 import { audit } from '@/lib/audit'
 import { fuzzyScore } from '@/lib/fuzzy'
+import { retailerColumns } from '@/lib/retailer-columns'
 
-export type Vendor = typeof vendors.$inferSelect
+/** A retailer as pages see it: never the shop PIN hash (migration 0015). */
+export type Vendor = Omit<typeof vendors.$inferSelect, 'shopPinHash'>
+/** Fields the Retailers form saves; shop sign-in fields change only through the shop-access screen. */
+type VendorFields = Pick<Vendor, 'partyName' | 'gst' | 'phone' | 'email' | 'address' | 'city' | 'area' | 'day' | 'salesman' | 'status'>
 
 // ── Generate next ID (V001, V002, …) ─────────────────────────────────────────
 async function genId(): Promise<string> {
@@ -55,27 +59,31 @@ export async function importVendors(
     })
   }
 
-  const list = await db.select().from(vendors).orderBy(asc(vendors.partyName))
+  const list = await db.select(retailerColumns).from(vendors).orderBy(asc(vendors.partyName))
   return { imported: newRows.length, skipped, list }
 }
 
 // ── Fetch all vendors ─────────────────────────────────────────────────────────
 export async function getVendors(): Promise<Vendor[]> {
   await requirePermission('retailers.view')
-  return db.select().from(vendors).orderBy(asc(vendors.partyName))
+  return db.select(retailerColumns).from(vendors).orderBy(asc(vendors.partyName))
 }
 
 // ── Save (upsert) a single vendor ─────────────────────────────────────────────
 export async function saveVendor(
-  input: Omit<Vendor, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
+  raw: VendorFields & { id?: string }
 ): Promise<Vendor[]> {
   const u = await requirePermission('retailers.edit')
   // One or more addresses for emailed bills (comma separated); '' = none.
-  const { ok, bad } = parseEmailList(input.email ?? '')
+  const { ok, bad } = parseEmailList(raw.email ?? '')
   if (bad.length) throw new Error(`Not an email address: ${bad.join(', ')}`)
-  input = { ...input, email: ok.join(', ') }
+  // Only the form's fields are written, whatever else the page sends.
+  const input: VendorFields & { id?: string } = {
+    id: raw.id, partyName: raw.partyName, gst: raw.gst, phone: raw.phone, email: ok.join(', '), address: raw.address,
+    city: raw.city, area: raw.area, day: raw.day, salesman: raw.salesman, status: raw.status,
+  }
   const id = input.id || (await genId())
-  const [before] = input.id ? await db.select().from(vendors).where(eq(vendors.id, input.id)).limit(1) : []
+  const [before] = input.id ? await db.select(retailerColumns).from(vendors).where(eq(vendors.id, input.id)).limit(1) : []
   await db
     .insert(vendors)
     .values({ ...input, id })
@@ -96,7 +104,7 @@ export async function saveVendor(
       },
     })
   await audit(db, { actor: { id: u.id, name: u.name }, action: before ? 'retailer.updated' : 'retailer.created', entityType: 'retailer', entityId: id, before: before ?? undefined, after: input })
-  return db.select().from(vendors).orderBy(asc(vendors.partyName))
+  return db.select(retailerColumns).from(vendors).orderBy(asc(vendors.partyName))
 }
 
 // ── Search vendors (used by salesman dashboard) ───────────────────────────────
@@ -105,12 +113,12 @@ export async function searchVendors(query: string): Promise<Vendor[]> {
   const q = query.trim()
 
   if (!q) {
-    return db.select().from(vendors).where(eq(vendors.status, 'active')).orderBy(asc(vendors.partyName)).limit(20)
+    return db.select(retailerColumns).from(vendors).where(eq(vendors.status, 'active')).orderBy(asc(vendors.partyName)).limit(20)
   }
 
   // Broad DB fetch — pull any row that substring-matches on key fields
   const rows = await db
-    .select()
+    .select(retailerColumns)
     .from(vendors)
     .where(
       or(
@@ -125,7 +133,7 @@ export async function searchVendors(query: string): Promise<Vendor[]> {
 
   // Also fetch a wider set for fuzzy (typo tolerance) — up to 200 active vendors
   const wider = await db
-    .select()
+    .select(retailerColumns)
     .from(vendors)
     .where(eq(vendors.status, 'active'))
     .orderBy(asc(vendors.partyName))

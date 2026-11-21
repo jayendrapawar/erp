@@ -140,7 +140,7 @@ export async function recordBoxScan(db: DbOrTx, actor: Actor, input: BoxScanInpu
 
     const event = inserted[0]
     if (event.resolution === 'resolved') await postScanMovement(tx, event, actor.id)
-    if (parse.fields.mrp && art) await rememberMrp(tx, art, parse.fields.mrp.value)
+    if (parse.fields.mrp && art) await rememberMrp(tx, art, parse.fields.mrp.value, parse.fields.mfgYear?.value, parse.fields.mfgMonth?.value)
     return { status: 'saved', event, replay: false } as const
   })
 }
@@ -247,10 +247,17 @@ async function postScanMovement(db: DbOrTx, event: ScanEvent, userId: string | n
   })
 }
 
-async function rememberMrp(db: DbOrTx, articleCode: string, mrp: number) {
+/** Remember an MRP seen on a box, with when and the newest manufacture month (latest MRP in the shop). */
+async function rememberMrp(db: DbOrTx, articleCode: string, mrp: number, mfgYear?: number, mfgMonth?: number) {
   const code = normalizeArticleValue(articleCode)
   const [known] = await db.select({ id: articles.id }).from(articles).where(sql`${NORM(articles.artCode)} = ${code}`).limit(1)
-  if (known) await db.insert(articleMrps).values({ artCode: code, mrp: mrp.toFixed(2) }).onConflictDoNothing()
+  if (!known) return
+  const ym = mfgYear && mfgYear >= 2000 && mfgYear <= 2100 && mfgMonth && mfgMonth >= 1 && mfgMonth <= 12 ? mfgYear * 100 + mfgMonth : null
+  await db.insert(articleMrps).values({ artCode: code, mrp: mrp.toFixed(2), mfgYm: ym, lastSeenAt: sql`now()` })
+    .onConflictDoUpdate({
+      target: [articleMrps.artCode, articleMrps.mrp],
+      set: { lastSeenAt: sql`now()`, mfgYm: sql`greatest(${articleMrps.mfgYm}, excluded."mfgYm")` },
+    })
 }
 
 // ── Resolving missing-article scans after the master is fixed ──────────────

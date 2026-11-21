@@ -75,10 +75,18 @@ export const retailers = pgTable('retailers', {
   day:        text('day').notNull().default(''),
   salesman:   text('salesman').notNull().default(''),
   status:     text('status').notNull().default('active'),
+  // Retailer shop sign-in (migration 0015): phone + PIN (scrypt hash). A new PIN signs out old sessions.
+  shopPhone:       text('shopPhone').notNull().default(''),
+  shopPinHash:     text('shopPinHash').notNull().default(''),
+  shopEnabled:     boolean('shopEnabled').notNull().default(false),
+  shopPinSetAt:    timestamp('shopPinSetAt', { withTimezone: true }),
+  shopFailedPins:  integer('shopFailedPins').notNull().default(0),
+  shopLockedUntil: timestamp('shopLockedUntil', { withTimezone: true }),
   createdAt:  timestamp('createdAt').notNull().defaultNow(),
   updatedAt:  timestamp('updatedAt').notNull().defaultNow(),
 }, (t) => [
   index('retailers_party_name_idx').on(t.partyName),
+  uniqueIndex('retailers_shop_phone_key').on(t.shopPhone).where(sql`${t.shopPhone} <> ''`),
 ])
 
 /** @deprecated The table holds retailers. Use `retailers`. */
@@ -155,6 +163,9 @@ export const articleMrps = pgTable('article_mrps', {
   id: serial('id').primaryKey(),
   artCode: text('artCode').notNull(),
   mrp: numeric('mrp', { precision: 10, scale: 2 }).notNull(),
+  /** Newest manufacture year*100+month seen at this MRP; latest MRP = newest first (migration 0015). */
+  mfgYm: integer('mfgYm'),
+  lastSeenAt: timestamp('lastSeenAt', { withTimezone: true }),
 }, (t) => [
   unique('article_mrps_artCode_mrp_unique').on(t.artCode, t.mrp),
   check('article_mrps_artCode_normalized_check', sql`${t.artCode} = upper(btrim(${t.artCode}))`),
@@ -312,6 +323,7 @@ export const flags = pgTable('flags', {
 // --- Order Management ---
 
 export const orderStatusEnum = pgEnum('order_status', [
+  'to_confirm', // retailer shop order waiting for staff (migration 0015); pickers never see it
   'pending',
   'assigned',
   'packed',
@@ -343,6 +355,8 @@ export const orders = pgTable('orders', {
   totalBundles:      integer('totalBundles'),
   deliveryAgentName: text('deliveryAgentName'),
   isEmergency:       boolean('isEmergency').notNull().default(false),
+  /** Who placed it (migration 0015): staff, or a retailer in the shop. */
+  source:            text('source').$type<'staff' | 'retailer'>().notNull().default('staff'),
   orderedAt:         timestamp('orderedAt').notNull().defaultNow(),
   packedAt:          timestamp('packedAt'),
   billedAt:          timestamp('billedAt'),

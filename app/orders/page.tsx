@@ -1,3 +1,4 @@
+import { retailerColumns } from '@/lib/retailer-columns'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { auth } from '@/lib/auth'
@@ -86,7 +87,7 @@ export default async function OrdersPage() {
 
     const [catalogue, vendorRows, sets, pickers] = await Promise.all([
       loadCatalogue(),
-      db.select().from(vendors).where(eq(vendors.status, 'active')).orderBy(asc(vendors.partyName)),
+      db.select(retailerColumns).from(vendors).where(eq(vendors.status, 'active')).orderBy(asc(vendors.partyName)),
       getSets(),
       getPickersList(),
       ...promises,
