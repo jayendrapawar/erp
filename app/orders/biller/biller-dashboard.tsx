@@ -10,7 +10,7 @@ import { PageNav } from '@/components/page-nav'
 import { parseQr, isValidWarehouseQr, normalizeQr } from '@/lib/qr-parser'
 import { SCAN_INTERVAL_MS } from '@/components/scanner/constants'
 import { articlesMatch } from '@/lib/billing-verification'
-import { printInvoices, type MrpLine, type PageSize, type PrintConfig } from '@/lib/bill-html'
+import { openPrintWindow, printInvoices, type MrpLine, type PageSize, type PrintConfig } from '@/lib/bill-html'
 import { getBillTemplate } from '@/app/actions/bill-template'
 import type { BillTemplate } from '@/lib/bill-template'
 import { BillingScannerPage, type BillingVendor } from '@/components/billing-scanner-page'
@@ -807,18 +807,34 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
   async function confirmPrint() {
     const LINE_DISC = lineDiscPct === '' ? 30 : Number(lineDiscPct)
-    const bills = pendingPrintOrders.map(o => ({
-      vendor: {
-        name:    o.shopkeeperName,
-        phone:   o.shopkeeperPhone   ?? null,
-        address: o.shopkeeperAddress ?? null,
-      },
-      order:  { orderNumber: o.orderNumber, billedAt: o.billedAt },
-      lines:  mrpLinesMap[o.id] ?? [],
-      lineDiscPct: LINE_DISC,
-    }))
+    const orders = pendingPrintOrders
     setPrintConfigOpen(false)
-    await printInvoices(bills, printConfig, billTemplate)
+    // Open the window inside the click: browsers block windows opened after a wait (owner reported
+    // Print not working, 21 Nov 2026). Then load each bill's saved lines (1 query per bill) — the
+    // saved bill is what prints, with its own discount — and fill the window.
+    const win = openPrintWindow()
+    if (!win) return
+    try {
+      const saved = await Promise.all(orders.map(o => getBillLines(o.id).catch(() => [])))
+      const bills = orders.map((o, i) => {
+        const rows = saved[i]
+        const lines = rows.length > 0 ? rows.map(r => ({ artNumber: r.artNumber, mrp: r.mrp, qty: r.qty })) : (mrpLinesMap[o.id] ?? [])
+        return {
+          vendor: { name: o.shopkeeperName, phone: o.shopkeeperPhone ?? null, address: o.shopkeeperAddress ?? null },
+          order:  { orderNumber: o.orderNumber, billedAt: o.billedAt },
+          lines,
+          lineDiscPct: rows[0] && Number.isFinite(rows[0].lineDiscPct) ? rows[0].lineDiscPct : LINE_DISC,
+        }
+      })
+      const empty = bills.filter(b => b.lines.length === 0).map(b => b.order.orderNumber)
+      const printable = bills.filter(b => b.lines.length > 0)
+      if (printable.length === 0) { win.close(); window.alert(`No bill lines found for ${empty.join(', ')}.`); return }
+      if (empty.length) window.alert(`Not printed (no bill lines): ${empty.join(', ')}`)
+      await printInvoices(printable, printConfig, billTemplate, win)
+    } catch (e) {
+      win.close()
+      window.alert(`Could not prepare the bill: ${e instanceof Error ? e.message : 'network problem'}. Try again.`)
+    }
   }
 
   // ── Mail selected bills as mailto: link ─────────────────────────────────────
@@ -2129,14 +2145,14 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
         </div>
       )}
 
-      {/* ── Sticky bottom bar — Print / Mail Bills ── */}
+      {/* ── Sticky bottom bar — Print / Mail Bills (on phones above the bottom menu bar, which hid it) ── */}
       {activeTab === 'generated' && (() => {
         const selectedOrders = billedOrders.filter(o => printSelectedIds.has(o.id))
         const allLoaded = selectedOrders.every(o => !!printItemsMap[o.id])
         const canAct = selectedOrders.length > 0 && allLoaded
         const noneSelected = selectedOrders.length === 0
         return (
-          <div className="fixed bottom-0 left-0 right-0 z-20 bg-background/95 backdrop-blur-sm border-t border-border">
+          <div className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] left-0 right-0 z-30 bg-background/95 backdrop-blur-sm border-t border-border md:bottom-0">
             <div className="max-w-2xl mx-auto px-3 sm:px-4 py-2.5 flex items-center gap-2">
 
               {/* Selection badge + loading */}

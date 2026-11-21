@@ -343,9 +343,28 @@ async function transliterateToHindi(name: string): Promise<string | null> {
   }
 }
 
-/** Open one print window for one or more bills. */
-export async function printInvoices(bills: Array<BuildInvoiceOptions>, config?: PrintConfig, template?: BillTemplate) {
-  if (bills.length === 0) return
+/**
+ * Open the print window straight away, inside the click (browsers block windows opened after a wait,
+ * e.g. after loading bill lines or Hindi names). Null when pop-ups are blocked; the user is told.
+ */
+export function openPrintWindow(): Window | null {
+  const win = window.open('', '_blank', 'width=860,height=1000')
+  if (!win) {
+    window.alert('The bill window was blocked. Allow pop-ups for this site (icon at the right of the address bar), then press Print again.')
+    return null
+  }
+  win.document.write('<p style="font-family:system-ui,sans-serif;padding:24px;color:#444">Preparing the bill…</p>')
+  return win
+}
+
+/**
+ * Print one or more bills in one window. Pass `win` from openPrintWindow() when the caller has to
+ * wait for something first; otherwise the window is opened here, before any waiting.
+ */
+export async function printInvoices(bills: Array<BuildInvoiceOptions>, config?: PrintConfig, template?: BillTemplate, win: Window | null = null) {
+  if (bills.length === 0) { win?.close(); return }
+  const target = win ?? openPrintWindow()
+  if (!target) return
   const t = normalizeBillTemplate(template ?? DEFAULT_BILL_TEMPLATE)
   const hindi = new Map<string, string | null>()
   if (t.showHindiName) {
@@ -360,8 +379,12 @@ export async function printInvoices(bills: Array<BuildInvoiceOptions>, config?: 
   }, t)).join('\n')
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${bills.length === 1 ? `Bill ${esc(bills[0].order.orderNumber)}` : `Bills (${bills.length})`}</title>
 <style>${css(pageSize === 'A5')}</style></head><body>${body}<script>${PAGINATE_JS}</script></body></html>`
-  const win = window.open('', '_blank', 'width=860,height=1000')
-  if (!win) return
-  win.document.write(html); win.document.close(); win.focus()
-  win.onload = () => win.print()
+  if (target.closed) return
+  target.document.open()
+  target.document.write(html)
+  target.document.close()
+  target.focus()
+  // The page script lays the bill out into pages as it loads; print once that is done. (Waiting for
+  // "load" set after close() can miss the event, and then the print dialog never opened.)
+  setTimeout(() => { if (!target.closed) target.print() }, 400)
 }
