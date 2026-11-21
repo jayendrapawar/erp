@@ -235,24 +235,24 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-5xl mx-auto px-4 py-6">
+      <div className="max-w-7xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-6">
           <PageHeader title={MASTER_TAB_LABEL[tab] ? `Master · ${MASTER_TAB_LABEL[tab]}` : 'Master'} subtitle={isAccountant ? 'Retailers, suppliers & articles' : 'Users, retailers, suppliers, articles & sets'} />
           <PageNav />
         </div>
 
-        {/* Stats row — hidden for accountant (user management not relevant) */}
-        {!isAccountant && (
-        <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-4 px-4 mb-4 sm:mx-0 sm:px-0 sm:grid sm:grid-cols-5 sm:gap-3 sm:mb-6">
+        {/* People per role — only with the Users section (redesign, 21 Nov 2026); hidden for accountants */}
+        {!isAccountant && tab === 'users' && (
+        <div className="flex flex-wrap gap-2 mb-4">
           {ROLES.map(r => {
             const count = users.filter(u => {
               const roles = (u.role ?? 'user').split(',').map(x => x.trim())
               return roles.includes(r)
             }).length
             return (
-              <div key={r} className="shrink-0 min-w-[92px] rounded-xl border border-border bg-card px-3 py-2 sm:p-4">
-                <p className="text-[10px] sm:text-xs text-muted-foreground font-medium uppercase tracking-wide">{r}</p>
-                <p className="text-lg sm:text-2xl font-bold sm:mt-1 text-foreground">{count}</p>
+              <div key={r} className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5">
+                <span className="text-xs font-medium capitalize text-muted-foreground">{r}</span>
+                <span className="text-sm font-bold tabular-nums text-foreground">{count}</span>
               </div>
             )
           })}

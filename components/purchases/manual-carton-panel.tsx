@@ -140,7 +140,7 @@ export function ManualCartonPanel({ registerBoxHandler, cameraActive, onStartCam
           <button onClick={() => { setBox(null); setLines([]); setLineId(null); setTyped('') }} disabled={busy} className="text-xs underline">Scan a different box</button>
 
           {lines.length === 0 ? (
-            <p className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+            <p className="rounded-lg border border-amber-300 dark:border-amber-500/30 bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
               {`${box.articleCode} ${box.colourCode} is not on any open proforma invoice (or all its cartons are already received). Pairs per carton come from the invoice, so this carton cannot be entered by hand. Upload the invoice first, or scan its boxes into stock with the warehouse scanner.`}
             </p>
           ) : (

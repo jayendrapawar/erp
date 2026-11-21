@@ -402,7 +402,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
             <li>{`${uploadPreview.summary.alreadyThere} already in the master (skipped)`}</li>
             {uploadPreview.summary.segmentsSet > 0 && <li className="font-medium">{`${uploadPreview.summary.segmentsSet} existing article colours get their segment`}</li>}
             {uploadPreview.summary.segmentDiffers.length > 0 && <li className="text-amber-700 dark:text-amber-400">{`${uploadPreview.summary.segmentDiffers.length} have a different segment in the master (not changed; listed below)`}</li>}
-            {uploadPreview.summary.problems.length > 0 && <li className="text-red-600">{`${uploadPreview.summary.problems.length} row(s) cannot be read and will be skipped`}</li>}
+            {uploadPreview.summary.problems.length > 0 && <li className="text-red-600 dark:text-red-400">{`${uploadPreview.summary.problems.length} row(s) cannot be read and will be skipped`}</li>}
           </ul>
           {uploadPreview.summary.segmentDiffers.length > 0 && (
             <div className="mt-2 max-h-32 overflow-y-auto rounded-lg bg-background p-2 text-xs text-amber-700 dark:text-amber-400">
@@ -410,7 +410,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
             </div>
           )}
           {uploadPreview.summary.problems.length > 0 && (
-            <div className="mt-2 max-h-32 overflow-y-auto rounded-lg bg-background p-2 text-xs text-red-600">
+            <div className="mt-2 max-h-32 overflow-y-auto rounded-lg bg-background p-2 text-xs text-red-600 dark:text-red-400">
               {uploadPreview.summary.problems.slice(0, 50).map(p => <p key={p.rowNumber}>{p.message}</p>)}
             </div>
           )}
@@ -431,8 +431,8 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
       {importMsg && (
         <div className={`mb-3 rounded-lg px-3 py-2 text-xs font-medium ${
           importMsg.type === 'ok'
-            ? 'bg-green-50 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-400'
-            : 'bg-red-50 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-400'
+            ? 'bg-green-50 text-green-700 border border-green-200 dark:border-green-500/30 dark:bg-green-900/20 dark:text-green-400'
+            : 'bg-red-50 text-red-700 border border-red-200 dark:border-red-500/30 dark:bg-red-900/20 dark:text-red-400'
         }`}>
           {importMsg.text}
         </div>
@@ -536,7 +536,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                 {a.artCode && <p className="text-xs text-muted-foreground font-mono mt-0.5">{a.artCode}{mrpsByCode[mrpKey(a.artCode)]?.length ? ` · MRPs ${mrpsByCode[mrpKey(a.artCode)].join(', ')}` : ''}</p>}
               </div>
               {!a.colorCode && a.color && (
-                <span className="shrink-0 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">{`${a.color} · code pending`}</span>
+                <span className="shrink-0 rounded-full border border-amber-300 dark:border-amber-500/30 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">{`${a.color} · code pending`}</span>
               )}
               {a.colorCode && (
                 <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium border border-border bg-muted">
@@ -581,7 +581,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
               </button>
               <button
                 onClick={() => setDeleteTarget(a)}
-                className="flex-1 rounded-xl border border-red-200 bg-red-50 text-red-600 py-2.5 text-sm font-medium hover:bg-red-100 active:scale-95 transition-all"
+                className="flex-1 rounded-xl border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15 text-red-600 dark:text-red-400 py-2.5 text-sm font-medium hover:bg-red-100 active:scale-95 transition-all"
               >
                 Delete
               </button>
@@ -641,9 +641,9 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                   <td className="px-2 py-3 text-sm text-muted-foreground whitespace-nowrap">{a.maxSize || '—'}</td>
                   <td className="pr-4 pl-2 py-3 w-[210px]">
                     <div className="flex items-center gap-1.5 justify-end">
-                      <button onClick={() => setPhotoTarget(a)} className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${photoCounts[a.id] ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200' : 'border-border hover:bg-muted'}`}>Photos{photoCounts[a.id] ? ` (${photoCounts[a.id]})` : ''}</button>
+                      <button onClick={() => setPhotoTarget(a)} className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${photoCounts[a.id] ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200 dark:hover:bg-emerald-500/25' : 'border-border hover:bg-muted'}`}>Photos{photoCounts[a.id] ? ` (${photoCounts[a.id]})` : ''}</button>
                       <button onClick={() => openEdit(a)} className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap">Edit</button>
-                      <button onClick={() => setDeleteTarget(a)} className="rounded-md border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap">Delete</button>
+                      <button onClick={() => setDeleteTarget(a)} className="rounded-md border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15 hover:bg-red-100 text-red-600 dark:text-red-400 px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap">Delete</button>
                     </div>
                   </td>
                 </tr>
@@ -693,7 +693,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
 
             <div className="p-5 space-y-4 overflow-y-auto max-h-[75vh] sm:max-h-[80vh]">
               {formError && (
-                <p className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
+                <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
               )}
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">

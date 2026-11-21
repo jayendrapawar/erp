@@ -562,15 +562,15 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
         <div className="grid grid-cols-3 gap-3 mb-4">
           <div className="rounded-xl border border-border bg-card px-4 py-3">
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">My Orders</p>
-            <p className="text-2xl font-bold text-blue-600 tabular-nums mt-0.5">{counts.mine}</p>
+            <p className="text-2xl font-bold text-blue-600 dark:text-blue-400 tabular-nums mt-0.5">{counts.mine}</p>
           </div>
           <div className="rounded-xl border border-border bg-card px-4 py-3">
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">To Pack</p>
-            <p className="text-2xl font-bold text-yellow-600 tabular-nums mt-0.5">{counts.myPending}</p>
+            <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400 tabular-nums mt-0.5">{counts.myPending}</p>
           </div>
           <div className="rounded-xl border border-border bg-card px-4 py-3">
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Packed</p>
-            <p className="text-2xl font-bold text-green-600 tabular-nums mt-0.5">{counts.myPackedPairs}</p>
+            <p className="text-2xl font-bold text-green-600 dark:text-green-400 tabular-nums mt-0.5">{counts.myPackedPairs}</p>
           </div>
         </div>
 
@@ -620,7 +620,7 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                   : 'No available orders right now 🎉'}
               </p>
               {subTab === 'mine' && (
-                <button type="button" onClick={() => setSubTab('all')} className="text-xs text-blue-600 hover:underline">
+                <button type="button" onClick={() => setSubTab('all')} className="text-xs text-blue-600 dark:text-blue-400 hover:underline">
                   Browse All Orders →
                 </button>
               )}

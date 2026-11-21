@@ -223,29 +223,29 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
     return (
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <KpiCard
-          icon={<QrCode className="h-5 w-5 text-blue-600" />}
-          iconBg="bg-blue-50"
+          icon={<QrCode className="h-5 w-5 text-blue-600 dark:text-blue-400" />}
+          iconBg="bg-blue-50 dark:bg-blue-500/15"
           title={t('totalScans')}
           value={stats.totalScans}
           subtitle={`${stats.scansLast24h} ${t('inLast24h')}`}
         />
         <KpiCard
-          icon={<Package className="h-5 w-5 text-green-600" />}
-          iconBg="bg-green-50"
+          icon={<Package className="h-5 w-5 text-green-600 dark:text-green-400" />}
+          iconBg="bg-green-50 dark:bg-green-500/15"
           title={t('totalItemsScanned')}
           value={stats.totalItems}
           subtitle={t('unitsScanned')}
         />
         <KpiCard
-          icon={<Tag className="h-5 w-5 text-purple-600" />}
-          iconBg="bg-purple-50"
+          icon={<Tag className="h-5 w-5 text-purple-600 dark:text-purple-400" />}
+          iconBg="bg-purple-50 dark:bg-purple-500/15"
           title={t('uniqueItemsScannedKPI')}
           value={stats.uniqueItems}
           subtitle={t('differentSKUs')}
         />
         <KpiCard
           icon={<BarChart3 className="h-5 w-5 text-orange-500" />}
-          iconBg="bg-orange-50"
+          iconBg="bg-orange-50 dark:bg-orange-500/15"
           title={t('avgPerItemScanned')}
           value={avg}
           subtitle={t('unitsPerSKU')}
@@ -259,29 +259,29 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
     return (
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <KpiCard
-          icon={<Package className="h-5 w-5 text-blue-600" />}
-          iconBg="bg-blue-50"
+          icon={<Package className="h-5 w-5 text-blue-600 dark:text-blue-400" />}
+          iconBg="bg-blue-50 dark:bg-blue-500/15"
           title={t('totalStockItems')}
           value={stockStats.totalStockItems.toLocaleString()}
           subtitle={`${stockStats.uniqueSKUs.toLocaleString()} ${t('differentSKUs')}`}
         />
         <KpiCard
-          icon={<QrCode className="h-5 w-5 text-green-600" />}
-          iconBg="bg-green-50"
+          icon={<QrCode className="h-5 w-5 text-green-600 dark:text-green-400" />}
+          iconBg="bg-green-50 dark:bg-green-500/15"
           title={t('scannedStock')}
           value={stockStats.scannedStockItems.toLocaleString()}
           subtitle={t('scannedStockHint')}
         />
         <KpiCard
-          icon={<Tag className="h-5 w-5 text-amber-600" />}
-          iconBg="bg-amber-50"
+          icon={<Tag className="h-5 w-5 text-amber-600 dark:text-amber-400" />}
+          iconBg="bg-amber-50 dark:bg-amber-500/15"
           title={t('unscannedStock')}
           value={stockStats.unscannedStockItems.toLocaleString()}
           subtitle={t('unscannedStockHint')}
         />
         <KpiCard
           icon={<BarChart3 className="h-5 w-5 text-red-500" />}
-          iconBg="bg-red-50"
+          iconBg="bg-red-50 dark:bg-red-500/15"
           title={t('awaitingArticleLink')}
           value={stockStats.awaitingArticleLink.toLocaleString()}
           subtitle={stockStats.negativeSKUs > 0 ? `${stockStats.negativeSKUs} ${t('negativeSkus')}` : t('awaitingArticleLinkHint')}
@@ -296,15 +296,15 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
         <CardHeader className="px-3 sm:px-6">
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50">
-                <QrCode className="h-4 w-4 text-blue-600" />
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-500/15">
+                <QrCode className="h-4 w-4 text-blue-600 dark:text-blue-400" />
               </div>
               <div>
                 <CardTitle className="text-base sm:text-lg">{t('scannedInventoryTitle')}</CardTitle>
                 <CardDescription className="text-xs sm:text-sm">{t('scannedInventoryDesc')}</CardDescription>
               </div>
             </div>
-            <FilterBadge icon={<Filter className="h-3 w-3" />} className="bg-blue-50 text-blue-600">
+            <FilterBadge icon={<Filter className="h-3 w-3" />} className="bg-blue-50 dark:bg-blue-500/15 text-blue-600 dark:text-blue-400">
               {t('filteredByCurrentUser')}
             </FilterBadge>
           </div>
@@ -375,7 +375,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
               </Table>
             </div>
           )}
-          <p className="px-3 sm:px-4 pt-3 pb-1 text-xs sm:text-sm text-blue-600 font-medium">
+          <p className="px-3 sm:px-4 pt-3 pb-1 text-xs sm:text-sm text-blue-600 dark:text-blue-400 font-medium">
             {t('showing')} {filteredInventory.length} {t('of')} {inventory.length} {t('items')}
           </p>
         </CardContent>
@@ -389,15 +389,15 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
         <CardHeader className="px-3 sm:px-6">
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50">
-                <Package className="h-4 w-4 text-green-600" />
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-500/15">
+                <Package className="h-4 w-4 text-green-600 dark:text-green-400" />
               </div>
               <div>
                 <CardTitle className="text-base sm:text-lg">{t('overallStockTitle')}</CardTitle>
                 <CardDescription className="text-xs sm:text-sm">{t('overallStockDesc')}</CardDescription>
               </div>
             </div>
-            <FilterBadge icon={<Filter className="h-3 w-3" />} className="bg-green-50 text-green-600">
+            <FilterBadge icon={<Filter className="h-3 w-3" />} className="bg-green-50 dark:bg-green-500/15 text-green-600 dark:text-green-400">
               {t('filteredByAllUsers')}
             </FilterBadge>
           </div>
@@ -438,7 +438,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
                       <TableCell className="text-right text-xs sm:text-sm px-3 sm:px-4 tabular-nums">{item.scannedQuantity}</TableCell>
                       <TableCell className="text-right text-xs sm:text-sm px-3 sm:px-4 tabular-nums">{item.unscannedQuantity || '-'}</TableCell>
                       <TableCell className="text-right px-3 sm:px-4">
-                        <Badge className={item.totalQuantity < 0 ? 'bg-red-100 text-red-800 hover:bg-red-100' : 'bg-green-100 text-green-800 hover:bg-green-100'}>
+                        <Badge className={item.totalQuantity < 0 ? 'bg-red-100 dark:bg-red-500/15 text-red-800 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-500/25' : 'bg-green-100 dark:bg-green-500/15 text-green-800 dark:text-green-300 hover:bg-green-100'}>
                           {item.totalQuantity}
                         </Badge>
                       </TableCell>
@@ -454,7 +454,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
               </Table>
             </div>
           )}
-          <p className="px-3 sm:px-4 pt-3 pb-1 text-xs sm:text-sm text-blue-600 font-medium">
+          <p className="px-3 sm:px-4 pt-3 pb-1 text-xs sm:text-sm text-blue-600 dark:text-blue-400 font-medium">
             {t('showing')} {filteredStock.length} {t('of')} {stockItems.length} {t('items')}
           </p>
         </CardContent>
@@ -468,8 +468,8 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
       <Card>
         <CardHeader className="px-3 sm:px-6 pb-2">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50">
-              <TrendingUp className="h-4 w-4 text-blue-600" />
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-500/15">
+              <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
             </div>
             <CardTitle className="text-sm sm:text-base">{t('scansOverTime')}</CardTitle>
           </div>
@@ -497,8 +497,8 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
       <Card>
         <CardHeader className="px-3 sm:px-6 pb-2">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-50">
-              <BarChart3 className="h-4 w-4 text-purple-600" />
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-50 dark:bg-purple-500/15">
+              <BarChart3 className="h-4 w-4 text-purple-600 dark:text-purple-400" />
             </div>
             <CardTitle className="text-sm sm:text-base">{t('divisionBreakdown')}</CardTitle>
           </div>
@@ -524,7 +524,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
       <Card>
         <CardHeader className="px-3 sm:px-6 pb-2">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-50">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-50 dark:bg-orange-500/15">
               <PieChart className="h-4 w-4 text-orange-500" />
             </div>
             <CardTitle className="text-sm sm:text-base">{t('entryTypeBreakdown')}</CardTitle>
@@ -560,8 +560,8 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
       <Card>
         <CardHeader className="px-3 sm:px-6 pb-2">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50">
-              <Tag className="h-4 w-4 text-green-600" />
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-500/15">
+              <Tag className="h-4 w-4 text-green-600 dark:text-green-400" />
             </div>
             <CardTitle className="text-sm sm:text-base">{t('topSKUs')}</CardTitle>
           </div>
@@ -589,8 +589,8 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
       <Card>
         <CardHeader className="px-3 sm:px-6 pb-2">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50">
-              <QrCode className="h-4 w-4 text-blue-600" />
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-500/15">
+              <QrCode className="h-4 w-4 text-blue-600 dark:text-blue-400" />
             </div>
             <CardTitle className="text-sm sm:text-base">{t('scansByUser')}</CardTitle>
           </div>
@@ -669,8 +669,8 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
         <CardHeader className="px-3 sm:px-6 pb-2">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50">
-                <BarChart3 className="h-4 w-4 text-blue-600" />
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-500/15">
+                <BarChart3 className="h-4 w-4 text-blue-600 dark:text-blue-400" />
               </div>
               <div>
                 <CardTitle className="text-sm sm:text-base">{titleText}</CardTitle>
@@ -684,7 +684,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
             </div>
             <div className="flex items-center gap-1 text-xs flex-wrap">
               <button
-                className="text-blue-600 hover:underline font-medium"
+                className="text-blue-600 dark:text-blue-400 hover:underline font-medium"
                 onClick={() => { setDrillArt(null); setDrillColor(null) }}
               >
                 All Articles
@@ -757,7 +757,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
   function renderScannedCharts() {
     const drillSection = (
       <div className="space-y-6">
-        <SectionLabel icon={<QrCode className="h-4 w-4 shrink-0 text-blue-600" />} title={t('myStatsTitle')} />
+        <SectionLabel icon={<QrCode className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />} title={t('myStatsTitle')} />
         <ChartArticleDrillDown />
       </div>
     )
@@ -773,7 +773,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
 
     return (
       <div className="space-y-6">
-        <SectionLabel icon={<QrCode className="h-4 w-4 shrink-0 text-blue-600" />} title={t('myStatsTitle')} />
+        <SectionLabel icon={<QrCode className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />} title={t('myStatsTitle')} />
 
         <ChartArticleDrillDown />
 
@@ -806,7 +806,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
 
     return (
       <div className="space-y-6">
-        <SectionLabel icon={<Package className="h-4 w-4 shrink-0 text-green-600" />} title={t('warehouseStatsTitle')} />
+        <SectionLabel icon={<Package className="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" />} title={t('warehouseStatsTitle')} />
 
         <ChartScansByUser data={overallChartData.scansByUser} />
 

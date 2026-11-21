@@ -180,7 +180,7 @@ export function SuppliersTab({ initialSuppliers, readOnly = false, onListChange 
               <p className="font-semibold text-sm text-foreground">{modalMode === 'add' ? 'Add Supplier' : 'Edit Supplier'}</p>
             </div>
             <div className="p-5 space-y-3">
-              {formError && <p className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>}
+              {formError && <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>}
               <div className="grid grid-cols-2 gap-3">
                 {field('name', 'Name *', { placeholder: 'e.g. Relaxo Footwears Ltd — Sparx', span: true })}
                 {field('contactPerson', 'Contact person')}

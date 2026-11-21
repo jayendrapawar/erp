@@ -1690,8 +1690,8 @@ ${bills}
 
         <div className="grid grid-cols-3 gap-3 mb-6">
           <StatCard label="Total" value={counts.total} />
-          <StatCard label="Pending" value={counts.pending} color="text-yellow-600" />
-          <StatCard label="In Progress" value={counts.inProgress} color="text-blue-600" />
+          <StatCard label="Pending" value={counts.pending} color="text-yellow-600 dark:text-yellow-400" />
+          <StatCard label="In Progress" value={counts.inProgress} color="text-blue-600 dark:text-blue-400" />
         </div>
 
         {/* Tab bar */}
@@ -1718,7 +1718,7 @@ ${bills}
         {view === 'list' && (
           <div className="space-y-3">
             {orderActionError && (
-              <p className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
+              <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
             )}
 
             {/* Live refresh indicator */}
@@ -1877,7 +1877,7 @@ ${bills}
                 <p className="px-4 py-6 text-sm text-muted-foreground text-center">Loading items…</p>
               )}
               {detailError && (
-                <p className="px-4 py-4 text-sm text-red-600">{detailError}</p>
+                <p className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>
               )}
               {!detailLoading && !detailError && detailItems.length === 0 && (
                 <p className="px-4 py-6 text-sm text-muted-foreground text-center">No items found.</p>
@@ -2043,7 +2043,7 @@ ${bills}
                       disabled={!canAct}
                       title={reason}
                       onClick={() => { setOrderActionError(''); setCancelOrderId(detailOrder.id) }}
-                      className="flex-1 rounded-xl border border-red-300 text-red-500 px-4 py-2.5 text-sm font-semibold hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                      className="flex-1 rounded-xl border border-red-300 dark:border-red-500/30 text-red-500 px-4 py-2.5 text-sm font-semibold hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                     >
                       Cancel Order
                     </button>
@@ -2057,7 +2057,7 @@ ${bills}
               )
             })()}
             {orderActionError && (
-              <p className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
+              <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
             )}
           </div>
         )}
@@ -2278,7 +2278,7 @@ ${bills}
 
                         {/* Error for this section */}
                         {error && (
-                          <p className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>
+                          <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>
                         )}
 
                         {/* Add to Order + Next Article — full-width on mobile, auto-width on wider */}
@@ -2338,7 +2338,7 @@ ${bills}
                     <button
                       type="button"
                       onClick={handleDeleteSelectedLine}
-                      className="flex items-center gap-1 rounded-lg border border-red-300 bg-red-50 dark:bg-red-900/20 px-2.5 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
+                      className="flex items-center gap-1 rounded-lg border border-red-300 dark:border-red-500/30 bg-red-50 dark:bg-red-900/20 px-2.5 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
                       aria-label="Delete selected line"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
@@ -2366,7 +2366,7 @@ ${bills}
             </div>
 
             {success && (
-              <p className="text-sm text-green-600 bg-green-50 dark:bg-green-900/20 rounded-xl px-3 py-2">{success}</p>
+              <p className="text-sm text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 rounded-xl px-3 py-2">{success}</p>
             )}
           </form>
         )}

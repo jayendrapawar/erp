@@ -206,7 +206,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
             {canEdit && (
               <div className="flex gap-2 pt-2 mt-2 border-t border-border">
                 <button onClick={() => openEdit(a)} className="flex-1 rounded-md border border-border px-2 py-1 text-xs font-medium hover:bg-muted">Edit</button>
-                <button onClick={() => { setRetiring(a); setRetireReason('') }} className="flex-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-red-600 hover:bg-muted">Remove</button>
+                <button onClick={() => { setRetiring(a); setRetireReason('') }} className="flex-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-muted">Remove</button>
               </div>
             )}
           </div>
@@ -240,7 +240,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
                     {canEdit && (
                       <td className="px-3 py-2 whitespace-nowrap">
                         <button onClick={() => openEdit(a)} className="rounded-md border border-border px-2 py-0.5 text-xs font-medium hover:bg-muted">Edit</button>
-                        <button onClick={() => { setRetiring(a); setRetireReason('') }} className="ml-1 rounded-md border border-border px-2 py-0.5 text-xs font-medium text-red-600 hover:bg-muted">Remove</button>
+                        <button onClick={() => { setRetiring(a); setRetireReason('') }} className="ml-1 rounded-md border border-border px-2 py-0.5 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-muted">Remove</button>
                       </td>
                     )}
                   </tr>
@@ -260,7 +260,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
               {busy ? 'Saving…' : form.id ? 'Save as new version' : 'Add'}
             </button>
           </>}>
-          {formError && <p className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>}
+          {formError && <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label htmlFor="as-division" className={labelCls}>Division</label>
@@ -323,7 +323,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
           </div>
           {(check.errors.length > 0 || check.warnings.length > 0) && (form.packing || form.code) && (
             <ul className="text-xs space-y-0.5">
-              {check.errors.map(m => <li key={m} className="text-red-600">• {m}</li>)}
+              {check.errors.map(m => <li key={m} className="text-red-600 dark:text-red-400">• {m}</li>)}
               {check.warnings.map(m => <li key={m} className="text-amber-700 dark:text-amber-400">• {m}</li>)}
             </ul>
           )}
@@ -339,7 +339,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
           </>}>
           <p className="text-sm text-muted-foreground">{retiring.division} · {retiring.segment} · {retiring.packing} pairs · <span className="font-mono">{formatSizes(retiring.sizes)}</span></p>
           <p className="text-xs text-muted-foreground">It stops being offered but is kept as history.</p>
-          {formError && <p className="text-xs text-red-600">{formError}</p>}
+          {formError && <p className="text-xs text-red-600 dark:text-red-400">{formError}</p>}
           <input value={retireReason} onChange={e => setRetireReason(e.target.value)} className={inputCls} placeholder="Reason (optional)" aria-label="Reason" />
         </Modal>
       )}
@@ -366,12 +366,12 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
           {busy && !upload && <p className="text-xs text-muted-foreground">Reading…</p>}
           {uploadMsg && <p className="text-xs rounded-lg px-3 py-2 bg-muted">{uploadMsg}</p>}
           {upload && upload.errors.length > 0 && (
-            <ul className="text-xs text-red-600 space-y-0.5">{upload.errors.map(m => <li key={m}>• {m}</li>)}</ul>
+            <ul className="text-xs text-red-600 dark:text-red-400 space-y-0.5">{upload.errors.map(m => <li key={m}>• {m}</li>)}</ul>
           )}
           {upload && tally && upload.lines.length > 0 && (
             <>
               <p className="text-xs text-foreground">
-                <span className="font-medium">{upload.fileName}</span>: {upload.lines.length} rows — {tally.new} new, {tally.changed} new version, {tally.same} no change, <span className={tally.error ? 'text-red-600 font-medium' : ''}>{tally.error} with errors</span>
+                <span className="font-medium">{upload.fileName}</span>: {upload.lines.length} rows — {tally.new} new, {tally.changed} new version, {tally.same} no change, <span className={tally.error ? 'text-red-600 dark:text-red-400 font-medium' : ''}>{tally.error} with errors</span>
               </p>
               <div className="max-h-[45vh] overflow-y-auto rounded-lg border border-border divide-y divide-border">
                 {[...upload.lines].sort((a, b) => Number(b.status === 'error') - Number(a.status === 'error') || a.row - b.row).map(l => (
@@ -385,7 +385,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
                       {l.status === 'changed' && l.current ? <><span className="line-through text-muted-foreground">{formatSizes(l.current.sizes)}</span> → </> : null}
                       {formatSizes(l.value.sizes)}
                     </p>
-                    {l.errors.map(m => <p key={m} className="text-red-600">• {m}</p>)}
+                    {l.errors.map(m => <p key={m} className="text-red-600 dark:text-red-400">• {m}</p>)}
                     {l.warnings.map(m => <p key={m} className="text-amber-700 dark:text-amber-400">• {m}</p>)}
                   </div>
                 ))}

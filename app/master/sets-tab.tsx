@@ -237,7 +237,7 @@ export function SetsTab({ initialSets, onListChange }: Props) {
 
             <div className="p-5 space-y-4 overflow-y-auto max-h-[65vh]">
               {formError && (
-                <p className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
+                <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
               )}
 
               <div>

@@ -68,8 +68,14 @@ export function sidebarSections(roles: readonly Role[]): SideSection[] {
       ...(orders ? [orders] : []),
     ] },
     { title: 'Stock', links: [
-      ...(can('inventory.view.all') ? [{ href: '/inventory', label: 'Inventory', icon: 'inventory' as NavIcon }] : []),
-      ...(can('purchases.view') ? [{ href: '/purchases', label: 'Purchases', icon: 'purchases' as NavIcon }] : []),
+      ...(can('inventory.view.all') ? [{ href: '/inventory', label: 'Inventory', icon: 'inventory' as NavIcon, children: [
+        { href: '/inventory#overview', label: 'Overview' }, { href: '/inventory#stock', label: 'Stock' },
+        { href: '/inventory#movements', label: 'Movements' }, { href: '/inventory#dispatch', label: 'Unscanned dispatch' },
+      ] }] : []),
+      ...(can('purchases.view') ? [{ href: '/purchases', label: 'Purchases', icon: 'purchases' as NavIcon, children: [
+        { href: '/purchases#bills', label: 'Bills' }, { href: '/purchases#receive', label: 'Receive' },
+        { href: '/purchases#expected', label: 'Expected stock' }, { href: '/purchases#unexpected', label: 'Unexpected' },
+      ] }] : []),
     ] },
     { title: 'Setup', links: [
       ...(master ? [master] : []),

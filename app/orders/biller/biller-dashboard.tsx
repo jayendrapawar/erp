@@ -957,9 +957,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
         {/* Counts are hidden while making a direct bill: only the bill matters then (owner, 21 Nov 2026). */}
         <div className={`grid grid-cols-4 gap-3 mb-6 ${activeTab === 'emergency' ? 'hidden' : ''}`}>
           <StatCard label="Total"     value={counts.total} />
-          <StatCard label="To Verify" value={counts.packed}  color="text-purple-600" />
-          <StatCard label="Billed"    value={counts.billed}  color="text-blue-600" />
-          <StatCard label="My Bills"  value={counts.myBills} color="text-blue-600" />
+          <StatCard label="To Verify" value={counts.packed}  color="text-purple-600 dark:text-purple-400" />
+          <StatCard label="Billed"    value={counts.billed}  color="text-blue-600 dark:text-blue-400" />
+          <StatCard label="My Bills"  value={counts.myBills} color="text-blue-600 dark:text-blue-400" />
         </div>
 
         {/* ── Tabs ── */}
@@ -1278,7 +1278,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   <p className="text-sm font-semibold text-foreground">Order Items</p>
                 </div>
                 {detailLoading && <p className="px-4 py-6 text-sm text-muted-foreground text-center">Loading items…</p>}
-                {detailError  && <p className="px-4 py-4 text-sm text-red-600">{detailError}</p>}
+                {detailError  && <p className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>}
                 {!detailLoading && !detailError && detailItems.length === 0 && (
                   <p className="px-4 py-6 text-sm text-muted-foreground text-center">No items found.</p>
                 )}

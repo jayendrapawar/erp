@@ -115,7 +115,7 @@ export function ArticlePhotosDialog({ article, onClose, onCountChange }: {
                         className="flex-1 rounded-md bg-red-600 px-2 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50">Sure? Delete</button>
                     ) : (
                       <button type="button" disabled={!!busy} onClick={() => setConfirmDelete(p.id)}
-                        className="flex-1 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-100 disabled:opacity-50">Delete</button>
+                        className="flex-1 rounded-md border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15 px-2 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-100 disabled:opacity-50">Delete</button>
                     )}
                   </div>
                 </div>

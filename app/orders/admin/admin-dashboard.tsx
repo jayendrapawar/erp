@@ -206,11 +206,11 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
         {/* Stats */}
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-6">
           <StatCard label="Active"     value={stats.total}      />
-          <StatCard label="Pending"    value={stats.pending}    color="text-yellow-600" />
-          <StatCard label="Packed"     value={stats.packed}     color="text-purple-600" />
-          <StatCard label="Dispatched" value={stats.dispatched} color="text-orange-600" />
-          <StatCard label="Delivered"  value={stats.delivered}  color="text-green-600"  />
-          <StatCard label="Cancelled"  value={stats.cancelled}  color="text-red-600"    />
+          <StatCard label="Pending"    value={stats.pending}    color="text-yellow-600 dark:text-yellow-400" />
+          <StatCard label="Packed"     value={stats.packed}     color="text-purple-600 dark:text-purple-400" />
+          <StatCard label="Dispatched" value={stats.dispatched} color="text-orange-600 dark:text-orange-400" />
+          <StatCard label="Delivered"  value={stats.delivered}  color="text-green-600 dark:text-green-400"  />
+          <StatCard label="Cancelled"  value={stats.cancelled}  color="text-red-600 dark:text-red-400"    />
         </div>
 
         {/* ── Detail panel overlay ── */}
@@ -298,7 +298,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                     <p className="px-4 py-6 text-sm text-muted-foreground text-center">Loading items…</p>
                   )}
                   {detailError && (
-                    <p className="px-4 py-4 text-sm text-red-600">{detailError}</p>
+                    <p className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>
                   )}
                   {!detailLoading && !detailError && detailItems.length === 0 && (
                     <p className="px-4 py-6 text-sm text-muted-foreground text-center">No items found.</p>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
 import { PageHeader } from '@/app/orders/_components/shared'
 import { PageNav } from '@/components/page-nav'
+import { useHashTab } from '@/lib/use-hash-tab'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DIVISIONS, formatSizes } from '@/lib/catalog/assortments'
 import { useQrScanner } from '@/components/scanner/use-qr-scanner'
@@ -68,11 +69,15 @@ const STATUS: Record<string, { label: string; cls: string }> = {
 }
 
 /** Purchases: expected stock from supplier bills, receiving cartons against them. */
+/** Sections (sidebar sub-items on computers, tab row on phones). */
+const PURCHASE_TABS = ['bills', 'receive', 'expected', 'unexpected'] as const
+const PURCHASE_LABEL: Record<string, string> = { bills: 'Bills', receive: 'Receive', expected: 'Expected stock', unexpected: 'Unexpected' }
+
 export function PurchasesPage({ initialSummary, initialBills, canUpload, mailboxReady, mailStart: initialMailStart, canSetMailStart, canReceive, canManage }: Props) {
   const [mailStart, setMailStart] = useState(initialMailStart)
   const [summary, setSummary] = useState(initialSummary)
   const [bills, setBills] = useState(initialBills)
-  const [tab, setTab] = useState<string>('bills')
+  const [tab, setTab] = useHashTab(PURCHASE_TABS, 'bills')
   const [openBill, setOpenBill] = useState<number | null>(null)
 
   const refresh = useCallback(() => {
@@ -87,9 +92,9 @@ export function PurchasesPage({ initialSummary, initialBills, canUpload, mailbox
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-5xl mx-auto px-4 py-6">
+      <div className="max-w-7xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-2">
-          <PageHeader title="Purchases" subtitle="Expected stock, carton receiving and verification" />
+          <PageHeader title={`Purchases · ${PURCHASE_LABEL[tab] ?? ''}`} subtitle="Expected stock, carton receiving and verification" />
           <PageNav />
         </div>
 
@@ -115,7 +120,7 @@ export function PurchasesPage({ initialSummary, initialBills, canUpload, mailbox
         )}
 
         <Tabs value={tab} onValueChange={(v) => setTab(String(v))} className="w-full">
-          <TabsList className="flex w-full mb-4">
+          <TabsList className="flex w-full mb-4 md:hidden">
             <TabsTrigger value="bills" className="text-xs sm:text-sm">Bills</TabsTrigger>
             <TabsTrigger value="receive" className="text-xs sm:text-sm">Receive</TabsTrigger>
             <TabsTrigger value="expected" className="text-xs sm:text-sm">Expected stock</TabsTrigger>
@@ -147,7 +152,7 @@ function Tile({ label, value, hint, warn }: { label: string; value: string; hint
   return (
     <div className={`rounded-xl border bg-card p-3 sm:p-4 ${warn ? 'border-red-300 dark:border-red-800' : 'border-border'}`}>
       <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">{label}</p>
-      <p className={`text-xl sm:text-2xl font-bold mt-1 tabular-nums ${warn ? 'text-red-600' : 'text-foreground'}`}>{value}</p>
+      <p className={`text-xl sm:text-2xl font-bold mt-1 tabular-nums ${warn ? 'text-red-600 dark:text-red-400' : 'text-foreground'}`}>{value}</p>
       {hint && <p className="text-[11px] text-muted-foreground mt-0.5">{hint}</p>}
     </div>
   )
@@ -190,7 +195,7 @@ function MailStartPanel({ state, onChange, canSet, mailboxReady }: { state: Mail
         {canSet && !editing && (
           <>
             <button onClick={() => { setEditing(true); setDay(state.day ?? today) }} className="rounded-lg border border-border bg-background px-2.5 py-1 font-medium hover:bg-muted">{on ? 'Change date' : 'Turn on…'}</button>
-            {on && <button onClick={() => { if (window.confirm('Stop reading bills from mail? Bills already imported stay.')) save(null) }} disabled={busy} className="rounded-lg border border-border bg-background px-2.5 py-1 font-medium text-red-600 hover:bg-muted">Turn off</button>}
+            {on && <button onClick={() => { if (window.confirm('Stop reading bills from mail? Bills already imported stay.')) save(null) }} disabled={busy} className="rounded-lg border border-border bg-background px-2.5 py-1 font-medium text-red-600 dark:text-red-400 hover:bg-muted">Turn off</button>}
           </>
         )}
       </div>
@@ -214,7 +219,7 @@ function MailStartPanel({ state, onChange, canSet, mailboxReady }: { state: Mail
           </div>
         </div>
       )}
-      {error && <p className="mt-1.5 text-red-600">{error}</p>}
+      {error && <p className="mt-1.5 text-red-600 dark:text-red-400">{error}</p>}
     </div>
   )
 }
@@ -291,7 +296,7 @@ function BillsTab({ bills, canUpload, mailReady, onOpen, onUploaded }: { bills: 
           Show received and cancelled bills
         </label>
       </div>
-      {error && <p className="mb-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {mail && (
         <p className="mb-2 text-xs text-muted-foreground">
           Mail since {when.format(new Date(mail.since))}: {mail.found} bill mail{mail.found === 1 ? '' : 's'} found, {mail.alreadyDone} already imported, {mail.processed} read now
@@ -305,7 +310,7 @@ function BillsTab({ bills, canUpload, mailReady, onOpen, onUploaded }: { bills: 
               <span className="font-medium">{r.file}</span>{' — '}
               {r.status === 'saved' && <span className="text-green-700 dark:text-green-400">saved: bill {r.refNo}, {r.lines} lines, {r.cartons} cartons, {num.format(r.pairs ?? 0)} pairs{r.division ? `, ${r.division}` : ''}{r.lines && r.assortmentsFound !== r.lines ? ` · ${r.lines - (r.assortmentsFound ?? 0)} line(s) need a carton assortment` : ''}</span>}
               {r.status === 'duplicate' && <span className="text-muted-foreground">already uploaded (bill {r.refNo})</span>}
-              {r.status === 'error' && <span className="text-red-600">not saved: {r.errors?.join(' ')}</span>}
+              {r.status === 'error' && <span className="text-red-600 dark:text-red-400">not saved: {r.errors?.join(' ')}</span>}
               {r.warnings?.length ? <span className="block text-amber-700 dark:text-amber-400">{r.warnings.join(' ')}</span> : null}
             </div>
           ))}
@@ -383,7 +388,7 @@ function BillDialog({ billId, canManage, onClose, onChanged }: { billId: number;
         <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-border">
           {b ? (
             <div className="min-w-0">
-              <p className="font-semibold text-foreground">Bill {b.refNo} <span className={`ml-1 rounded-full px-1.5 py-px text-[10px] font-medium align-middle ${STATUS[b.status]?.cls ?? ''}`}>{STATUS[b.status]?.label}</span>{b.overdue && <span className="ml-1 rounded-full px-1.5 py-px text-[10px] font-medium align-middle bg-red-100 text-red-700">Overdue</span>}</p>
+              <p className="font-semibold text-foreground">Bill {b.refNo} <span className={`ml-1 rounded-full px-1.5 py-px text-[10px] font-medium align-middle ${STATUS[b.status]?.cls ?? ''}`}>{STATUS[b.status]?.label}</span>{b.overdue && <span className="ml-1 rounded-full px-1.5 py-px text-[10px] font-medium align-middle bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-300">Overdue</span>}</p>
               <p className="text-xs text-muted-foreground">
                 {b.docType === 'proforma' ? 'Proforma' : 'Invoice'} {b.invoiceNo} · {day(b.billDate)} · expected {day(b.expectedOn)}{b.soNo ? ` · SO ${b.soNo}` : ''} · uploaded by {b.uploadedByName || '—'}
               </p>
@@ -404,7 +409,7 @@ function BillDialog({ billId, canManage, onClose, onChanged }: { billId: number;
                 </select>
               </label>
             </div>
-            {error && <p className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>}
+            {error && <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>}
             {note && <p className="text-xs bg-muted rounded-lg px-3 py-2">{note}</p>}
             {b.pendingStock > 0 && (
               <p className="text-xs text-muted-foreground">{b.pendingStock} received carton(s) were checked against this bill without adding stock: scan their boxes with the warehouse scanner.</p>
@@ -475,7 +480,7 @@ function BillDialog({ billId, canManage, onClose, onChanged }: { billId: number;
                     className="rounded-lg bg-red-600 text-white px-3 text-xs font-semibold disabled:opacity-50">Cancel bill</button>
                 </div>
               ) : (
-                <button onClick={() => setCancelling(true)} className="text-xs text-red-600 hover:underline">Cancel this bill (goods will not come)</button>
+                <button onClick={() => setCancelling(true)} className="text-xs text-red-600 dark:text-red-400 hover:underline">Cancel this bill (goods will not come)</button>
               )
             )}
           </div>
@@ -500,7 +505,7 @@ function ReceiptRows({ rows, canManage, busy, voiding, setVoiding, reason, setRe
             <span className="text-muted-foreground hidden sm:inline">{r.userName}</span>
             {r.match === 'matched'
               ? <span className={r.posted ? 'text-green-700 dark:text-green-400' : 'text-muted-foreground'}>{r.posted ? `+${r.postedPairs} in stock` : 'checked · scan boxes'}</span>
-              : <span className="text-red-600">unexpected</span>}
+              : <span className="text-red-600 dark:text-red-400">unexpected</span>}
             {canManage && <button onClick={() => { setVoiding(voiding === r.id ? null : r.id); setReason('') }} className="rounded-md border border-border px-1.5 py-0.5 hover:bg-muted">Undo</button>}
           </div>
           {voiding === r.id && (
@@ -571,7 +576,7 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
       <p className="text-[11px] text-muted-foreground">
         {manualOpen ? 'Manual entry: scan one pair box from the carton.' : 'Scan the outer carton label. A USB / Bluetooth scanner works without the camera. Label damaged? Use Manual entry.'}
       </p>
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
       <div className={`relative overflow-hidden rounded-xl border border-border bg-black ${active ? '' : 'hidden'}`}>
         <video ref={videoRef} playsInline muted className="w-full max-h-[45vh] object-cover" />
       </div>
@@ -657,14 +662,14 @@ function ExpectedTab() {
       <FilterBar className="mb-3" defs={EXPECTED_FILTERS} values={filters} onChange={setFilters} />
       <FiltersButton className="mb-3 sm:hidden" defs={EXPECTED_FILTERS} values={filters} onChange={setFilters} />
       <p className="text-xs text-muted-foreground mb-2">Pairs on open bills not received yet. {rows.length ? `${num.format(rows.reduce((n, r) => n + r.pairs, 0))} pairs in ${rows.length} rows.` : ''}</p>
-      {error && <p className="mb-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {!busy && rows.length === 0 && <p className="text-center py-10 text-sm text-muted-foreground">{activeFilterCount(filters) ? 'Nothing matches.' : 'Nothing expected.'}</p>}
       <div className={`rounded-xl border border-border divide-y divide-border overflow-hidden ${rows.length ? '' : 'hidden'} ${busy ? 'opacity-70' : ''}`}>
         {rows.map((r) => (
           <div key={`${r.articleCode}|${r.colourCode}|${r.sizeFrom}|${r.sizeTo}`} className="flex items-center gap-3 px-3 py-2.5">
             <div className="flex-1 min-w-0">
               <p className="text-sm text-foreground truncate">{r.articleName ?? r.articleCode} <span className="text-muted-foreground font-mono text-xs">{r.articleCode} {r.colourCode} · {r.sizeFrom}–{r.sizeTo}</span></p>
-              <p className={`text-[11px] ${r.earliest < today ? 'text-red-600' : 'text-muted-foreground'}`}>{r.bills} bill{r.bills === 1 ? '' : 's'} · first expected {day(r.earliest)}{r.earliest < today ? ' (overdue)' : ''}</p>
+              <p className={`text-[11px] ${r.earliest < today ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}>{r.bills} bill{r.bills === 1 ? '' : 's'} · first expected {day(r.earliest)}{r.earliest < today ? ' (overdue)' : ''}</p>
             </div>
             <div className="text-right shrink-0">
               <p className="text-base font-bold tabular-nums">{num.format(r.pairs)}</p>
@@ -692,7 +697,7 @@ function ReceiptsList({ unexpected, canManage, onChanged }: { unexpected?: boole
   return (
     <div>
       <p className="text-xs text-muted-foreground mb-2">Cartons scanned at receiving that match no open bill (or more cartons than the bill lists). Stock was not changed. Upload the missing bill, then undo and scan the carton again — or undo it if it was scanned by mistake.</p>
-      {error && <p className="mb-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {!busy && rows.length === 0 && <p className="text-center py-10 text-sm text-muted-foreground">None.</p>}
       <ReceiptRows rows={rows} canManage={canManage} busy={busy} voiding={voiding} setVoiding={setVoiding} reason={reason} setReason={setReason}
         onVoid={(id) => start(async () => {

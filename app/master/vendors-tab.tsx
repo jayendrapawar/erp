@@ -248,8 +248,8 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
       {importMsg && (
         <div className={`mb-3 rounded-lg px-3 py-2 text-xs font-medium ${
           importMsg.type === 'ok'
-            ? 'bg-green-50 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-400'
-            : 'bg-red-50 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-400'
+            ? 'bg-green-50 text-green-700 border border-green-200 dark:border-green-500/30 dark:bg-green-900/20 dark:text-green-400'
+            : 'bg-red-50 text-red-700 border border-red-200 dark:border-red-500/30 dark:bg-red-900/20 dark:text-red-400'
         }`}>
           {importMsg.text}
         </div>
@@ -397,7 +397,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
 
             <div className="p-5 space-y-3 overflow-y-auto max-h-[65vh] sm:max-h-[70vh]">
               {formError && (
-                <p className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
+                <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
               )}
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">

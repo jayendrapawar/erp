@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
 import { PageHeader } from '@/app/orders/_components/shared'
 import { PageNav } from '@/components/page-nav'
+import { useHashTab } from '@/lib/use-hash-tab'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { OverviewTab } from './overview-tab'
 import { FilterBar, FiltersButton, activeFilterCount, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
@@ -63,9 +64,13 @@ function useDebounced<T>(value: T, ms = 300): T {
 const errText = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback)
 
 /** Inventory: stock on hand per article / colour / size, its value at MRP, and the movement history. */
+/** Sections (sidebar sub-items on computers, tab row on phones). */
+const INVENTORY_TABS = ['overview', 'stock', 'movements', 'dispatch'] as const
+const INVENTORY_LABEL: Record<string, string> = { overview: 'Overview', stock: 'Stock', movements: 'Movements', dispatch: 'Unscanned dispatch' }
+
 export function InventoryPage({ initialSummary, initialStock, staff, canAdjust }: Props) {
   const [summary, setSummary] = useState(initialSummary)
-  const [tab, setTab] = useState<string>('overview')
+  const [tab, setTab] = useHashTab(INVENTORY_TABS, 'overview')
   const [openId, setOpenId] = useState<number | null>(null)
   const [stockPatch, setStockPatch] = useState<StockVariant | null>(null)
 
@@ -73,9 +78,9 @@ export function InventoryPage({ initialSummary, initialStock, staff, canAdjust }
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-5xl mx-auto px-4 py-6">
+      <div className="max-w-7xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-2">
-          <PageHeader title="Inventory" subtitle="Stock health, what sells, and every movement" />
+          <PageHeader title={`Inventory · ${INVENTORY_LABEL[tab] ?? ''}`} subtitle="Stock health, what sells, and every movement" />
           <PageNav />
         </div>
 
@@ -102,7 +107,7 @@ export function InventoryPage({ initialSummary, initialStock, staff, canAdjust }
         )}
 
         <Tabs value={tab} onValueChange={(v) => setTab(String(v))} className="w-full">
-          <TabsList className="flex w-full mb-4">
+          <TabsList className="flex w-full mb-4 md:hidden">
             <TabsTrigger value="overview" className="text-xs sm:text-sm">Overview</TabsTrigger>
             <TabsTrigger value="stock" className="text-xs sm:text-sm">Stock</TabsTrigger>
             <TabsTrigger value="movements" className="text-xs sm:text-sm">Movements</TabsTrigger>
@@ -219,7 +224,7 @@ function StockTab({ initial, onOpen, patch }: { initial: { rows: StockVariant[];
       <p className="text-xs text-muted-foreground mb-2">
         {busy && rows.length === 0 ? 'Loading…' : `${num.format(total)} article${total === 1 ? '' : 's'}${busy ? ' · updating…' : ''}`}
       </p>
-      {error && <p className="mb-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {!busy && rows.length === 0 && (
         <p className="text-center py-10 text-sm text-muted-foreground">
           {activeFilterCount(filters) ? 'Nothing matches.' : showEmpty ? 'No articles.' : 'No stock yet. Scanned boxes appear here.'}
@@ -238,7 +243,7 @@ function StockTab({ initial, onOpen, patch }: { initial: { rows: StockVariant[];
               <SizeChips sizes={v.sizes} />
             </div>
             <div className="text-right shrink-0">
-              <p className={`text-lg font-bold tabular-nums ${v.pairs < 0 ? 'text-red-600' : 'text-foreground'}`}>{num.format(v.pairs)}</p>
+              <p className={`text-lg font-bold tabular-nums ${v.pairs < 0 ? 'text-red-600 dark:text-red-400' : 'text-foreground'}`}>{num.format(v.pairs)}</p>
               <p className="text-[11px] text-muted-foreground">pairs</p>
               {v.value > 0 && <p className="text-xs text-muted-foreground tabular-nums mt-0.5">{inr.format(v.value)}</p>}
             </div>
@@ -343,7 +348,7 @@ function MovementsTab({ staff, onOpen }: { staff: Props['staff']; onOpen: (id: n
           <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className={`${inputCls} text-xs py-1.5 w-full`} />
         </label>
       </div>
-      {error && <p className="mb-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {busy && rows.length === 0 && <p className="text-center py-10 text-sm text-muted-foreground">Loading…</p>}
       {!busy && rows.length === 0 && !error && <p className="text-center py-10 text-sm text-muted-foreground">No movements.</p>}
       <div className={`rounded-xl border border-border divide-y divide-border overflow-hidden ${rows.length ? '' : 'hidden'} ${busy ? 'opacity-70' : ''}`}>
@@ -448,7 +453,7 @@ function VariantDialog({ articleId, canAdjust, onClose, onChanged }: { articleId
                     <button key={s.skuId} disabled={!canAdjust || busy} onClick={() => setSkuId(on ? null : s.skuId)}
                       className={`rounded-lg border px-1 py-1.5 text-center transition-colors ${on ? 'border-foreground bg-muted' : 'border-border'} ${canAdjust ? 'hover:bg-muted' : 'cursor-default'}`}>
                       <span className="block text-[10px] text-muted-foreground">{s.size}</span>
-                      <span className={`text-sm font-semibold tabular-nums ${s.pairs < 0 ? 'text-red-600' : s.pairs === 0 ? 'text-muted-foreground/60' : ''}`}>{s.pairs}</span>
+                      <span className={`text-sm font-semibold tabular-nums ${s.pairs < 0 ? 'text-red-600 dark:text-red-400' : s.pairs === 0 ? 'text-muted-foreground/60' : ''}`}>{s.pairs}</span>
                     </button>
                   )
                 })}
@@ -467,14 +472,14 @@ function VariantDialog({ articleId, canAdjust, onClose, onChanged }: { articleId
                   <input inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value.replace(/\D/g, ''))} placeholder="Pairs" aria-label="Pairs" className={`${inputCls} w-24`} />
                 </div>
                 <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (required), e.g. counted shelf, damaged" aria-label="Reason" className={`${inputCls} w-full`} />
-                {dir === 'remove' && amount > selected.pairs && <p className="text-xs text-red-600">Only {selected.pairs} in stock for this size.</p>}
+                {dir === 'remove' && amount > selected.pairs && <p className="text-xs text-red-600 dark:text-red-400">Only {selected.pairs} in stock for this size.</p>}
                 <button onClick={saveCorrection} disabled={!valid || busy} className="w-full rounded-lg bg-foreground text-background px-3 py-2 text-sm font-semibold hover:opacity-90 disabled:opacity-50">
                   {busy ? 'Saving…' : qty ? `${dir === 'add' ? 'Add' : 'Remove'} ${amount} pair${amount === 1 ? '' : 's'} — size ${selected.size} becomes ${selected.pairs + (dir === 'add' ? amount : -amount)}` : 'Enter pairs'}
                 </button>
               </div>
             )}
 
-            {error && <p className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>}
+            {error && <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>}
 
             <div>
               <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Latest movements</p>
@@ -533,7 +538,7 @@ function DispatchTab() {
       <p className="text-xs text-muted-foreground mb-3">
         Boxes billed that were never scanned into stock, so stock was not reduced. Check whether they should have been counted.
       </p>
-      {error && <p className="mb-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {busy && rows.length === 0 && <p className="text-center py-10 text-sm text-muted-foreground">Loading…</p>}
       {!busy && rows.length === 0 && !error && <p className="text-center py-10 text-sm text-muted-foreground">None. Every billed box came out of stock.</p>}
       <div className={`rounded-xl border border-border divide-y divide-border overflow-hidden ${rows.length ? '' : 'hidden'}`}>

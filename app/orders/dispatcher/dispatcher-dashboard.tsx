@@ -136,9 +136,9 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
 
         <div className="grid grid-cols-4 gap-3 mb-6">
           <StatCard label="Active" value={counts.active} />
-          <StatCard label="Ready" value={counts.billed} color="text-blue-600" />
-          <StatCard label="Out for Delivery" value={counts.dispatched} color="text-orange-600" />
-          <StatCard label="My Bundles" value={counts.myBundlesOut} color="text-orange-600" />
+          <StatCard label="Ready" value={counts.billed} color="text-blue-600 dark:text-blue-400" />
+          <StatCard label="Out for Delivery" value={counts.dispatched} color="text-orange-600 dark:text-orange-400" />
+          <StatCard label="My Bundles" value={counts.myBundlesOut} color="text-orange-600 dark:text-orange-400" />
         </div>
 
         <div className="space-y-3">
@@ -257,7 +257,7 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
                   <p className="px-4 py-6 text-sm text-muted-foreground text-center">Loading items…</p>
                 )}
                 {detailError && (
-                  <p className="px-4 py-4 text-sm text-red-600">{detailError}</p>
+                  <p className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>
                 )}
                 {!detailLoading && !detailError && detailItems.length === 0 && (
                   <p className="px-4 py-6 text-sm text-muted-foreground text-center">No items found.</p>

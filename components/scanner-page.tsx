@@ -804,17 +804,17 @@ export function ScannerPage() {
     return (
       <>
         {successMsg && (
-          <div className="rounded-md bg-green-100 px-3 py-2 text-sm text-green-800 border border-green-300">
+          <div className="rounded-md bg-green-100 dark:bg-green-500/15 px-3 py-2 text-sm text-green-800 dark:text-green-300 border border-green-300 dark:border-green-500/30">
             {successMsg}
           </div>
         )}
         {warnMsg && (
-          <div className="rounded-md bg-yellow-100 px-3 py-2 text-sm text-yellow-800 border border-yellow-300">
+          <div className="rounded-md bg-yellow-100 dark:bg-yellow-500/15 px-3 py-2 text-sm text-yellow-800 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-500/30">
             {warnMsg}
           </div>
         )}
         {infoMsg && (
-          <div className="rounded-md bg-blue-100 px-3 py-2 text-sm text-blue-800 border border-blue-300">
+          <div className="rounded-md bg-blue-100 dark:bg-blue-500/15 px-3 py-2 text-sm text-blue-800 dark:text-blue-300 border border-blue-300 dark:border-blue-500/30">
             {infoMsg}
           </div>
         )}
@@ -837,7 +837,7 @@ export function ScannerPage() {
 
         {/* ── Offline banner ─────────────────────────────────────────────── */}
         {!isOnline && (
-          <div className="flex items-start gap-3 rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
+          <div className="flex items-start gap-3 rounded-lg border border-yellow-300 dark:border-yellow-500/30 bg-yellow-50 dark:bg-yellow-500/15 px-4 py-3 text-sm text-yellow-800 dark:text-yellow-300">
             {/* wifi-off icon */}
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
@@ -856,7 +856,7 @@ export function ScannerPage() {
 
         {/* ── Sync in-progress banner ────────────────────────────────────── */}
         {isSyncing && (
-          <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+          <div className="flex items-center gap-3 rounded-lg border border-blue-200 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/15 px-4 py-3 text-sm text-blue-700 dark:text-blue-300">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
               className="h-4 w-4 shrink-0 animate-spin">
@@ -872,8 +872,8 @@ export function ScannerPage() {
         {syncResult && !isSyncing && (
           <div className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm ${
             syncResult.duplicates > 0 || syncResult.errors > 0
-              ? 'border-yellow-300 bg-yellow-50 text-yellow-800'
-              : 'border-green-300 bg-green-50 text-green-800'
+              ? 'border-yellow-300 dark:border-yellow-500/30 bg-yellow-50 dark:bg-yellow-500/15 text-yellow-800 dark:text-yellow-300'
+              : 'border-green-300 dark:border-green-500/30 bg-green-50 dark:bg-green-500/15 text-green-800 dark:text-green-300'
           }`}>
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
@@ -894,9 +894,9 @@ export function ScannerPage() {
 
         {/* ── Pending offline items pill (shown when online + have pending) */}
         {isOnline && pendingCount > 0 && !isSyncing && (
-          <div className="flex items-center justify-between gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-700">
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-blue-200 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/15 px-4 py-2.5 text-sm text-blue-700 dark:text-blue-300">
             <span>⚡ {pendingCount} {t('offlinePending')}</span>
-            <Button size="sm" variant="outline" className="h-7 text-xs border-blue-300 text-blue-700 hover:bg-blue-100"
+            <Button size="sm" variant="outline" className="h-7 text-xs border-blue-300 dark:border-blue-500/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100"
               onClick={handleSync} disabled={isSyncing}>
               {t('retrySync')}
             </Button>
@@ -909,7 +909,7 @@ export function ScannerPage() {
             <div className="flex items-center gap-1.5 min-w-0">
               <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight">{t('warehouseScanner')}</h1>
               {!isOnline && (
-                <span className="shrink-0 rounded-full bg-yellow-100 border border-yellow-300 px-2 py-0.5 text-[10px] font-semibold text-yellow-700 uppercase tracking-wide">
+                <span className="shrink-0 rounded-full bg-yellow-100 dark:bg-yellow-500/15 border border-yellow-300 dark:border-yellow-500/30 px-2 py-0.5 text-[10px] font-semibold text-yellow-700 dark:text-yellow-300 uppercase tracking-wide">
                   {t('offlineBadge')}
                 </span>
               )}
@@ -1006,7 +1006,7 @@ export function ScannerPage() {
                         </svg>
                       </span>
                     </button>
-                    <span className={`text-[10px] sm:text-xs font-medium ${isFlashlightOn ? 'text-green-600' : 'text-muted-foreground'}`}>ON</span>
+                    <span className={`text-[10px] sm:text-xs font-medium ${isFlashlightOn ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'}`}>ON</span>
                   </div>
                 </div>
                 {/* ── Flag selector row — below title/description ── */}
@@ -1424,17 +1424,17 @@ export function ScannerPage() {
                             <TableRow key={entry.tempId} className={entry.status === 'error' ? 'bg-destructive/5' : ''}>
                               <TableCell className="px-3 sm:px-4">
                                 {entry.status === 'pending' && (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 border border-yellow-300 px-2 py-0.5 text-[10px] font-semibold text-yellow-700">
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 dark:bg-yellow-500/15 border border-yellow-300 dark:border-yellow-500/30 px-2 py-0.5 text-[10px] font-semibold text-yellow-700 dark:text-yellow-300">
                                     ⏳ {t('pendingSyncBadge')}
                                   </span>
                                 )}
                                 {entry.status === 'syncing' && (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 border border-blue-300 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 dark:bg-blue-500/15 border border-blue-300 dark:border-blue-500/30 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300">
                                     ↻ {t('syncing')}
                                   </span>
                                 )}
                                 {entry.status === 'error' && (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-red-100 border border-red-300 px-2 py-0.5 text-[10px] font-semibold text-red-700" title={entry.errorMessage}>
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-red-100 dark:bg-red-500/15 border border-red-300 dark:border-red-500/30 px-2 py-0.5 text-[10px] font-semibold text-red-700 dark:text-red-300" title={entry.errorMessage}>
                                     ✕ Duplicate
                                   </span>
                                 )}
