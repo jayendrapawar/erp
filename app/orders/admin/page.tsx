@@ -1,11 +1,8 @@
+import { requirePageUser } from '@/lib/authz'
 import { retailerColumns } from '@/lib/retailer-columns'
-import { headers } from 'next/headers'
-import { redirect } from 'next/navigation'
-import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { user, vendors } from '@/lib/db/schema'
+import { vendors } from '@/lib/db/schema'
 import { eq, asc } from 'drizzle-orm'
-import { isRedirectError } from 'next/dist/client/components/redirect-error'
 import type { BillingVendor } from '@/components/billing-scanner-page'
 import {
   getAllOrders,
@@ -28,19 +25,11 @@ export default async function AdminPage() {
   let adminId   = ''
   let isAccountant = false
   let userRoles: string[] = []
-  try {
-    const session = await auth.api.getSession({ headers: await headers() })
-    if (!session?.user) redirect('/sign-in')
-    const [u] = await db.select({ role: user.role, name: user.name, id: user.id }).from(user).where(eq(user.id, session.user.id)).limit(1)
-    userRoles = (u?.role ?? 'user').split(',').map(r => r.trim())
-    if (!userRoles.includes('admin') && !userRoles.includes('accountant')) redirect('/orders')
-    isAccountant = !userRoles.includes('admin') && userRoles.includes('accountant')
-    adminName = u?.name ?? session.user.email ?? ''
-    adminId   = u?.id   ?? session.user.id    ?? ''
-  } catch (err) {
-    if (isRedirectError(err)) throw err
-    redirect('/sign-in')
-  }
+  const me = await requirePageUser({ anyRole: ['admin', 'accountant'], elseTo: '/orders' })
+  userRoles = me.roles
+  isAccountant = !userRoles.includes('admin') && userRoles.includes('accountant')
+  adminName = me.name || me.email
+  adminId   = me.id
 
   const [stats, allOrders, pickerRows, adminRows, salesmanOrders, pickerQueue, billerOrders, packedOrders, vendorRows, procurementRows, catalogue, sets] = await Promise.all([
     getOrderStats(),

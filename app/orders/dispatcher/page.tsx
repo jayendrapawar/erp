@@ -1,10 +1,6 @@
-import { headers } from 'next/headers'
-import { redirect } from 'next/navigation'
-import { auth } from '@/lib/auth'
+import { requirePageUser } from '@/lib/authz'
 import { db } from '@/lib/db'
-import { user, vendors } from '@/lib/db/schema'
-import { eq } from 'drizzle-orm'
-import { isRedirectError } from 'next/dist/client/components/redirect-error'
+import { vendors } from '@/lib/db/schema'
 import { getPackedOrders } from '@/app/actions/orders'
 import { DispatcherDashboard } from './dispatcher-dashboard'
 
@@ -28,17 +24,8 @@ async function loadVendorMap(): Promise<Map<string, { phone: string | null; addr
 
 export default async function DispatcherPage() {
   let currentDispatcherId = ''
-  try {
-    const session = await auth.api.getSession({ headers: await headers() })
-    if (!session?.user) redirect('/sign-in')
-    currentDispatcherId = session.user.id
-    const [u] = await db.select({ role: user.role }).from(user).where(eq(user.id, session.user.id)).limit(1)
-    const roles = (u?.role ?? 'user').split(',').map(r => r.trim())
-    if (!roles.includes('dispatcher') && !roles.includes('admin')) redirect('/orders')
-  } catch (err) {
-    if (isRedirectError(err)) throw err
-    redirect('/sign-in')
-  }
+  const me = await requirePageUser({ anyRole: ['dispatcher', 'admin'], elseTo: '/orders' })
+  currentDispatcherId = me.id
 
   const [packedOrders, vendorMap] = await Promise.all([getPackedOrders(), loadVendorMap()])
 

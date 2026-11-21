@@ -119,5 +119,9 @@ export const auth = betterAuth({
   session: {
     expiresIn: 60 * 60 * 24 * 30, // 30 days
     updateAge: 60 * 60 * 24,       // rolling — extends 1 day on each visit
+    // Signed copy of the session in the cookie for 5 minutes: most page changes need no database
+    // query to know who is signed in (faster, and unaffected by the database waking up). Signing out
+    // clears it at once; a session deleted on the server stops working within 5 minutes.
+    cookieCache: { enabled: true, maxAge: 5 * 60 },
   },
 })

@@ -1,5 +1,6 @@
 'use client'
 
+import { useShowMore } from '@/components/show-more'
 import { useState, useMemo, useTransition, useRef, useEffect } from 'react'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { saveArticle, uploadArticleList, deleteArticle, getArticleSizes, getArticles, getArticleMrps, getMissingArticles, addSizeToArticleFromScans, setMissingArticleReview, setCatalogReviewItemStatus } from '@/app/actions/articles'
@@ -214,6 +215,8 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
   const filtered = useMemo(() =>
     applyColumnFilters(showRetired ? articleList : articleList.filter(a => a.active), ARTICLE_FILTERS, filters)
   , [articleList, filters, showRetired])
+  // Draw 100 rows at a time (filters still search all ${articleList.length}).
+  const { visible: shownArticles, more: moreArticles } = useShowMore(filtered, 100, [filters, showRetired])
 
   function openAdd() {
     setForm(EMPTY_FORM)
@@ -528,7 +531,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
 
       {/* ── Mobile: card list ── */}
       <div className="sm:hidden space-y-3">
-        {filtered.map(a => (
+        {shownArticles.map(a => (
           <div key={a.id} className="rounded-2xl border border-border bg-card overflow-hidden">
             <div className="flex items-start justify-between gap-2 px-4 pt-4 pb-3">
               <div className="min-w-0">
@@ -614,7 +617,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
               />
             </thead>
             <tbody className="divide-y divide-border">
-              {filtered.map(a => (
+              {shownArticles.map(a => (
                 <tr key={a.id} className="hover:bg-muted/30 transition-colors">
                   <td className="pl-4 pr-2 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap">{a.id}</td>
                   <td className="px-2 py-3 max-w-[160px]">
@@ -652,6 +655,8 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
           </table>
         </div>
       </div>
+
+      {moreArticles}
 
       {/* ── Add / Edit Modal ── */}
       {modalMode && (

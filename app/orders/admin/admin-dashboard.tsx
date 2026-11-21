@@ -1,5 +1,6 @@
 'use client'
 
+import { useShowMore } from '@/components/show-more'
 import { sizeWithCode } from '@/lib/orders/size-label'
 import { useState, useTransition, useMemo, useEffect, useCallback } from 'react'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
@@ -192,6 +193,8 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
     if (sortBy === 'order')     list = [...list].sort((a, b) => a.orderNumber.localeCompare(b.orderNumber))
     return list
   }, [orders, deletedIds, orderFilters, filters, sortBy])
+  // Draw 100 orders at a time (filters still search every loaded order).
+  const { visible: shownOrders, more: moreOrders } = useShowMore(filteredOrders, 100, [filters, sortBy])
 
   return (
     <div className={embedded ? '' : 'min-h-screen bg-background'}>
@@ -633,7 +636,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
 
         {/* ── Mobile: card list ── */}
         <div className="sm:hidden space-y-3">
-          {filteredOrders.map(order => {
+          {shownOrders.map(order => {
             const tag = orderTag(order.orderedAt, order.updatedAt)
             return (
               <button
@@ -681,7 +684,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                 <FilterRow columns={orderFilters} values={filters} onChange={setFilters} firstCellClass="px-4" cellClass="px-4" />
               </thead>
               <tbody className="divide-y divide-border">
-                {filteredOrders.map(order => {
+                {shownOrders.map(order => {
                   const tag = orderTag(order.orderedAt, order.updatedAt)
                   return (
                     <tr key={order.id}
@@ -724,6 +727,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
             </table>
           </div>
         </div>
+        {moreOrders}
       </div>
     </div>
   )

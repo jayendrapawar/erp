@@ -1,11 +1,8 @@
+import { requirePageUser } from '@/lib/authz'
 import { retailerColumns } from '@/lib/retailer-columns'
-import { headers } from 'next/headers'
-import { redirect } from 'next/navigation'
-import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { user, vendors } from '@/lib/db/schema'
+import { vendors } from '@/lib/db/schema'
 import { eq, asc } from 'drizzle-orm'
-import { isRedirectError } from 'next/dist/client/components/redirect-error'
 import { getBillerQueue } from '@/app/actions/orders'
 import { loadCatalogue } from '@/app/actions/catalogue'
 import { BillerDashboard } from './biller-dashboard'
@@ -15,17 +12,8 @@ export const metadata = { title: 'Biller — Orders & Billing | Shayona' }
 
 export default async function BillerPage() {
   let currentBillerId = ''
-  try {
-    const session = await auth.api.getSession({ headers: await headers() })
-    if (!session?.user) redirect('/sign-in')
-    currentBillerId = session.user.id
-    const [u] = await db.select({ role: user.role }).from(user).where(eq(user.id, session.user.id)).limit(1)
-    const roles = (u?.role ?? 'user').split(',').map(r => r.trim())
-    if (!roles.includes('biller') && !roles.includes('admin')) redirect('/orders')
-  } catch (err) {
-    if (isRedirectError(err)) throw err
-    redirect('/sign-in')
-  }
+  const me = await requirePageUser({ anyRole: ['biller', 'admin'], elseTo: '/orders' })
+  currentBillerId = me.id
 
   const [billerOrders, vendorRows, catalogue] = await Promise.all([
     getBillerQueue(),

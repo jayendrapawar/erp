@@ -1,7 +1,5 @@
 import { redirect } from 'next/navigation'
-import { headers } from 'next/headers'
-import { auth } from '@/lib/auth'
-import { isRedirectError } from 'next/dist/client/components/redirect-error'
+import { getSessionUser } from '@/lib/authz'
 
 export const metadata = {
   title: 'Shayona Inventory Management',
@@ -9,12 +7,6 @@ export const metadata = {
 }
 
 export default async function Home() {
-  try {
-    const session = await auth.api.getSession({ headers: await headers() })
-    if (!session?.user) redirect('/sign-in')
-    redirect('/home')
-  } catch (err) {
-    if (isRedirectError(err)) throw err
-    redirect('/sign-in')
-  }
+  const u = await getSessionUser()
+  redirect(u ? '/home' : '/sign-in')
 }

@@ -520,7 +520,11 @@ export async function getAllOrders() {
       dispatcherId: orders.dispatcherId,
     })
     .from(orders)
+    // Open orders of any age + finished / cancelled ones from the last 60 days (owner: "laggy",
+    // 22 Nov 2026 — this used to load every order ever placed, on every visit).
+    .where(sql`${orders.status} NOT IN ('delivered', 'cancelled') OR ${orders.orderedAt} > now() - interval '60 days'`)
     .orderBy(desc(orders.orderedAt))
+    .limit(2000)
 }
 
 export async function adminUpdateOrderStatus(orderId: number, status: OrderStatus) {
