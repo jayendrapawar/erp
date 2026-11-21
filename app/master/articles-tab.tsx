@@ -40,6 +40,7 @@ type ArticleForm = {
   customSizes: string
   segment: string
   division: string
+  hsn: string
 }
 
 const EMPTY_FORM: ArticleForm = {
@@ -52,6 +53,7 @@ const EMPTY_FORM: ArticleForm = {
   customSizes: '',
   segment: '',
   division: '',
+  hsn: '',
 }
 
 interface Props {
@@ -237,6 +239,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
       customSizes: '',
       segment:   a.segment ?? '',
       division:  a.division ?? '',
+      hsn:       a.hsn ?? '',
     })
     setColors([{ color: a.color, colorCode: a.colorCode }])
     setFormError('')
@@ -293,6 +296,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
               customSizes: form.customSizes,
               segment: form.segment,
               division: form.division,
+              hsn: form.hsn,
             }
             updated = await saveArticle(payload)
           }
@@ -308,6 +312,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
             customSizes: form.customSizes,
             segment: form.segment,
             division: form.division || null,
+            hsn: form.hsn,
           }
           updated = await saveArticle(payload)
         }
@@ -747,6 +752,12 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                   {modalMode === 'add' && form.division && form.division === divisionForArticleCode(form.artCode) && (
                     <p className="mt-1 text-[11px] text-muted-foreground">Suggested from the article code. Change it if this article is from another division.</p>
                   )}
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[11px] font-semibold text-foreground uppercase tracking-wider block mb-1.5">HSN code</label>
+                  <input value={form.hsn} onChange={e => setForm(f => ({ ...f, hsn: e.target.value.replace(/\D/g, '').slice(0, 8) }))}
+                    inputMode="numeric" placeholder="e.g. 6402 — from the Relaxo bill" className={inputCls} />
+                  <p className="mt-1 text-[11px] text-muted-foreground">Printed on the big bill. Applies to every colour of this article code.</p>
                 </div>
 
                 {modalMode === 'add' ? (

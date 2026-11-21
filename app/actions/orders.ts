@@ -1,5 +1,6 @@
 'use server'
 
+import { assignBillNo, stampBillLineHsn } from '@/lib/billing/bill-number'
 import { db } from '@/lib/db'
 import { orders, orderItems, billLines, user, retailers } from '@/lib/db/schema'
 import type { OrderStatus } from '@/lib/db/schema'
@@ -281,15 +282,17 @@ export async function saveBillLines(
 /** Fetch persisted MRP lines for a billed order. */
 export async function getBillLines(orderId: number) {
   await requireRole('biller', 'admin', 'accountant')
-  const rows = await db
-    .select()
-    .from(billLines)
-    .where(eq(billLines.orderId, orderId))
+  // HSN: stored on the line when billed (migration 0016); older bills look it up from the article.
+  const rows = (await db.execute<{ artNumber: string; mrp: string; qty: number; lineDiscPct: string; hsn: string }>(sql`
+    SELECT b."artNumber", b.mrp, b.qty, b."lineDiscPct",
+           coalesce(b.hsn, (SELECT a.hsn FROM articles a WHERE a.hsn <> '' AND upper(btrim(a."artCode")) = upper(btrim(b."artNumber")) LIMIT 1), '') AS hsn
+    FROM bill_lines b WHERE b."orderId" = ${orderId} ORDER BY b.id`)).rows
   return rows.map(r => ({
     artNumber:   r.artNumber,
-    mrp:         parseFloat(r.mrp as string),
-    qty:         r.qty,
-    lineDiscPct: parseFloat(r.lineDiscPct as string),
+    mrp:         parseFloat(r.mrp),
+    qty:         Number(r.qty),
+    lineDiscPct: parseFloat(r.lineDiscPct),
+    hsn:         r.hsn || null,
   }))
 }
 
@@ -369,6 +372,7 @@ export async function getBillerQueue() {
     .select({
       id: orders.id,
       orderNumber: orders.orderNumber,
+      billNo: orders.billNo,
       shopkeeperName: orders.shopkeeperName,
       shopkeeperPhone: orders.shopkeeperPhone,
       shopkeeperAddress: orders.shopkeeperAddress,
@@ -387,15 +391,19 @@ export async function getBillerQueue() {
 /** Biller marks an order as billed — moves it to the dispatcher queue */
 export async function markBilled(orderId: number, isEmergency = false) {
   const u = await requireRole('biller', 'admin')
-  await db.update(orders)
-    .set({
-      status: 'billed',
-      billerId: u.id,
-      billedAt: sql`now()`,
-      isEmergency,
-      updatedAt: sql`now()`,
-    })
-    .where(eq(orders.id, orderId))
+  await db.transaction(async (tx) => {
+    await tx.update(orders)
+      .set({
+        status: 'billed',
+        billerId: u.id,
+        billedAt: sql`now()`,
+        isEmergency,
+        updatedAt: sql`now()`,
+      })
+      .where(eq(orders.id, orderId))
+    await assignBillNo(tx, orderId)
+    await stampBillLineHsn(tx, orderId)
+  })
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
   revalidatePath('/orders/biller')

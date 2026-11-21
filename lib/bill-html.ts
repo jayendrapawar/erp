@@ -31,6 +31,8 @@ export interface InvoiceVendor {
 
 export interface InvoiceOrder {
   orderNumber:    string
+  /** Official bill number (migration 0016). Printed instead of the ORD-… order number when set. */
+  billNo?:        string | null
   billedAt?:      Date | null
 }
 
@@ -39,6 +41,8 @@ export interface MrpLine {
   artNumber: string
   mrp:       number   // rupees, e.g. 499.00
   qty:       number
+  /** HSN code (printed on the big bill, A4). */
+  hsn?:      string | null
 }
 
 export type PageSize  = 'A4' | 'A5'
@@ -190,7 +194,7 @@ function billBody(o: BuildInvoiceOptions, t: BillTemplate): string {
 
   const refDate = o.order.billedAt ? new Date(o.order.billedAt) : new Date()
   const p2 = (n: number) => String(n).padStart(2, '0')
-  const billNo  = o.order.orderNumber || `${String(refDate.getFullYear()).slice(2)}${p2(refDate.getMonth() + 1)}${p2(refDate.getDate())}${p2(refDate.getHours())}${p2(refDate.getMinutes())}${p2(refDate.getSeconds())}`
+  const billNo  = o.order.billNo || o.order.orderNumber || `${String(refDate.getFullYear()).slice(2)}${p2(refDate.getMonth() + 1)}${p2(refDate.getDate())}${p2(refDate.getHours())}${p2(refDate.getMinutes())}${p2(refDate.getSeconds())}`
   const dateStr = `${p2(refDate.getDate())}/${p2(refDate.getMonth() + 1)}/${refDate.getFullYear()}`
 
   const v = o.vendor
@@ -204,7 +208,7 @@ function billBody(o: BuildInvoiceOptions, t: BillTemplate): string {
     n++
     const rate = Math.ceil(l.mrp * (1 - lineDiscPct / 100))
     return `<tr data-art="${esc(art)}"${i === 0 && n > 1 ? ' class="group"' : ''}>
-      <td class="c">${n}</td><td class="art">${i === 0 ? esc(art) : ''}</td>
+      <td class="c">${n}</td><td class="art">${i === 0 ? esc(art) : ''}</td>${isA5 ? '' : `<td class="hsn">${esc(l.hsn ?? '')}</td>`}
       <td class="n">${l.mrp > 0 ? fmt(l.mrp) : '—'}</td><td class="qty">${l.qty}</td>
       <td class="n">${fmt(rate)}</td><td class="n">${fmt(rate * l.qty)}</td></tr>`
   }).join('')).join('')
@@ -239,10 +243,10 @@ function billBody(o: BuildInvoiceOptions, t: BillTemplate): string {
   </div>
   </div>
   <table class="lines">
-    <thead><tr><th class="c" style="width:${isA5 ? 22 : 30}px">#</th><th style="text-align:left">Article</th>
+    <thead><tr><th class="c" style="width:${isA5 ? 22 : 30}px">#</th><th style="text-align:left">Article</th>${isA5 ? '' : '<th style="text-align:left;width:62px">HSN</th>'}
       <th class="n" style="width:${isA5 ? 62 : 80}px">MRP ₹</th><th class="c" style="width:${isA5 ? 34 : 44}px">Qty</th><th class="n" style="width:${isA5 ? 66 : 84}px">Rate ₹</th><th class="n" style="width:${isA5 ? 74 : 96}px">Amount ₹</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot><tr><td></td><td>Total</td><td></td><td class="c">${T.totalQty}</td><td class="n">Disc ${lineDiscPct}%</td><td class="n">${fmt(T.subTotal)}</td></tr></tfoot>
+    <tfoot><tr><td></td><td>Total</td>${isA5 ? '' : '<td></td>'}<td></td><td class="c">${T.totalQty}</td><td class="n">Disc ${lineDiscPct}%</td><td class="n">${fmt(T.subTotal)}</td></tr></tfoot>
   </table>
   <div class="end">
     <div class="grid">

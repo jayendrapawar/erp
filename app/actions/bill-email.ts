@@ -96,9 +96,10 @@ export async function mailBills(input: { orderIds: number[]; to: string; remembe
 
   const [{ template, sender, senderError }, billRows] = await Promise.all([
     loadSettings(),
-    db.execute<{ id: number; orderNumber: string; shopkeeperName: string; shopkeeperPhone: string | null; shopkeeperAddress: string | null; billedAt: string | null; status: string; retailerId: string | null; lines: Array<{ artNumber: string; mrp: string; qty: number; disc: string }> }>(sql`
-      SELECT o.id, o."orderNumber", o."shopkeeperName", o."shopkeeperPhone", o."shopkeeperAddress", o."billedAt", o.status, o."retailerId",
-             coalesce(json_agg(json_build_object('artNumber', b."artNumber", 'mrp', b.mrp, 'qty', b.qty, 'disc', b."lineDiscPct") ORDER BY b.id)
+    db.execute<{ id: number; orderNumber: string; billNo: string | null; shopkeeperName: string; shopkeeperPhone: string | null; shopkeeperAddress: string | null; billedAt: string | null; status: string; retailerId: string | null; lines: Array<{ artNumber: string; mrp: string; qty: number; disc: string; hsn: string | null }> }>(sql`
+      SELECT o.id, o."orderNumber", o."billNo", o."shopkeeperName", o."shopkeeperPhone", o."shopkeeperAddress", o."billedAt", o.status, o."retailerId",
+             coalesce(json_agg(json_build_object('artNumber', b."artNumber", 'mrp', b.mrp, 'qty', b.qty, 'disc', b."lineDiscPct",
+               'hsn', coalesce(b.hsn, (SELECT a.hsn FROM articles a WHERE a.hsn <> '' AND upper(btrim(a."artCode")) = upper(btrim(b."artNumber")) LIMIT 1))) ORDER BY b.id)
                       FILTER (WHERE b.id IS NOT NULL), '[]') AS lines
       FROM orders o LEFT JOIN bill_lines b ON b."orderId" = o.id
       WHERE o.id IN (SELECT (x)::int FROM json_array_elements_text(${JSON.stringify(ids)}::json) x)
@@ -114,30 +115,30 @@ export async function mailBills(input: { orderIds: number[]; to: string; remembe
   if (empty.length) throw new Error(`No bill lines saved for ${empty.map((b) => b.orderNumber).join(', ')}`)
 
   const prepared = await Promise.all(bills.map(async (b) => {
-    const lines: MrpLine[] = b.lines.map((l) => ({ artNumber: l.artNumber, mrp: Number(l.mrp), qty: Number(l.qty) }))
+    const lines: MrpLine[] = b.lines.map((l) => ({ artNumber: l.artNumber, mrp: Number(l.mrp), qty: Number(l.qty), hsn: l.hsn }))
     const disc = Number(b.lines[0]?.disc ?? 30)
     const pdf = await buildBillPdf({
       vendor: { name: b.shopkeeperName, phone: b.shopkeeperPhone, address: b.shopkeeperAddress },
-      order: { orderNumber: b.orderNumber, billedAt: b.billedAt }, lines, lineDiscPct: disc, template,
+      order: { orderNumber: b.billNo || b.orderNumber, billedAt: b.billedAt }, lines, lineDiscPct: disc, template,
     })
     const T = billTotals(lines, disc, 'city')
-    return { b, pdf, pairs: T.totalQty, net: T.netAmt }
+    return { b, no: b.billNo || b.orderNumber, pdf, pairs: T.totalQty, net: T.netAmt }
   }))
 
   const one = prepared.length === 1
   const party = one ? prepared[0].b.shopkeeperName : `${new Set(prepared.map((x) => x.b.shopkeeperName)).size === 1 ? prepared[0].b.shopkeeperName : 'your shop'}`
-  const subject = one ? `Bill ${prepared[0].b.orderNumber} — ${template.shopName}` : `${prepared.length} bills — ${template.shopName}`
+  const subject = one ? `Bill ${prepared[0].no} — ${template.shopName}` : `${prepared.length} bills — ${template.shopName}`
   const inr = (n: number) => `Rs. ${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   const date = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '')
-  const listText = prepared.map((x) => `- ${x.b.orderNumber}, ${date(x.b.billedAt)}: ${x.pairs} pairs, ${inr(x.net)}`).join('\n')
-  const listHtml = prepared.map((x) => `<tr><td style="padding:4px 12px 4px 0">${escapeHtml(x.b.orderNumber)}</td><td style="padding:4px 12px 4px 0">${escapeHtml(date(x.b.billedAt))}</td><td style="padding:4px 12px 4px 0;text-align:right">${x.pairs} pairs</td><td style="padding:4px 0;text-align:right"><b>${escapeHtml(inr(x.net))}</b></td></tr>`).join('')
+  const listText = prepared.map((x) => `- Bill ${x.no}, ${date(x.b.billedAt)}: ${x.pairs} pairs, ${inr(x.net)}`).join('\n')
+  const listHtml = prepared.map((x) => `<tr><td style="padding:4px 12px 4px 0">Bill ${escapeHtml(x.no)}</td><td style="padding:4px 12px 4px 0">${escapeHtml(date(x.b.billedAt))}</td><td style="padding:4px 12px 4px 0;text-align:right">${x.pairs} pairs</td><td style="padding:4px 0;text-align:right"><b>${escapeHtml(inr(x.net))}</b></td></tr>`).join('')
   const contact = [template.phone && `Ph ${template.phone}`, template.email].filter(Boolean).join(' · ')
 
   await sendMail(sender, {
     to, fromName: template.shopName, subject,
     text: `Dear ${party},\n\nPlease find attached ${one ? 'your bill' : 'your bills'}:\n${listText}\n\nRegards,\n${template.shopName}${contact ? `\n${contact}` : ''}`,
     html: `<p>Dear ${escapeHtml(party)},</p><p>Please find attached ${one ? 'your bill' : 'your bills'}:</p><table style="border-collapse:collapse;font-size:14px">${listHtml}</table><p>Regards,<br><b>${escapeHtml(template.shopName)}</b>${contact ? `<br>${escapeHtml(contact)}` : ''}</p>`,
-    attachments: prepared.map((x) => ({ filename: `Bill-${x.b.orderNumber.replace(/[^A-Za-z0-9-]/g, '')}.pdf`, content: Buffer.from(x.pdf), contentType: 'application/pdf' })),
+    attachments: prepared.map((x) => ({ filename: `Bill-${x.no.replace(/[^A-Za-z0-9-]/g, '')}.pdf`, content: Buffer.from(x.pdf), contentType: 'application/pdf' })),
   })
 
   // Remember the address for next time (one retailer only), then record the send.
@@ -146,7 +147,7 @@ export async function mailBills(input: { orderIds: number[]; to: string; remembe
   if (rememberId) await db.execute(sql`UPDATE retailers SET email = ${to.join(', ')}, "updatedAt" = now() WHERE id = ${rememberId}`)
   await audit(db, {
     actor: { id: u.id, name: u.name }, action: 'bill.emailed', entityType: 'order', entityId: bills.map((b) => b.id).join(','),
-    after: { to, from: sender.email, bills: bills.map((b) => b.orderNumber), rememberedOn: rememberId },
+    after: { to, from: sender.email, bills: bills.map((b) => b.billNo || b.orderNumber), rememberedOn: rememberId },
   })
   return { sentTo: to, bills: bills.length }
 }

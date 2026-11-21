@@ -177,8 +177,15 @@ export async function getColoursForName(name: string, artCode = ''): Promise<Arr
 
 // ── Writes from the Master screen ────────────────────────────────────────────
 
+/** HSN: 4–8 digits, or '' when not known. */
+function cleanHsn(value: string): string {
+  const v = value.replace(/\s+/g, '')
+  if (v && !/^\d{4,8}$/.test(v)) throw new Error('HSN code must be 4 to 8 digits (e.g. 6402).')
+  return v
+}
+
 export async function saveArticle(
-  input: Omit<Article, 'id' | 'reviewStatus' | 'active' | 'source' | 'division' | 'segment' | 'catalogArticleId' | 'retiredAt' | 'retiredReason'> & { id?: number; customSizes?: string; division?: string | null; segment?: string | null },
+  input: Omit<Article, 'id' | 'reviewStatus' | 'active' | 'source' | 'division' | 'segment' | 'hsn' | 'catalogArticleId' | 'retiredAt' | 'retiredReason'> & { id?: number; customSizes?: string; division?: string | null; segment?: string | null; hsn?: string },
 ): Promise<Article[]> {
   const u = await requirePermission('articles.edit')
   const { customSizes, id, ...fields } = input
@@ -192,6 +199,7 @@ export async function saveArticle(
     // Only when given: the edit form does not send division, and must not wipe it.
     ...(fields.division !== undefined ? { division: cleanDivision(fields.division) } : {}),
     ...(fields.segment !== undefined ? { segment: cleanSegment(fields.segment) } : {}),
+    ...(fields.hsn !== undefined ? { hsn: cleanHsn(fields.hsn) } : {}),
   }
 
   const labels = new Set<string>(parseSizeText(customSizes ?? ''))
@@ -214,6 +222,10 @@ export async function saveArticle(
         const [inserted] = await tx.insert(articles).values({ ...clean, reviewStatus: 'approved', source: 'manual' }).returning({ id: articles.id })
         articleId = inserted.id
         await audit(tx, { actor: actorOf(u), action: 'article.created', entityType: 'article', entityId: articleId, after: clean })
+      }
+      if (clean.hsn) {
+        await tx.update(articles).set({ hsn: clean.hsn })
+          .where(sql`${NORM(articles.artCode)} = ${clean.artCode} AND ${articles.hsn} <> ${clean.hsn}`)
       }
       await tx.delete(articleColors).where(eq(articleColors.articleId, articleId))
       if (clean.color) await tx.insert(articleColors).values({ articleId, colorName: clean.color, colorHex: clean.colorCode || null })

@@ -3,6 +3,7 @@
 // Master → Bill template (admin): shop, bank, QR, terms and footer printed on sale bills, with a live
 // preview of a sample bill. Loads the saved template once; Save = 1 transaction (audited).
 
+import { BillNumberSettings } from '@/components/master/bill-number-settings'
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { getBillTemplate, saveBillTemplate } from '@/app/actions/bill-template'
 import { buildInvoiceHtml, type PageSize } from '@/lib/bill-html'
@@ -124,6 +125,7 @@ export function BillTemplateTab() {
           <button type="button" onClick={() => saved && setT(saved)} disabled={!dirty || busy} className="rounded-lg border border-border px-4 py-2.5 text-sm disabled:opacity-50">Undo changes</button>
           <button type="button" onClick={() => { if (window.confirm('Put back the standard shop details?')) setT({ ...DEFAULT_BILL_TEMPLATE }) }} className="rounded-lg border border-border px-3 py-2.5 text-xs">Standard</button>
         </div>
+        <BillNumberSettings />
         <BillEmailSettings />
       </div>
 

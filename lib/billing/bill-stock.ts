@@ -9,6 +9,7 @@
 // Deleting a bill / sending it back releases its boxes and reverses their movements.
 // Statements per action do not grow with the number of boxes.
 
+import { assignBillNo, stampBillLineHsn } from './bill-number'
 import { and, eq, sql } from 'drizzle-orm'
 import { billLines, billScans, directBillDrafts, orders, type BillStockSource, type DraftManualLine } from '@/lib/db/schema'
 import type { Actor, Db, DbOrTx, Tx } from '@/lib/db/types'
@@ -341,7 +342,7 @@ function orderNumber(): string {
   return `ORD-${ymd}-${rand}`
 }
 
-export interface GeneratedBill { id: number; orderNumber: string; lines: DraftManualLine[]; stock: StockOutCounts; billedAt: string }
+export interface GeneratedBill { id: number; orderNumber: string; billNo: string; lines: DraftManualLine[]; stock: StockOutCounts; billedAt: string }
 
 /**
  * Generate a Direct Bill from an open draft: create the order and its lines, move the boxes onto
@@ -364,12 +365,15 @@ export async function generateDirectBill(db: Db, actor: Actor, draftId: number, 
       retailerId: r?.id ?? null, billerId: actor.id, status: 'billed', isEmergency: true, billedAt: sql`now()`,
     }).returning({ id: orders.id, billedAt: orders.billedAt })
     await tx.insert(billLines).values(lines.map((l) => ({ orderId: order.id, artNumber: l.artNumber, mrp: String(l.mrp), qty: l.qty, lineDiscPct: String(h.lineDiscPct) })))
+    // Official bill number and HSN on each line — same transaction (lib/billing/bill-number.ts).
+    const billNo = await assignBillNo(tx, order.id)
+    await stampBillLineHsn(tx, order.id)
     await tx.execute(sql`UPDATE bill_scans SET "orderId" = ${order.id}, "orderNumber" = ${number} WHERE "draftId" = ${draftId} AND status = 'active'`)
     const stock = await postOrderScans(tx, actor, order.id, number)
     await tx.update(directBillDrafts).set({ ...h, lineDiscPct: String(h.lineDiscPct), status: 'billed', orderId: order.id, closedAt: sql`now()`, updatedAt: sql`now()` })
       .where(eq(directBillDrafts.id, draftId))
-    await audit(tx, { actor, action: 'direct_bill.generated', entityType: 'order', entityId: order.id, after: { orderNumber: number, draftId, boxes: scans.length, stock } })
-    return { id: order.id, orderNumber: number, lines, stock, billedAt: new Date(order.billedAt ?? Date.now()).toISOString() }
+    await audit(tx, { actor, action: 'direct_bill.generated', entityType: 'order', entityId: order.id, after: { orderNumber: number, billNo, draftId, boxes: scans.length, stock } })
+    return { id: order.id, orderNumber: number, billNo, lines, stock, billedAt: new Date(order.billedAt ?? Date.now()).toISOString() }
   })
 }
 

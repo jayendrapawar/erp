@@ -148,6 +148,8 @@ export const articles = pgTable('articles', {
   division:  text('division'),
   /** Gents, Ladies, Kids or Baby (from the article list; never derived from the code). Migration 0010. */
   segment:   text('segment'),
+  /** HSN code for the bill (migration 0016); from Relaxo proforma invoices, editable in Master. '' = not known. */
+  hsn:       text('hsn').notNull().default(''),
   catalogArticleId: integer('catalogArticleId').references(() => catalogArticles.id, { onDelete: 'restrict' }),
   retiredAt:     timestamp('retiredAt', { withTimezone: true }),
   retiredReason: text('retiredReason'),
@@ -357,6 +359,8 @@ export const orders = pgTable('orders', {
   isEmergency:       boolean('isEmergency').notNull().default(false),
   /** Who placed it (migration 0015): staff, or a retailer in the shop. */
   source:            text('source').$type<'staff' | 'retailer'>().notNull().default('staff'),
+  /** Official sale bill number, given when billed (migration 0016; lib/billing/bill-number.ts). */
+  billNo:            text('billNo'),
   orderedAt:         timestamp('orderedAt').notNull().defaultNow(),
   packedAt:          timestamp('packedAt'),
   billedAt:          timestamp('billedAt'),
@@ -372,6 +376,8 @@ export const billLines = pgTable('bill_lines', {
   artNumber:   text('artNumber').notNull(),
   mrp:         numeric('mrp', { precision: 10, scale: 2 }).notNull(),
   qty:         integer('qty').notNull(),
+  /** HSN copied from the article when billed (migration 0016). */
+  hsn:         text('hsn'),
   lineDiscPct: numeric('lineDiscPct', { precision: 5, scale: 2 }).notNull().default('30'),
   createdAt:   timestamp('createdAt').notNull().defaultNow(),
 })
@@ -402,6 +408,16 @@ export type OrderStatus = typeof orderStatusEnum.enumValues[number]
 export type OrderItemStatus = typeof orderItemStatusEnum.enumValues[number]
 
 // --- Size Sets (admin-defined size+quantity templates) ---
+
+/** Counters for official document numbers (migration 0016). 'sale_bill' = sale bill number. */
+export const documentSequences = pgTable('document_sequences', {
+  name:          text('name').primaryKey(),
+  prefix:        text('prefix').notNull().default(''),
+  next:          bigint('next', { mode: 'number' }).notNull(),
+  padding:       integer('padding').notNull().default(0),
+  updatedAt:     timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedByName: text('updatedByName').notNull().default(''),
+})
 
 export const orderSets = pgTable('order_sets', {
   id:          serial('id').primaryKey(),

@@ -22,6 +22,8 @@ type BillerTab = 'verify' | 'emergency' | 'generated'
 interface BillerOrder {
   id: number
   orderNumber: string
+  /** Official bill number once billed (migration 0016). */
+  billNo?: string | null
   shopkeeperName: string
   shopkeeperPhone: string | null
   shopkeeperAddress: string | null
@@ -756,8 +758,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     startTransition(async () => {
       // Bills the order, saves its lines and takes the scanned boxes out of stock (one transaction).
       // On failure (e.g. a box is already on another bill) the scanner stays open with its scans.
+      let billed: Awaited<ReturnType<typeof billOrder>>
       try {
-        await billOrder(orderId, qrsCopy, builtLines, discPct)
+        billed = await billOrder(orderId, qrsCopy, builtLines, discPct)
       } catch (e) {
         setActiveId(null)
         showMsg('err', e instanceof Error ? e.message : 'Could not save the bill. Try again.')
@@ -765,7 +768,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       }
       closeScanner()
       setOrders(prev =>
-        prev.map(o => o.id === orderId ? { ...o, status: 'billed', billerId: currentBillerId, billedAt: new Date() } : o)
+        prev.map(o => o.id === orderId ? { ...o, status: 'billed', billNo: billed.billNo, billerId: currentBillerId, billedAt: new Date() } : o)
       )
       setActiveId(null)
       // After saving, switch to Generated Bills tab
@@ -824,10 +827,10 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       const saved = await Promise.all(orders.map(o => getBillLines(o.id).catch(() => [])))
       const bills = orders.map((o, i) => {
         const rows = saved[i]
-        const lines = rows.length > 0 ? rows.map(r => ({ artNumber: r.artNumber, mrp: r.mrp, qty: r.qty })) : (mrpLinesMap[o.id] ?? [])
+        const lines = rows.length > 0 ? rows.map(r => ({ artNumber: r.artNumber, mrp: r.mrp, qty: r.qty, hsn: r.hsn })) : (mrpLinesMap[o.id] ?? [])
         return {
           vendor: { name: o.shopkeeperName, phone: o.shopkeeperPhone ?? null, address: o.shopkeeperAddress ?? null },
-          order:  { orderNumber: o.orderNumber, billedAt: o.billedAt },
+          order:  { orderNumber: o.orderNumber, billNo: o.billNo, billedAt: o.billedAt },
           lines,
           lineDiscPct: rows[0] && Number.isFinite(rows[0].lineDiscPct) ? rows[0].lineDiscPct : LINE_DISC,
         }
@@ -1050,6 +1053,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   const newOrder: BillerOrder = {
                     id:                data.id,
                     orderNumber:       data.orderNumber,
+                    billNo:            data.billNo,
                     shopkeeperName:    data.shopkeeperName,
                     shopkeeperPhone:   data.shopkeeperPhone,
                     shopkeeperAddress: data.shopkeeperAddress,
@@ -1177,6 +1181,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                               )}
                             </div>
                             <div className="flex items-center gap-2 mt-0.5">
+                              {order.billNo && <span className="text-[11px] font-bold text-foreground">{`Bill ${order.billNo}`}</span>}
                               <span className="font-mono text-[11px] text-muted-foreground">{order.orderNumber}</span>
                               <span className="text-[11px] text-muted-foreground">·</span>
                               <span className="text-[11px] text-muted-foreground">{fmt(order.billedAt)}</span>

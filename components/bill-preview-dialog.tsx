@@ -13,6 +13,7 @@ import type { BillTemplate } from '@/lib/bill-template'
 export interface PreviewBill {
   id: number
   orderNumber: string
+  billNo?: string | null
   shopkeeperName: string
   shopkeeperPhone: string | null
   shopkeeperAddress: string | null
@@ -43,7 +44,7 @@ export function BillPreviewDialog({ bill, template, defaultPageSize, fallbackLin
       .then((rows) => {
         if (!live) return
         if (rows.length > 0) {
-          setLines(rows.map((r) => ({ artNumber: r.artNumber, mrp: r.mrp, qty: r.qty })))
+          setLines(rows.map((r) => ({ artNumber: r.artNumber, mrp: r.mrp, qty: r.qty, hsn: r.hsn })))
           if (Number.isFinite(rows[0].lineDiscPct)) setDiscPct(rows[0].lineDiscPct)
         } else {
           setLines(fallbackRef.current ?? [])
@@ -68,7 +69,7 @@ export function BillPreviewDialog({ bill, template, defaultPageSize, fallbackLin
 
   const html = useMemo(() => (lines && lines.length > 0 ? buildInvoiceHtml({
     vendor: { name: bill.shopkeeperName, nameHindi: hindi, phone: bill.shopkeeperPhone, address: bill.shopkeeperAddress },
-    order: { orderNumber: bill.orderNumber, billedAt: bill.billedAt },
+    order: { orderNumber: bill.orderNumber, billNo: bill.billNo, billedAt: bill.billedAt },
     lines, lineDiscPct: discPct, pageSize, template,
   }) : ''), [lines, discPct, pageSize, template, hindi, bill])
 
@@ -84,7 +85,7 @@ export function BillPreviewDialog({ bill, template, defaultPageSize, fallbackLin
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2.5 sm:px-4">
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-bold text-foreground" data-no-translate>{bill.shopkeeperName}</p>
-          <p className="truncate font-mono text-xs text-muted-foreground">{bill.orderNumber}</p>
+          <p className="truncate font-mono text-xs text-muted-foreground">{bill.billNo ? `Bill ${bill.billNo} · ` : ''}{bill.orderNumber}</p>
         </div>
         <div className="flex rounded-lg border border-border p-0.5" role="group" aria-label="Bill size">
           {(['A4', 'A5'] as PageSize[]).map((p) => (

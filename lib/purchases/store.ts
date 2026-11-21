@@ -51,6 +51,13 @@ export async function saveBill(db: Db, actor: Actor, bill: ParsedBill, file: { n
       mrp: String(l.mrp), rate: String(l.rate), amount: String(l.amount),
     })))
     const found = await resolveAssortments(tx, b.id)
+    // HSN for the sale bill (migration 0016): fill it on articles that have none yet. 1 statement.
+    await tx.execute(sql`
+      UPDATE articles a SET hsn = l.hsn
+      FROM (SELECT DISTINCT ON (upper(btrim("articleCode"))) upper(btrim("articleCode")) AS code, btrim(hsn) AS hsn
+            FROM purchase_bill_lines WHERE "billId" = ${b.id} AND btrim(coalesce(hsn, '')) ~ '^[0-9]{4,8}$'
+            ORDER BY upper(btrim("articleCode")), "lineNo") l
+      WHERE upper(btrim(a."artCode")) = l.code AND a.hsn = ''`)
     await audit(tx, { actor, action: 'purchase_bill.saved', entityType: 'purchase_bill', entityId: b.id, after: { refNo: bill.refNo, lines: bill.lines.length, cartons: bill.totalCartons, pairs: bill.totalPairs, division, file: file.name } })
     return { status: 'saved', id: b.id, refNo: bill.refNo, lines: bill.lines.length, assortmentsFound: found } as const
   })

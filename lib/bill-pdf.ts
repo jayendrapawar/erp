@@ -84,7 +84,7 @@ export async function buildBillPdf(input: BillPdfInput): Promise<Uint8Array> {
 
   // Table columns (right edges for numbers)
   const W = A4.w - 2 * M
-  const col = { n: M + 4, art: M + 30, mrpR: M + W * 0.58, qtyC: M + W * 0.66, rateR: M + W * 0.80, amtR: A4.w - M - 4 }
+  const col = { n: M + 4, art: M + 30, hsn: M + W * 0.30, mrpR: M + W * 0.58, qtyC: M + W * 0.66, rateR: M + W * 0.80, amtR: A4.w - M - 4 }
 
   /** Header, party, column headings. Returns the y where table rows start. */
   /** With a null page it only measures. */
@@ -114,6 +114,7 @@ export async function buildBillPdf(input: BillPdfInput): Promise<Uint8Array> {
     pg?.drawRectangle({ x: M, y: y - 4, width: W, height: 15, color: rgb(0.95, 0.95, 0.95) })
     text(pg, '#', col.n, y, 7.5, bold, GREY)
     text(pg, 'ARTICLE', col.art, y, 7.5, bold, GREY)
+    text(pg, 'HSN', col.hsn, y, 7.5, bold, GREY)
     right(pg, 'MRP', col.mrpR, y, 7.5, bold, GREY)
     center(pg, 'QTY', col.qtyC, y, 7.5, bold, GREY)
     right(pg, 'RATE', col.rateR, y, 7.5, bold, GREY)
@@ -154,6 +155,7 @@ export async function buildBillPdf(input: BillPdfInput): Promise<Uint8Array> {
       y -= ROW
       text(pg, String(n), col.n, y + 4, 8.5, font, GREY)
       if (l.artNumber !== prevArt || j === 0) text(pg, l.artNumber, col.art, y + 4, 9, bold)
+      if (l.hsn) text(pg, l.hsn, col.hsn, y + 4, 8.5, font, GREY)
       prevArt = l.artNumber
       right(pg, l.mrp > 0 ? money(l.mrp) : '-', col.mrpR, y + 4, 9)
       center(pg, String(l.qty), col.qtyC, y + 4, 10, bold)

@@ -1,5 +1,6 @@
 'use server'
 
+import { assignBillNo, stampBillLineHsn } from '@/lib/billing/bill-number'
 import { revalidatePath } from 'next/cache'
 import { and, eq, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
@@ -73,7 +74,7 @@ export async function billOrder(
   scannedQrs: string[],
   lines: { artNumber: string; mrp: number; qty: number }[],
   lineDiscPct: number,
-): Promise<StockOutCounts & { skipped: number }> {
+): Promise<StockOutCounts & { skipped: number; billNo: string }> {
   const actor = await biller()
   const out = await db.transaction(async (tx) => {
     const [o] = await tx.select({ orderNumber: orders.orderNumber, status: orders.status }).from(orders).where(eq(orders.id, orderId)).for('update')
@@ -86,7 +87,11 @@ export async function billOrder(
     if (clean.length) {
       await tx.insert(billLines).values(clean.map((l) => ({ orderId, artNumber: l.artNumber, mrp: String(Number(l.mrp) || 0), qty: Math.floor(Number(l.qty)), lineDiscPct: String(lineDiscPct) })))
     }
-    return recordOrderScans(tx, actor, orderId, o.orderNumber, Array.isArray(scannedQrs) ? scannedQrs : [])
+    // Official bill number (kept when billed again) and HSN on each line — same transaction.
+    const billNo = await assignBillNo(tx, orderId)
+    await stampBillLineHsn(tx, orderId)
+    const counts = await recordOrderScans(tx, actor, orderId, o.orderNumber, Array.isArray(scannedQrs) ? scannedQrs : [])
+    return { ...counts, billNo }
   })
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
