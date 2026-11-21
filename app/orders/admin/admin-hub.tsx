@@ -1,5 +1,6 @@
 'use client'
 
+import { ShopOrdersPanel } from '@/components/orders/shop-orders-panel'
 import { useState, useCallback, useEffect } from 'react'
 import { PageNav } from '@/components/page-nav'
 import { AdminDashboard } from './admin-dashboard'
@@ -245,6 +246,9 @@ export function AdminHub({
           </div>
           <PageNav />
         </div>
+
+        {/* Retailer shop orders waiting for staff (owner, 21 Nov 2026): shown only when there are some. */}
+        <ShopOrdersPanel canAct={!isAccountant} />
 
         {/* Tab bar on phones only; computers use the sidebar's Orders sections (owner, 21 Nov 2026). */}
         <div className="md:hidden"><GridTabBar tabs={TABS} active={activeTab} onChange={handleTabChange} /></div>

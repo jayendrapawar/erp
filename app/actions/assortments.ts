@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidateShopCatalogue } from '@/lib/shop/cache'
 import ExcelJS from 'exceljs'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
@@ -23,14 +24,14 @@ export async function getAssortments(): Promise<Assortment[]> {
 export async function saveAssortment(input: AssortmentInput & { id?: number; newDivision?: boolean }): Promise<Assortment[]> {
   const u = await requirePermission('assortments.edit')
   await store.saveAssortment(db, { id: u.id, name: u.name }, input, Boolean(input.newDivision) && !input.id)
-  revalidatePath('/master')
+  revalidatePath('/master'); revalidateShopCatalogue()
   return store.listActiveAssortments(db)
 }
 
 export async function retireAssortment(id: number, reason: string): Promise<Assortment[]> {
   const u = await requirePermission('assortments.edit')
   await store.retireAssortment(db, { id: u.id, name: u.name }, id, reason)
-  revalidatePath('/master')
+  revalidatePath('/master'); revalidateShopCatalogue()
   return store.listActiveAssortments(db)
 }
 
@@ -68,6 +69,6 @@ export async function applyAssortmentUpload(rows: SheetRow[], fileName: string):
   const u = await requirePermission('assortments.edit')
   if (!Array.isArray(rows) || rows.length === 0 || rows.length > 2000) throw new Error('Nothing to upload.')
   const result = await store.applyUpload(db, { id: u.id, name: u.name }, rows, String(fileName).slice(0, 200))
-  revalidatePath('/master')
+  revalidatePath('/master'); revalidateShopCatalogue()
   return { result, list: await store.listActiveAssortments(db) }
 }

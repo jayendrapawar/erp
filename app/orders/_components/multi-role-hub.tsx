@@ -1,5 +1,6 @@
 'use client'
 
+import { ShopOrdersPanel } from '@/components/orders/shop-orders-panel'
 import { useState, useEffect } from 'react'
 import { PageNav } from '@/components/page-nav'
 import { SalesmanDashboard } from '../salesman/salesman-dashboard'
@@ -147,6 +148,9 @@ export function MultiRoleOrdersHub({
           </div>
           <PageNav />
         </div>
+
+        {/* Retailer shop orders waiting for staff: salesmen confirm them. */}
+        {hasSalesman && <ShopOrdersPanel />}
 
         {/* Tab bar on phones only (and when the sidebar has no sections to show). */}
         <div className={TABS.length > 1 ? 'md:hidden' : ''}><GridTabBar tabs={TABS} active={activeTab} onChange={handleTabChange} /></div>

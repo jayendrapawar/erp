@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidateShopCatalogue } from '@/lib/shop/cache'
 import { randomUUID } from 'node:crypto'
 import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
@@ -233,7 +234,7 @@ export async function saveArticle(
     })
   } catch (error) { friendlyUniqueError(error) }
 
-  revalidatePath('/master')
+  revalidatePath('/master'); revalidateShopCatalogue()
   return db.select().from(articles).orderBy(asc(articles.artName))
 }
 
@@ -260,7 +261,7 @@ export async function deleteArticle(id: number): Promise<Article[]> {
       await audit(tx, { actor: actorOf(u), action: 'article.deleted', entityType: 'article', entityId: id, before: art })
     }
   })
-  revalidatePath('/master')
+  revalidatePath('/master'); revalidateShopCatalogue()
   return db.select().from(articles).orderBy(asc(articles.artName))
 }
 
@@ -294,7 +295,7 @@ export async function uploadArticleList(form: FormData): Promise<ArticleUploadRe
   const summary = summarise(parsed, plan)
   if (!apply) return { ok: true, applied: false, summary, resolvedScans: 0 }
   const { resolvedScans } = await applyArticleUpload(db, actorOf(u), plan, { fileName: file.name, rowsRead: summary.rowsRead })
-  revalidatePath('/master')
+  revalidatePath('/master'); revalidateShopCatalogue()
   const list = await db.select().from(articles).orderBy(asc(articles.artName))
   return { ok: true, applied: true, summary, resolvedScans, list }
 }
@@ -309,7 +310,7 @@ export async function setMissingArticleReview(articleCode: string, colourCode: s
       .onConflictDoUpdate({ target: [missingArticleReviews.articleCode, missingArticleReviews.colourCode], set: { status, note, updatedBy: u.id, updatedAt: new Date() } })
     await audit(tx, { actor: actorOf(u), action: `missing_article.${status}`, entityType: 'article_code', entityId: `${code}|${colour}`, reason: note || null })
   })
-  revalidatePath('/master')
+  revalidatePath('/master'); revalidateShopCatalogue()
 }
 
 /** Add a scanned size to an existing article and post the scans that were waiting for it. */
@@ -325,7 +326,7 @@ export async function addSizeToArticleFromScans(articleCode: string, colourCode:
     await audit(tx, { actor: actorOf(u), action: 'article.size_added', entityType: 'article', entityId: art.id, after: { size }, reason: 'Size seen on scanned boxes' })
     return resolvePendingScans(tx, actorOf(u), code, colour)
   })
-  revalidatePath('/master')
+  revalidatePath('/master'); revalidateShopCatalogue()
   return { resolved: out.resolved }
 }
 
@@ -484,7 +485,7 @@ async function linkOrCreateArticleOnce(input: LinkInput): Promise<LinkResult> {
       await resolvePendingScans(tx, actor, artCode, colorCode)
       return articleId!
     })
-    revalidatePath('/master')
+    revalidatePath('/master'); revalidateShopCatalogue()
     revalidatePath('/dashboard')
     return { ok: true, articleId }
   } catch (error) {
@@ -554,6 +555,6 @@ export async function setCatalogReviewItemStatus(id: number, status: CatalogRevi
     await audit(tx, { actor: actorOf(u), action: `catalog_review.${status}`, entityType: 'catalog_review_item', entityId: id,
       before: { status: before.status, resolution: before.resolution }, after: { status, resolution: text || null }, reason: text || null })
   })
-  revalidatePath('/master')
+  revalidatePath('/master'); revalidateShopCatalogue()
   return getCatalogReviewItems()
 }

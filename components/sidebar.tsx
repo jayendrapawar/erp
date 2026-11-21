@@ -89,7 +89,8 @@ export function Sidebar({ sections }: { sections: SideSection[] }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  if (HIDDEN_ON.includes(pathname)) return null
+  // Not on sign-in pages, and never in the retailer shop (/shop), even if staff are signed in.
+  if (HIDDEN_ON.includes(pathname) || pathname === '/shop' || pathname.startsWith('/shop/')) return null
 
   const toggleCollapsed = () => {
     setCollapsed((c) => {

@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidateShopCatalogue } from '@/lib/shop/cache'
 import { db } from '@/lib/db'
 import { orderSets } from '@/lib/db/schema'
 import { asc, eq, sql } from 'drizzle-orm'
@@ -48,6 +49,7 @@ export async function saveSet(
       quantities: input.quantities,
     })
   }
+  revalidateShopCatalogue() // the shop offers sets as quick fill
   return db.select().from(orderSets).orderBy(asc(orderSets.name))
 }
 
@@ -55,5 +57,6 @@ export async function saveSet(
 export async function deleteSet(id: number): Promise<OrderSet[]> {
   await requireAdmin()
   await db.delete(orderSets).where(eq(orderSets.id, id))
+  revalidateShopCatalogue()
   return db.select().from(orderSets).orderBy(asc(orderSets.name))
 }

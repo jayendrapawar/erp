@@ -3,6 +3,7 @@
 export type BadgeColor = 'gray' | 'blue' | 'yellow' | 'green' | 'red' | 'purple' | 'orange'
 
 export const STATUS_BADGE: Record<string, { label: string; color: string }> = {
+  to_confirm: { label: 'To confirm',  color: 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300' },
   pending:    { label: 'Pending',     color: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400' },
   assigned:   { label: 'Assigned',    color: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' },
   packed:     { label: 'Packed',      color: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400' },

@@ -32,3 +32,33 @@ Orders as "to confirm". Owner decisions are kept in this file as the shop is bui
   fails in development. Uploads use the presigned flow (`handleUploadPresigned` + `issueSignedToken`),
   which works with both. Without either variable the Photos dialog says the store is not connected.
 - Deleted files can still be served from Vercel's CDN for about a minute.
+
+## Step 2 — sign-in, shop, cart, order (migration 0015)
+
+- **Shop access** (Master → Retailers → Shop): staff switch the shop on, set the 10-digit mobile the
+  retailer signs in with and a 4–6 digit PIN ("Make one"), then share link + mobile + PIN (WhatsApp /
+  copy). PIN = scrypt hash in `retailers."shopPinHash"`; the hash never leaves the server
+  (`lib/retailer-columns.ts` everywhere retailer rows are read). A new PIN sets `shopPinSetAt`, which
+  ends old sessions. 5 wrong PINs lock sign-in for 15 minutes.
+- **Session** (`lib/shop/auth.ts`): signed cookie `shayona_shop` (HMAC, key from BETTER_AUTH_SECRET),
+  7 days, holds retailer id + name + PIN time. Pages trust it with no query; placing an order
+  re-checks the retailer (still on, same PIN) inside its transaction.
+- **/shop** (`components/shop/shop-app.tsx`): photo grid of article colours that have a photo, search,
+  division / segment chips, latest MRP; an article opens with all photos, its other colours, pairs per
+  size, "+ Set" (Master sets whose sizes all exist) and "+ Carton" (active assortments of the same
+  division + segment that the "only for" rule allows, sizes all on the article). Cart kept on the
+  phone (localStorage). Place order → `lib/shop/place-order.ts`: one transaction, status
+  `to_confirm`, source `retailer`, lines in the salesman format (name, colour, size, article code).
+- **Catalogue** (`lib/shop/catalogue.ts`): cached (`unstable_cache`, tag `shop-catalogue`, 30 min);
+  refreshed at once by photo / article / assortment / set changes. Building it: 3 queries in parallel.
+  Browsing: 0 queries most of the time.
+- **Latest MRP**: `article_mrps."mfgYm"` (newest manufacture month) and `"lastSeenAt"`, kept by every
+  scan and billed box; shop shows the MRP of the newest manufacture, then the most recently seen.
+- **/shop/orders**: the retailer's last 30 shop orders with plain status words (1 query).
+
+## Step 3 — staff confirm
+
+Orders (admin hub, and the role hub for salesmen) shows **Retailer orders to confirm** when there are
+any (1 query): retailer, time, pairs, lines per article/colour/size, note. **Confirm** → status
+`pending` (picking as usual; the confirming salesman/admin becomes its salesman). **Not accepted** →
+`cancelled` with the reason added to the notes. Both audited. Pickers never see `to_confirm`.

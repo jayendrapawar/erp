@@ -1,5 +1,6 @@
 'use client'
 
+import { ShopAccessDialog } from '@/components/master/shop-access-dialog'
 import { useState, useMemo, useTransition, useRef } from 'react'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { saveVendor, importVendors } from '@/app/actions/vendors'
@@ -118,6 +119,8 @@ interface Props {
 
 export function VendorsTab({ initialVendors, onListChange }: Props) {
   const [vendors, setVendors] = useState<Vendor[]>(initialVendors)
+  // Retailer shop: whose access is being set (owner, 21 Nov 2026)
+  const [shopTarget, setShopTarget] = useState<Vendor | null>(null)
 
   function updateVendors(next: Vendor[]) {
     setVendors(next)
@@ -310,10 +313,16 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
             </div>
 
             {/* Card footer */}
-            <div className="border-t border-border px-4 py-3">
+            <div className="flex gap-2 border-t border-border px-4 py-3">
+              <button
+                onClick={() => setShopTarget(v)}
+                className={`flex-1 rounded-xl border py-2.5 text-sm font-medium active:scale-95 transition-all ${v.shopEnabled ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-border bg-background hover:bg-muted'}`}
+              >
+                {v.shopEnabled ? 'Shop: on' : 'Shop access'}
+              </button>
               <button
                 onClick={() => openEdit(v)}
-                className="w-full rounded-xl border border-border bg-background py-2.5 text-sm font-medium hover:bg-muted active:scale-95 transition-all"
+                className="flex-1 rounded-xl border border-border bg-background py-2.5 text-sm font-medium hover:bg-muted active:scale-95 transition-all"
               >
                 Edit
               </button>
@@ -365,7 +374,10 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
                   </td>
                   <td className="px-2 py-3 whitespace-nowrap"><StatusBadge status={v.status} /></td>
                   <td className="pr-4 pl-2 py-3">
-                    <button onClick={() => openEdit(v)} className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap">Edit</button>
+                    <div className="flex justify-end gap-1.5">
+                      <button onClick={() => setShopTarget(v)} className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${v.shopEnabled ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-border hover:bg-muted'}`}>{v.shopEnabled ? 'Shop: on' : 'Shop'}</button>
+                      <button onClick={() => openEdit(v)} className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap">Edit</button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -461,6 +473,13 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
             </div>
           </div>
         </div>
+      )}
+      {shopTarget && (
+        <ShopAccessDialog
+          retailer={shopTarget}
+          onClose={() => setShopTarget(null)}
+          onSaved={(v) => { updateVendors(vendors.map(x => x.id === v.id ? v : x)); setShopTarget(v) }}
+        />
       )}
     </div>
   )

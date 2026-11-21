@@ -12,7 +12,7 @@ const ICONS: Record<NavIcon, LucideIcon> = {
 }
 
 /** No bar on Home (its tiles are the menu) or on the sign-in pages. */
-const HIDDEN_ON = ['/home', '/sign-in', '/sign-up']
+const HIDDEN_ON = ['/home', '/sign-in', '/sign-up', '/shop']
 
 /**
  * Phone-only bottom bar (hidden from md up): the role's main modules + "More" (every module).
