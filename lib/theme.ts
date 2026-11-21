@@ -4,7 +4,7 @@
 export type Theme = 'dark' | 'light'
 
 export const THEME_STORAGE_KEY = 'shayona.theme'
-const THEME_COLOR: Record<Theme, string> = { dark: '#0A0F1C', light: '#F5F7FB' }
+const THEME_COLOR: Record<Theme, string> = { dark: '#0A0A0A', light: '#F5F7FB' }
 
 /** Inline in <head>: applies the saved theme before paint (no flash). Dark when nothing is saved. */
 export const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem('${THEME_STORAGE_KEY}');if(t==='light'){var d=document.documentElement;d.classList.remove('dark');d.classList.add('light');}}catch(e){}})();`

@@ -237,7 +237,7 @@ export function AdminHub({
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-xl font-bold tracking-tight text-foreground">
-              {isAccountant ? 'Accountant Hub' : 'Admin Hub'}
+              Orders<span className="hidden md:inline"> · {TABS.find(t => t.value === activeTab)?.label}</span>
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
               {isAccountant ? 'View orders & procurement overview' : 'Manage all orders across every role'}
@@ -246,8 +246,8 @@ export function AdminHub({
           <PageNav />
         </div>
 
-        {/* Tab bar — grid on mobile, row on desktop */}
-        <GridTabBar tabs={TABS} active={activeTab} onChange={handleTabChange} />
+        {/* Tab bar on phones only; computers use the sidebar's Orders sections (owner, 21 Nov 2026). */}
+        <div className="md:hidden"><GridTabBar tabs={TABS} active={activeTab} onChange={handleTabChange} /></div>
 
         {/* Tab content */}
         {activeTab === 'overview' && (

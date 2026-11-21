@@ -35,7 +35,7 @@ export const viewport: Viewport = {
   viewportFit: 'cover',
   colorScheme: 'dark light',
   // Dark by default; lib/theme.ts updates it when the theme is switched.
-  themeColor: '#0A0F1C',
+  themeColor: '#0A0A0A',
 }
 
 export default function RootLayout({

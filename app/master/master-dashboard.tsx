@@ -194,6 +194,8 @@ interface Props {
 }
 
 const ROLES: AppRole[] = [...ALL_ROLES, 'user']
+/** Section names for the page title (computers hide the tab row; the sidebar lists the sections). */
+const MASTER_TAB_LABEL: Record<string, string> = { users: 'Users', vendors: 'Retailers', suppliers: 'Suppliers', articles: 'Articles', assortments: 'Assortments', sets: 'Sets', bill: 'Bill template' }
 
 export function MasterDashboard({ users, currentUserId, vendors: initialVendors, articles: initialArticles, missingArticles, catalogReviewItems, sets: initialSets, suppliers, assortments, isAccountant = false }: Props) {
   const [isPending, startTransition] = useTransition()
@@ -235,7 +237,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
     <div className="min-h-screen bg-background">
       <div className="max-w-5xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-6">
-          <PageHeader title="Master" subtitle={isAccountant ? 'Retailers, suppliers & articles' : 'Users, retailers, suppliers, articles & sets'} />
+          <PageHeader title={MASTER_TAB_LABEL[tab] ? `Master · ${MASTER_TAB_LABEL[tab]}` : 'Master'} subtitle={isAccountant ? 'Retailers, suppliers & articles' : 'Users, retailers, suppliers, articles & sets'} />
           <PageNav />
         </div>
 
@@ -260,7 +262,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
         {/* Tabs — pill style matching scanner / admin hub */}
         <Tabs value={tab} onValueChange={(v) => changeTab(String(v))} className="w-full">
           <TabsList
-            className="flex w-full mb-4 sm:mb-6"
+            className="flex w-full mb-4 sm:mb-6 md:hidden"
           >
             {!isAccountant && <TabsTrigger value="users"    className="text-xs sm:text-sm">Users ({users.length})</TabsTrigger>}
             <TabsTrigger value="vendors"  className="text-xs sm:text-sm">Retailers ({vendorList.length})</TabsTrigger>

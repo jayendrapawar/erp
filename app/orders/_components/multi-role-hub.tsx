@@ -142,13 +142,14 @@ export function MultiRoleOrdersHub({
         {/* Page header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-foreground">Orders &amp; Billing</h1>
+            <h1 className="text-xl font-bold tracking-tight text-foreground">Orders<span className="hidden md:inline">{TABS.length > 1 ? ` · ${TABS.find(t => t.value === activeTab)?.label ?? ''}` : ''}</span></h1>
             <p className="text-sm text-muted-foreground mt-0.5">Switch between your roles: orders, picking, billing, dispatch</p>
           </div>
           <PageNav />
         </div>
 
-        <GridTabBar tabs={TABS} active={activeTab} onChange={handleTabChange} />
+        {/* Tab bar on phones only (and when the sidebar has no sections to show). */}
+        <div className={TABS.length > 1 ? 'md:hidden' : ''}><GridTabBar tabs={TABS} active={activeTab} onChange={handleTabChange} /></div>
 
         {hasSalesman && activeTab === 'salesman' && (
           <SalesmanDashboard orders={salesmanOrders} userName={userName} embedded catalogue={catalogue} sets={sets} pickers={pickers} />
