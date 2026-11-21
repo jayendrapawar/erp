@@ -211,6 +211,23 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
   }
 
   const defaultTab = isAccountant ? 'vendors' : 'users'
+  // Tab from the address (#articles) so the sidebar can open it; switching tabs updates the address.
+  const tabIds = isAccountant ? ['vendors', 'suppliers', 'articles', 'assortments'] : ['users', 'vendors', 'suppliers', 'articles', 'assortments', 'sets', 'bill']
+  const [tab, setTab] = useState(defaultTab)
+  useEffect(() => {
+    const read = () => {
+      const h = window.location.hash.replace('#', '')
+      if (tabIds.includes(h)) setTab(h)
+    }
+    read()
+    window.addEventListener('hashchange', read)
+    return () => window.removeEventListener('hashchange', read)
+  }, [isAccountant])
+  function changeTab(v: string) {
+    setTab(v)
+    window.history.replaceState(null, '', `#${v}`)
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+  }
   // Admin tab count — sets tab shown only for admin
   const isAdmin = !isAccountant
 
@@ -241,7 +258,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
         )}
 
         {/* Tabs — pill style matching scanner / admin hub */}
-        <Tabs defaultValue={defaultTab} className="w-full">
+        <Tabs value={tab} onValueChange={(v) => changeTab(String(v))} className="w-full">
           <TabsList
             className="flex w-full mb-4 sm:mb-6"
           >

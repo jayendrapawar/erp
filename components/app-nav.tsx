@@ -1,12 +1,13 @@
 import { getSessionUser } from '@/lib/authz'
 import { hasPermission, ROLE_LABELS } from '@/lib/permissions'
-import { NAV_ITEMS } from '@/lib/nav'
+import { NAV_ITEMS, sidebarSections } from '@/lib/nav'
 import { BottomNav } from './bottom-nav'
 import { SessionUserProvider } from './session-user'
+import { Sidebar } from './sidebar'
 
 /**
  * Wraps every page (root layout): shares the signed-in user's name and role with the profile menu,
- * and adds the phone bottom bar. Uses the session the page already loaded (getSessionUser is cached
+ * adds the sidebar on computers (redesign, 21 Nov 2026) and the phone bottom bar. Uses the session the page already loaded (getSessionUser is cached
  * per request), so it adds no query on most pages.
  */
 export async function AppShell({ children }: { children: React.ReactNode }) {
@@ -15,7 +16,10 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
   const info = u ? { name: u.name, roleLabel: u.roles.map((r) => ROLE_LABELS[r]).join(', ') || 'No role yet' } : null
   return (
     <SessionUserProvider user={info}>
-      {children}
+      <div className="md:flex md:min-h-dvh">
+        {u && <Sidebar sections={sidebarSections(u.roles)} />}
+        <div className="min-w-0 flex-1">{children}</div>
+      </div>
       {u && <BottomNav items={items} />}
     </SessionUserProvider>
   )

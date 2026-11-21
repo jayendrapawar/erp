@@ -1302,5 +1302,21 @@
   "Big bill (A4)": "बड़ा बिल (A4)",
   "Small bill (A5)": "छोटा बिल (A5)",
   "Full sheet, 210 × 297 mm": "पूरा पेज, 210 × 297 mm",
-  "Half sheet, 148 × 210 mm": "आधा पेज, 148 × 210 mm"
+  "Half sheet, 148 × 210 mm": "आधा पेज, 148 × 210 mm",
+  "Daily work": "रोज़ का काम",
+  "Setup": "सेटअप",
+  "Scanner": "स्कैनर",
+  "Users": "यूज़र",
+  "Retailers": "रिटेलर",
+  "Suppliers": "सप्लायर",
+  "Articles": "आर्टिकल",
+  "Assortments": "असॉर्टमेंट",
+  "Sets": "सेट",
+  "Jump to…": "जाएँ…",
+  "Footwear · Udhna": "फुटवियर · उधना",
+  "Type a page or tab, e.g. articles, biller": "पेज या टैब लिखें, जैसे articles, biller",
+  "No page or tab matches.": "कोई पेज या टैब नहीं मिला।",
+  "Light": "लाइट",
+  "Dark": "डार्क",
+  "Theme": "थीम"
 }

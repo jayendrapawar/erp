@@ -120,9 +120,15 @@ export function MultiRoleOrdersHub({
   const defaultTab = TABS[0]?.value || 'salesman'
   const [activeTab, setActiveTab] = useState(defaultTab)
 
+  // Tab from the address (#picker); the sidebar changes it without reloading the page.
   useEffect(() => {
-    const hash = window.location.hash.replace('#', '')
-    if (TABS.some(t => t.value === hash)) setActiveTab(hash)
+    const read = () => {
+      const hash = window.location.hash.replace('#', '')
+      if (TABS.some(t => t.value === hash)) setActiveTab(hash)
+    }
+    read()
+    window.addEventListener('hashchange', read)
+    return () => window.removeEventListener('hashchange', read)
   }, [])
 
   function handleTabChange(tab: string) {

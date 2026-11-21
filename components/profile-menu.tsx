@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { LogOut, User } from 'lucide-react'
+import { LogOut, Moon, Sun, User } from 'lucide-react'
 import { signOut } from '@/lib/auth-client'
 import { useLanguage } from '@/lib/language-context'
 import { useSessionUser } from './session-user'
+import { useTheme } from './sidebar'
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -19,6 +20,7 @@ export function ProfileMenu() {
   const { language, setLanguage } = useLanguage()
   const [open, setOpen] = useState(false)
   const [signingOut, start] = useTransition()
+  const [theme, setTheme] = useTheme()
   const box = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -60,6 +62,15 @@ export function ProfileMenu() {
           <div className="flex gap-1 rounded-lg bg-muted p-1" data-no-translate>
             {langBtn('en', 'English')}
             {langBtn('hi', 'हिंदी')}
+          </div>
+          <p className="mb-1.5 mt-3 text-xs font-medium text-muted-foreground">Theme</p>
+          <div className="flex gap-1 rounded-lg bg-muted p-1">
+            {([['dark', 'Dark', Moon], ['light', 'Light', Sun]] as const).map(([v, label, Icon]) => (
+              <button key={v} type="button" onClick={() => setTheme(v)} aria-pressed={theme === v}
+                className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors ${theme === v ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}`}>
+                <Icon className="h-4 w-4" aria-hidden />{label}
+              </button>
+            ))}
           </div>
           <button type="button" role="menuitem" disabled={signingOut}
             onClick={() => start(async () => { await signOut(); setOpen(false); router.push('/sign-in') })}

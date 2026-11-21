@@ -213,9 +213,15 @@ export function AdminHub({
   const VALID_TABS = TABS.map(t => t.value)
   const [activeTab, setActiveTab] = useState('overview')
 
+  // Tab from the address (#biller); the sidebar changes it without reloading the page.
   useEffect(() => {
-    const hash = window.location.hash.replace('#', '')
-    if (VALID_TABS.includes(hash)) setActiveTab(hash)
+    const read = () => {
+      const hash = window.location.hash.replace('#', '')
+      if (VALID_TABS.includes(hash)) setActiveTab(hash)
+    }
+    read()
+    window.addEventListener('hashchange', read)
+    return () => window.removeEventListener('hashchange', read)
   }, [])
 
   function handleTabChange(tab: string) {
