@@ -11,6 +11,7 @@ import { parseQr, isValidWarehouseQr, normalizeQr } from '@/lib/qr-parser'
 import { SCAN_INTERVAL_MS } from '@/components/scanner/constants'
 import { articlesMatch } from '@/lib/billing-verification'
 import { openPrintWindow, printInvoices, type MrpLine, type PageSize, type PrintConfig } from '@/lib/bill-html'
+import { BillPreviewDialog } from '@/components/bill-preview-dialog'
 import { getBillTemplate } from '@/app/actions/bill-template'
 import type { BillTemplate } from '@/lib/bill-template'
 import { BillingScannerPage, type BillingVendor } from '@/components/billing-scanner-page'
@@ -65,6 +66,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   const [activeTab, setActiveTab] = useState<BillerTab>('verify')
   // Shop / bank / QR details for printed bills (Master → Bill template). One query on open.
   const [billTemplate, setBillTemplate] = useState<BillTemplate | undefined>(undefined)
+  // Receipts: the bill being previewed (click a bill; print from the preview — owner, 21 Nov 2026)
+  const [previewOrder, setPreviewOrder] = useState<BillerOrder | null>(null)
   useEffect(() => { getBillTemplate().then((t) => { setBillTemplate(t); setPrintConfig(c => ({ ...c, pageSize: t.defaultPageSize })) }).catch(() => {}) }, [])
 
   // ── Print Bills state ────────────────────────────────────────────────────────
@@ -1122,7 +1125,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                         <svg className="w-4 h-4 text-muted-foreground shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                         </svg>
-                        <h2 className="text-sm font-semibold text-foreground">Select Bills to Print</h2>
+                        <h2 className="text-sm font-semibold text-foreground">Receipts</h2>
+                        <span className="hidden text-xs text-muted-foreground sm:inline">· click a bill to see and print it</span>
                         {printSelectedIds.size > 0 && (
                           <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
                             {printSelectedIds.size}
@@ -1152,7 +1156,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                       return (
                         <div
                           key={order.id}
-                          onClick={() => handleViewOrder(order)}
+                          onClick={() => setPreviewOrder(order)}
                           className={`flex items-center gap-3 px-3 py-3 sm:px-4 cursor-pointer transition-colors ${
                             checked ? 'bg-primary/5' : 'hover:bg-muted/30 active:bg-muted/50'
                           }`}
@@ -1160,7 +1164,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                           {/* Checkbox — click is independent from row, does NOT open preview */}
                           <button
                             type="button"
-                            aria-label={checked ? 'Deselect for print' : 'Select for print'}
+                            aria-label={checked ? 'Deselect for mail' : 'Select for mail'}
                             onClick={e => { e.stopPropagation(); handleTogglePrintBill(order) }}
                             className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                               checked ? 'border-primary bg-primary' : 'border-border bg-background hover:border-primary/60'
@@ -2146,7 +2150,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       )}
 
       {/* ── Sticky bottom bar — Print / Mail Bills (on phones above the bottom menu bar, which hid it) ── */}
-      {activeTab === 'generated' && (() => {
+      {activeTab === 'generated' && printSelectedIds.size > 0 && (() => {
         const selectedOrders = billedOrders.filter(o => printSelectedIds.has(o.id))
         const allLoaded = selectedOrders.every(o => !!printItemsMap[o.id])
         const canAct = selectedOrders.length > 0 && allLoaded
@@ -2188,25 +2192,21 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                 Mail
               </button>
 
-              {/* Print button */}
-              <button
-                type="button"
-                disabled={!canAct}
-                onClick={() => handlePrintBills(selectedOrders)}
-                className={`flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0 ${
-                  noneSelected ? 'w-full sm:w-auto sm:ml-auto' : ''
-                }`}
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                </svg>
-                {canAct ? 'Print' : noneSelected ? 'Select bills to print' : 'Loading…'}
-              </button>
-
             </div>
           </div>
         )
       })()}
+
+      {previewOrder && (
+        <BillPreviewDialog
+          bill={previewOrder}
+          template={billTemplate}
+          defaultPageSize={printConfig.pageSize}
+          fallbackLines={mrpLinesMap[previewOrder.id]}
+          fallbackDiscPct={lineDiscPct === '' ? 30 : Number(lineDiscPct)}
+          onClose={() => setPreviewOrder(null)}
+        />
+      )}
 
       {/* ── Print Config Modal ── */}
       {printConfigOpen && (

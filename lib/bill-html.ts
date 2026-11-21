@@ -330,7 +330,7 @@ export interface PrintConfig {
 }
 
 /** Retailer name in Hindi script (Google Input Tools). Null when it fails. */
-async function transliterateToHindi(name: string): Promise<string | null> {
+export async function transliterateToHindi(name: string): Promise<string | null> {
   try {
     const url = `https://inputtools.google.com/request?text=${encodeURIComponent(name)}&itc=hi-t-i0-und&num=1`
     const res  = await fetch(url)
