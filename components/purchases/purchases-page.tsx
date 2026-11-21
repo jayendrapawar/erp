@@ -7,6 +7,7 @@ import { useHashTab } from '@/lib/use-hash-tab'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DIVISIONS, formatSizes } from '@/lib/catalog/assortments'
 import { useQrScanner } from '@/components/scanner/use-qr-scanner'
+import { playAlreadyScanned, playScanOk } from '@/lib/scan-sound'
 import { ManualCartonPanel } from './manual-carton-panel'
 import { FilterBar, FiltersButton, activeFilterCount, applyColumnFilters, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 
@@ -543,14 +544,47 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
     receiveCartonAction({ rawInput: raw, clientEventId: id, billId: billRef.current || null })
       .then((out) => {
         setLog((l) => l.map((x) => (x.id === id ? { ...x, pending: false, out } : x)))
+        const good = out.status === 'received' && out.match === 'matched' && out.warnings.length === 0
+        if (good) playScanOk(); else playAlreadyScanned()
         try { navigator.vibrate?.(out.status === 'received' && out.match === 'matched' ? 60 : [60, 60, 60]) } catch { /* ignore */ }
         if (out.status === 'received') onReceived()
       })
       .catch((e) => setLog((l) => l.map((x) => (x.id === id ? { ...x, pending: false, error: errText(e, 'Not saved — scan again.') } : x))))
   }, [onReceived])
 
-  const { videoRef, active, error, start, stop } = useQrScanner(submit)
+  // Camera only here: the Scan box below takes USB / Bluetooth scanners.
+  const { videoRef, active, error, start, stop } = useQrScanner(submit, { hardware: false })
   const last = log[0]
+
+  // ── USB / Bluetooth barcode scanner (owner, 21 Nov 2026) ──
+  // Scanners type the code and press Enter. The Scan box keeps the cursor; keys typed while no other
+  // field has the cursor are sent to it, so a carton is never lost (as in Direct Billing).
+  const scanRef = useRef<HTMLInputElement>(null)
+  const [scanValue, setScanValue] = useState('')
+  const [scanFocused, setScanFocused] = useState(false)
+  const focusScan = useCallback(() => { setTimeout(() => scanRef.current?.focus({ preventScroll: true }), 30) }, [])
+  function submitScan() {
+    const code = scanValue.trim()
+    setScanValue('')
+    if (code) submit(code)
+  }
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null
+      if (target?.matches('input, textarea, select, [contenteditable="true"]')) return
+      if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1) return
+      if (document.querySelector('[role="dialog"]')) return
+      const input = scanRef.current
+      if (!input) return
+      event.preventDefault()
+      input.focus({ preventScroll: true })
+      setScanValue((v) => v + event.key)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  // On a computer the Scan box has the cursor from the start.
+  useEffect(() => { if (!window.matchMedia('(pointer: coarse)').matches) focusScan() }, [focusScan])
 
   const addManualResult = useCallback((raw: string, out: ReceiveOutcome) => {
     setLog((l) => [{ id: uuid(), raw, at: Date.now(), pending: false, out }, ...l].slice(0, 100))
@@ -560,7 +594,7 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <select value={billId} onChange={(e) => setBillId(e.target.value ? Number(e.target.value) : '')} aria-label="Bill" className={`${inputCls} text-xs flex-1 min-w-[200px]`}>
+        <select value={billId} onChange={(e) => { setBillId(e.target.value ? Number(e.target.value) : ''); focusScan() }} aria-label="Bill" className={`${inputCls} text-xs flex-1 min-w-[200px]`}>
           <option value="">Match to any open bill (oldest first)</option>
           {openBills.map((b) => <option key={b.id} value={b.id}>{b.refNo} · {day(b.billDate)} · {b.receivedCartons}/{b.totalCartons} ctn</option>)}
         </select>
@@ -573,8 +607,28 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
           </button>
         )}
       </div>
+      <form onSubmit={(e) => { e.preventDefault(); submitScan() }}>
+        <label htmlFor="receive-scan" className="sr-only">Scan carton</label>
+        <div className={`flex h-12 items-center gap-2.5 rounded-xl border-2 bg-background px-3 transition-colors ${scanFocused ? 'border-primary' : 'border-border'}`}>
+          <button type="button" onClick={() => scanRef.current?.focus()} aria-label={scanFocused ? 'Scanner ready' : 'Click here to scan'} title={scanFocused ? 'Scanner ready' : 'Click to scan'}
+            className={`h-2.5 w-2.5 shrink-0 rounded-full ${scanFocused ? 'bg-emerald-500 shadow-[0_0_0_4px_rgb(16_185_129/0.2)]' : 'bg-amber-500'}`} />
+          <input
+            ref={scanRef}
+            id="receive-scan"
+            value={scanValue}
+            onChange={(e) => setScanValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Tab' && scanValue.trim()) { e.preventDefault(); submitScan() } }}
+            onFocus={() => setScanFocused(true)}
+            onBlur={() => setScanFocused(false)}
+            autoComplete="off" autoCorrect="off" autoCapitalize="characters" spellCheck={false} enterKeyHint="done"
+            placeholder={manualOpen ? 'Scan one pair box from the carton' : scanFocused ? 'Scanner ready — scan the carton label' : 'Click here, then scan the carton label'}
+            className="h-full min-w-0 flex-1 bg-transparent font-mono text-sm focus:outline-none"
+          />
+          <span className={`hidden shrink-0 text-[11px] font-semibold sm:inline ${scanFocused ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>{scanFocused ? 'Scanner ready' : 'Click to scan'}</span>
+        </div>
+      </form>
       <p className="text-[11px] text-muted-foreground">
-        {manualOpen ? 'Manual entry: scan one pair box from the carton.' : 'Scan the outer carton label. A USB / Bluetooth scanner works without the camera. Label damaged? Use Manual entry.'}
+        {manualOpen ? 'Manual entry: scan one pair box from the carton (scanner or camera).' : 'Scan the outer carton label with the barcode scanner, or use the camera. Label damaged? Use Manual entry.'}
       </p>
       {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
       <div className={`relative overflow-hidden rounded-xl border border-border bg-black ${active ? '' : 'hidden'}`}>
