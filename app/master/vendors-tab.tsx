@@ -68,6 +68,7 @@ type VendorForm = {
   partyName: string
   gst: string
   phone: string
+  email: string
   address: string
   city: string
   area: string
@@ -80,6 +81,7 @@ const EMPTY_FORM: VendorForm = {
   partyName: '',
   gst: '',
   phone: '',
+  email: '',
   address: '',
   city: '',
   area: '',
@@ -411,6 +413,10 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
                 <div>
                   <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide block mb-1">Phone *</label>
                   <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} className={inputCls} placeholder="+91 …" type="tel" inputMode="tel" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide block mb-1">Email (for bills)</label>
+                  <input value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} className={inputCls} placeholder="shop@example.com" type="email" inputMode="email" autoComplete="off" />
                 </div>
                 <div className="col-span-2">
                   <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide block mb-1">Address</label>

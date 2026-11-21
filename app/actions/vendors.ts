@@ -2,6 +2,7 @@
 
 // Retailer master (parties we sell to). Kept at this path because many screens import it;
 // the table itself is `retailers` since migration 0002.
+import { parseEmailList } from '@/lib/email-address'
 import { db } from '@/lib/db'
 import { retailers as vendors } from '@/lib/db/schema'
 import { eq, asc, ilike, or, sql } from 'drizzle-orm'
@@ -69,6 +70,10 @@ export async function saveVendor(
   input: Omit<Vendor, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
 ): Promise<Vendor[]> {
   const u = await requirePermission('retailers.edit')
+  // One or more addresses for emailed bills (comma separated); '' = none.
+  const { ok, bad } = parseEmailList(input.email ?? '')
+  if (bad.length) throw new Error(`Not an email address: ${bad.join(', ')}`)
+  input = { ...input, email: ok.join(', ') }
   const id = input.id || (await genId())
   const [before] = input.id ? await db.select().from(vendors).where(eq(vendors.id, input.id)).limit(1) : []
   await db
@@ -80,6 +85,7 @@ export async function saveVendor(
         partyName:  input.partyName,
         gst:        input.gst,
         phone:      input.phone,
+        email:      input.email,
         address:    input.address,
         city:       input.city,
         area:       input.area,

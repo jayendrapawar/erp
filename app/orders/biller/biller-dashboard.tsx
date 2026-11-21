@@ -12,6 +12,7 @@ import { SCAN_INTERVAL_MS } from '@/components/scanner/constants'
 import { articlesMatch } from '@/lib/billing-verification'
 import { openPrintWindow, printInvoices, type MrpLine, type PageSize, type PrintConfig } from '@/lib/bill-html'
 import { BillPreviewDialog } from '@/components/bill-preview-dialog'
+import { BillMailDialog } from '@/components/bill-mail-dialog'
 import { getBillTemplate } from '@/app/actions/bill-template'
 import type { BillTemplate } from '@/lib/bill-template'
 import { BillingScannerPage, type BillingVendor } from '@/components/billing-scanner-page'
@@ -68,6 +69,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   const [billTemplate, setBillTemplate] = useState<BillTemplate | undefined>(undefined)
   // Receipts: the bill being previewed (click a bill; print from the preview — owner, 21 Nov 2026)
   const [previewOrder, setPreviewOrder] = useState<BillerOrder | null>(null)
+  // Receipts → Mail: the bills being emailed (PDF from the shop's Gmail)
+  const [mailOrderIds, setMailOrderIds] = useState<number[] | null>(null)
   useEffect(() => { getBillTemplate().then((t) => { setBillTemplate(t); setPrintConfig(c => ({ ...c, pageSize: t.defaultPageSize })) }).catch(() => {}) }, [])
 
   // ── Print Bills state ────────────────────────────────────────────────────────
@@ -840,23 +843,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     }
   }
 
-  // ── Mail selected bills as mailto: link ─────────────────────────────────────
+  // ── Mail selected bills: PDF each, from the shop's Gmail (owner, 21 Nov 2026) ──
   function handleMailBills(selectedOrders: BillerOrder[]) {
-    const subject = encodeURIComponent('Bills — Shayona Shoe Palace')
-    const bodyLines: string[] = ['Please find the bill details below:', '']
-    selectedOrders.forEach(o => {
-      const items = printItemsMap[o.id] ?? []
-      const totalPairs = items.reduce((s: number, i: DetailItem) => s + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0)
-      const billedStr = o.billedAt ? new Date(o.billedAt).toLocaleDateString('en-IN') : '—'
-      bodyLines.push(`Order: ${o.orderNumber}`)
-      bodyLines.push(`Party: ${o.shopkeeperName}`)
-      bodyLines.push(`Date : ${billedStr}`)
-      bodyLines.push(`Pairs: ${totalPairs}`)
-      bodyLines.push('---')
-    })
-    bodyLines.push('', 'Shayona Shoe Palace')
-    const body = encodeURIComponent(bodyLines.join('\n'))
-    window.location.href = `mailto:?subject=${subject}&body=${body}`
+    if (selectedOrders.length) setMailOrderIds(selectedOrders.map(o => o.id))
   }
 
   // ── detail panel ─────────────────────────────────────────────────────────────
@@ -2149,11 +2138,10 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
         </div>
       )}
 
-      {/* ── Sticky bottom bar — Print / Mail Bills (on phones above the bottom menu bar, which hid it) ── */}
+      {/* ── Sticky bottom bar — Mail the ticked bills (on phones above the bottom menu bar) ── */}
       {activeTab === 'generated' && printSelectedIds.size > 0 && (() => {
         const selectedOrders = billedOrders.filter(o => printSelectedIds.has(o.id))
         const allLoaded = selectedOrders.every(o => !!printItemsMap[o.id])
-        const canAct = selectedOrders.length > 0 && allLoaded
         const noneSelected = selectedOrders.length === 0
         return (
           <div className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] left-0 right-0 z-30 bg-background/95 backdrop-blur-sm border-t border-border md:bottom-0">
@@ -2180,7 +2168,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
               {/* Mail button */}
               <button
                 type="button"
-                disabled={!canAct}
+                disabled={noneSelected}
                 onClick={() => handleMailBills(selectedOrders)}
                 className={`flex items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0 ${
                   noneSelected ? 'hidden' : ''
@@ -2196,6 +2184,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
           </div>
         )
       })()}
+
+      {mailOrderIds && <BillMailDialog orderIds={mailOrderIds} onClose={() => setMailOrderIds(null)} />}
 
       {previewOrder && (
         <BillPreviewDialog

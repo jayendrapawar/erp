@@ -98,3 +98,21 @@ not fit under the last lines, the lines stay and the totals go to the next page.
 page repeats its article name. Without scripts the browser paginates instead.
  The bill number
 printed is the order / bill number (was a time stamp).
+
+## Bills by email (21 Nov 2026, migration 0014)
+
+Biller → Receipts: tick bills → **Mail** → receiver's email (prefilled from the retailer; "save
+this email" stores it on `retailers.email`, comma-separated list allowed) → each bill is attached
+as a PDF (`lib/bill-pdf.ts`, pdf-lib, standard fonts: "Rs." instead of ₹, no Hindi name; same
+lines, saved discount, pages and totals as the printed bill).
+
+Sender: Master → Bill template → **Bill email** (admin): Gmail address + Gmail **App Password**
+(Google account → Security → 2-Step Verification → App passwords). Stored in app setting
+`billEmail.sender`, password encrypted with AES-256-GCM (`lib/secret-box.ts`, key derived from
+BETTER_AUTH_SECRET); never sent to the browser, audit rows show "(hidden)". "Send test" checks it.
+Sending: nodemailer over smtp.gmail.com:465 (`lib/bill-email.ts`), at most 20 bills and 5
+addresses per email; Gmail allows about 500 emails a day. Each send is audited (`bill.emailed`).
+Queries per send: settings 1 + bills with lines 1 (json_agg) + remember 0–1 + audit 1.
+
+Receipts also: clicking a bill opens a full preview (`components/bill-preview-dialog.tsx`, the
+printed bill in a frame, Big/Small, print icon — prints from the frame, no pop-up).

@@ -67,6 +67,8 @@ export const retailers = pgTable('retailers', {
   partyName:  text('partyName').notNull(),
   gst:        text('gst').notNull().default(''),
   phone:      text('phone').notNull().default(''),
+  /** For bills sent by email (migration 0014); '' = none. */
+  email:      text('email').notNull().default(''),
   address:    text('address').notNull().default(''),
   city:       text('city').notNull().default(''),
   area:       text('area').notNull().default(''),

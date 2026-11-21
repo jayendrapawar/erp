@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { getBillTemplate, saveBillTemplate } from '@/app/actions/bill-template'
 import { buildInvoiceHtml, type PageSize } from '@/lib/bill-html'
 import { DEFAULT_BILL_TEMPLATE, checkBillTemplate, type BillTemplate } from '@/lib/bill-template'
+import { BillEmailSettings } from '@/components/master/bill-email-settings'
 
 const SAMPLE = {
   vendor: { name: 'Sample Footwear', phone: '98250 00000', area: 'Udhna', address: 'Main Road, Surat' },
@@ -123,6 +124,7 @@ export function BillTemplateTab() {
           <button type="button" onClick={() => saved && setT(saved)} disabled={!dirty || busy} className="rounded-lg border border-border px-4 py-2.5 text-sm disabled:opacity-50">Undo changes</button>
           <button type="button" onClick={() => { if (window.confirm('Put back the standard shop details?')) setT({ ...DEFAULT_BILL_TEMPLATE }) }} className="rounded-lg border border-border px-3 py-2.5 text-xs">Standard</button>
         </div>
+        <BillEmailSettings />
       </div>
 
       <div className="space-y-2 lg:sticky lg:top-4">

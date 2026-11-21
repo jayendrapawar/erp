@@ -61,7 +61,7 @@ export const BILL_RATES = { discountPct: 4.75, cgstPct: 2.5, sgstPct: 2.5, igstP
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function amountInWords(n: number): string {
+export function amountInWords(n: number): string {
   const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
     'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen',
     'Eighteen', 'Nineteen']
