@@ -381,6 +381,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
   function resetLocal() {
     articleNotedRef.current = new Set()
     commitLines([])
+    setTouched({})
     setSelectedVendor(null)
     setSkQuery('')
     setLineDiscPct(30)
@@ -395,8 +396,12 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
     try {
       const d = await openDirectBillDraft(id)
       const lines: BillLine[] = []
+      // Saved order of scans: the line scanned last shows first on screen.
+      const ranks: Record<string, number> = {}
+      let seq = 0
       const put = (art: string, mrp: number, division: string, qty: number, raw: string | null, inStock: boolean) => {
         const key = lineKey(art, mrp)
+        ranks[key] = ++seq
         let l = lines.find((x) => x.key === key)
         if (!l) { l = { key, artNumber: art, mrp, division, qty: 0, boxCodes: [], notInStock: 0 }; lines.push(l) }
         l.qty += qty
@@ -410,6 +415,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
       draftIdRef.current = id
       draftPromiseRef.current = Promise.resolve(id)
       setDraftId(id)
+      setTouched(ranks)
       commitLines(lines)
       const v = safeVendors.find((x) => x.name === d.shopkeeperName)
         ?? (d.shopkeeperName ? { id: `draft-${id}`, name: d.shopkeeperName, code: null, phone: d.shopkeeperPhone, address: d.shopkeeperAddress } : null)
@@ -561,6 +567,11 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
 
   // ── Bill line management ───────────────────────────────────────────────────
 
+  // When each line was last added to: the bill on screen shows the most recent scan first (owner, 21 Nov 2026).
+  const [touched, setTouched] = useState<Record<string, number>>({})
+  const touchSeq = useRef(1_000_000)
+  function touchLine(key: string) { const seq = ++touchSeq.current; setTouched(t => ({ ...t, [key]: seq })) }
+
   function addScannedBox(art: string, mrp: number, division: string, rawQr: string) {
     const key = lineKey(art, mrp)
     const boxCode = rawQr.split('-').pop() ?? rawQr
@@ -576,6 +587,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
       : [...prev, { key, artNumber: art, mrp, division, qty: 1, boxCodes: [rawQr], notInStock: 0 }])
     showSuccess(existing ? `+1 box: ${art} @ ₹${mrp.toFixed(2)} (now ${(existing.qty + 1)} boxes)` : `Added: ${art} @ ₹${mrp.toFixed(2)}`)
     setLastAdded({ key, raw: rawQr })
+    touchLine(key)
     playScanOk()
     if (directBill) void persistScan(key, rawQr, art)
   }
@@ -587,6 +599,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
     commitLines(existing
       ? prev.map(l => l.key === key ? { ...l, qty: l.qty + qty } : l)
       : [...prev, { key, artNumber: art, mrp, division, qty, boxCodes: [], notInStock: 0 }])
+    touchLine(key)
     showSuccess(`Added ${qty}× ${art} @ ₹${mrp.toFixed(2)}`)
   }
 
@@ -746,20 +759,12 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
     setArtSelected(false)
   }
 
-  // ── Group lines by artNumber (for display & print) ─────────────────────────
-  const billGroups = useMemo(() => {
-    const groups: { artNumber: string; lines: BillLine[] }[] = []
-    const seen = new Map<string, BillLine[]>()
-    for (const line of billLines) {
-      if (!seen.has(line.artNumber)) {
-        const g: BillLine[] = []
-        seen.set(line.artNumber, g)
-        groups.push({ artNumber: line.artNumber, lines: g })
-      }
-      seen.get(line.artNumber)!.push(line)
-    }
-    return groups
-  }, [billLines])
+  // On screen: most recently scanned / added line first; lines from a reopened draft follow, newest first.
+  // (The printed bill keeps its article order.)
+  const recentLines = useMemo(() => billLines
+    .map((line, i) => ({ line, rank: touched[line.key] ?? i }))
+    .sort((a, b) => b.rank - a.rank)
+    .map(x => x.line), [billLines, touched])
 
   // ── Print (and optionally persist to DB as emergency bill) ─────────────────
 
@@ -1024,14 +1029,14 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
                     </tr>
                   </thead>
                   <tbody>
-                    {billGroups.flatMap(group => group.lines.map((line, i) => ({ group, line, i }))).map(({ group, line, i }, n) => {
+                    {recentLines.map((line, n) => {
                       const rate = Math.ceil(line.mrp * (1 - LINE_DISC_PCT / 100))
                       const isLast = lastAdded?.key === line.key
                       return (
                         <tr key={line.key} className={`border-b border-border/50 ${isLast ? 'bg-primary/10' : ''}`}>
-                          <td className="px-3 py-2.5 align-top text-xs text-muted-foreground tabular-nums">{n + 1}</td>
+                          <td className="px-3 py-2.5 align-top text-xs text-muted-foreground tabular-nums">{recentLines.length - n}</td>
                           <td className="px-2 py-2.5 align-top">
-                            <span className={`whitespace-nowrap text-sm font-bold ${i === 0 ? 'text-foreground' : 'text-muted-foreground'}`} data-no-translate>{group.artNumber}</span>
+                            <span className="whitespace-nowrap text-sm font-bold text-foreground" data-no-translate>{line.artNumber}</span>
                             {isLast && <span className="ml-2 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">just scanned</span>}
                             {line.notInStock > 0 && <span className="block whitespace-nowrap text-[11px] text-amber-700 dark:text-amber-400" title="Not scanned into stock: goes out as Unscanned dispatch">{`${line.notInStock} not in stock`}</span>}
                             {line.qty > line.boxCodes.length && <span className="block text-[11px] text-muted-foreground">{`${line.qty - line.boxCodes.length} added by hand`}</span>}
