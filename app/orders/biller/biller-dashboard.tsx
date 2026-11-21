@@ -954,7 +954,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
           </div>
         )}
 
-        <div className="grid grid-cols-4 gap-3 mb-6">
+        {/* Counts are hidden while making a direct bill: only the bill matters then (owner, 21 Nov 2026). */}
+        <div className={`grid grid-cols-4 gap-3 mb-6 ${activeTab === 'emergency' ? 'hidden' : ''}`}>
           <StatCard label="Total"     value={counts.total} />
           <StatCard label="To Verify" value={counts.packed}  color="text-purple-600" />
           <StatCard label="Billed"    value={counts.billed}  color="text-blue-600" />
@@ -971,16 +972,14 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
               onClick={() => { setActiveTab(tab); setPrintSelectedIds(new Set()) }}
               className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-colors ${
                 activeTab === tab
-                  ? tab === 'emergency'
-                    ? 'bg-red-600 text-white shadow-sm'
-                    : 'bg-background text-foreground shadow-sm'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
               {tab === 'verify' ? 'Invoices' : tab === 'emergency' ? 'Direct Billing' : 'Receipts'}
               {tab !== 'emergency' && (
                 <span className={`inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums ${
-                  activeTab === tab ? 'bg-foreground text-background' : 'bg-muted-foreground/20 text-muted-foreground'
+                  activeTab === tab ? 'bg-primary-foreground/25 text-primary-foreground' : 'bg-muted-foreground/20 text-muted-foreground'
                 }`}>
                   {tab === 'verify' ? counts.packed : counts.billed}
                 </span>
@@ -1033,8 +1032,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
         {/* ── Direct Billing tab (formerly Emergency) — always mounted to preserve scan state across tab switches ── */}
         <div className={activeTab === 'emergency' ? '' : 'hidden'}>
-          <div className="rounded-xl border border-red-200 dark:border-red-800">
-            <div className="p-4">
+          <div>
+            <div>
               <BillingScannerPage
                 vendors={vendors}
                 articles={articles}

@@ -77,6 +77,8 @@ interface SearchComboboxProps<T> {
   getKey: (item: T) => string | number
   disabled?: boolean
   dropUp?: boolean
+  /** Label for screen readers only (the placeholder says what to type). */
+  hideLabel?: boolean
 }
 
 interface SearchComboboxHandle {
@@ -87,7 +89,7 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
   {
     id, label, required, placeholder, inputValue, onInputChange,
     onSelect, onClear, results, loading, renderOption, getKey, disabled,
-    dropUp = true,
+    dropUp = true, hideLabel = false,
   }: SearchComboboxProps<T>,
   ref: React.Ref<SearchComboboxHandle>,
 ) {
@@ -145,7 +147,7 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
 
   return (
     <div ref={containerRef} className="relative">
-      <label htmlFor={id} className="block text-xs font-medium text-muted-foreground mb-1.5">
+      <label htmlFor={id} className={hideLabel ? 'sr-only' : 'block text-xs font-medium text-muted-foreground mb-1.5'}>
         {label}{required && <span className="text-red-500 ml-0.5">*</span>}
       </label>
       <div className="relative flex items-center">
@@ -168,7 +170,7 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
           onChange={e => { onInputChange(e.target.value); setOpen(true) }}
           onFocus={() => setOpen(true)}
           onKeyDown={handleKey}
-          className="w-full rounded-xl border border-border bg-background pl-9 pr-9 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className={`w-full rounded-xl border border-border bg-background pl-9 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${hideLabel ? 'h-12' : 'py-2.5'}`}
         />
         {inputValue && !disabled && (
           <button
@@ -217,6 +219,27 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
     </div>
   )
 }) as <T>(props: SearchComboboxProps<T> & { ref?: React.Ref<SearchComboboxHandle> }) => React.ReactElement
+
+/** Right-hand panel for things used now and then (box by hand, drafts). Esc or a tap outside closes it. */
+function SidePanel({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/50" onClick={onClose}>
+      <section role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()}
+        className="flex h-full w-full max-w-md flex-col border-l border-border bg-card shadow-2xl">
+        <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+          <h2 className="flex-1 text-lg font-bold">{title}</h2>
+          <button type="button" onClick={onClose} aria-label="Close" className="flex h-9 w-9 items-center justify-center rounded-lg border border-border hover:bg-muted">✕</button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5">{children}</div>
+      </section>
+    </div>
+  )
+}
 
 // ── Props ──────────────────────────────────────────────────────────────────────
 
@@ -470,6 +493,9 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
 
   // ── Manual entry ───────────────────────────────────────────────────────────
   const [draftsOpen, setDraftsOpen] = useState(false)
+  const [handOpen, setHandOpen] = useState(false)
+  const closeHand = useCallback(() => { setHandOpen(false); focusScan() }, [])
+  const closeDrafts = useCallback(() => { setDraftsOpen(false); focusScan() }, [])
   const [manualArt, setManualArt] = useState('')
   const [manualMrp, setManualMrp] = useState('')
   const [manualQty, setManualQty] = useState<number | ''>(1)
@@ -850,8 +876,8 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
   }
 
   return (
-    <div className={embedded ? 'space-y-4 pb-24 lg:pb-0' : 'min-h-screen bg-background p-3 sm:p-4 md:p-6 pb-24 lg:pb-6'}>
-      <div className={embedded ? 'space-y-4' : 'mx-auto max-w-6xl space-y-4'}>
+    <div className={embedded ? 'space-y-3 pb-28 lg:pb-0' : 'min-h-screen bg-background p-3 sm:p-4 md:p-6 pb-28 lg:pb-6'}>
+      <div className={embedded ? 'space-y-3' : 'mx-auto max-w-7xl space-y-3'}>
 
         {!embedded && (
           <div className="flex items-center justify-between gap-2">
@@ -860,69 +886,18 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
           </div>
         )}
 
-        {/* ── Drafts: one line; tap to open ── */}
-        {directBill && (draftId != null || otherDrafts.length > 0) && (
-          <section aria-label="Saved drafts" className="rounded-2xl border border-border bg-card">
-            <button type="button" onClick={() => setDraftsOpen(o => !o)} aria-expanded={draftsOpen}
-              className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left">
-              <span className="text-sm font-semibold text-foreground">
-                {otherDrafts.length > 0 ? `Draft bills (${otherDrafts.length})` : 'Draft bills'}
-              </span>
-              <span className="flex items-center gap-2 text-xs text-muted-foreground">
-                {draftId != null && <span>{pendingScans > 0 ? `This bill: draft #${draftId} · saving…` : `This bill: draft #${draftId}`}</span>}
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-4 w-4 transition-transform ${draftsOpen ? 'rotate-180' : ''}`} aria-hidden>
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
-              </span>
-            </button>
-            {draftsOpen && (
-              <div className="space-y-2 border-t border-border p-3">
-                {draftId != null && billLines.length > 0 && (
-                  <button type="button" onClick={() => { resetLocal(); setDraftsOpen(false); focusScan() }} disabled={pendingScans > 0}
-                    className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50">
-                    Start a new bill (keep this as draft)
-                  </button>
-                )}
-                {otherDrafts.length === 0 && <p className="text-xs text-muted-foreground">No other saved drafts.</p>}
-                {otherDrafts.length > 0 && (
-                  <ul className="max-h-[45dvh] divide-y divide-border overflow-y-auto rounded-xl border border-border">
-                    {otherDrafts.map(d => (
-                      <li key={d.id} className="flex items-center gap-2 px-3 py-2">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-foreground truncate">{d.shopkeeperName || 'No retailer yet'} <span className="text-muted-foreground">· #{d.id}</span></p>
-                          <p className="text-[11px] text-muted-foreground">
-                            {d.boxes} box{d.boxes === 1 ? '' : 'es'}{d.manualPairs ? ` + ${d.manualPairs} typed` : ''} · {d.billerName || '—'} · {new Date(d.updatedAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                          </p>
-                        </div>
-                        <button type="button" onClick={() => { setDraftsOpen(false); void resumeDraft(d.id).then(focusScan) }} className="rounded-lg bg-foreground text-background px-2.5 py-1 text-xs font-semibold">Resume</button>
-                        <button type="button" onClick={() => discardDraftById(d.id)} className="rounded-lg border border-border px-2.5 py-1 text-xs text-destructive hover:bg-muted">Discard</button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-          </section>
-        )}
-
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:items-start">
-          {/* ════════ LEFT: retailer, scan, manual ════════ */}
-          <div className="space-y-4 min-w-0">
-
-            {/* Retailer */}
-            <section aria-labelledby="retailer-heading" className="rounded-2xl border border-border bg-card p-4">
-              <div className="mb-2 flex items-center justify-between">
-                <h2 id="retailer-heading" className="text-sm font-semibold">1. Retailer</h2>
-                {selectedVendor && (
-                  <button type="button" onClick={() => { setSelectedVendor(null); setSkQuery('') }} className="text-xs font-medium text-primary hover:underline">Change</button>
-                )}
-              </div>
+        {/* ── Strip: retailer · scan box · camera / QR photo / by hand (redesign, owner 21 Nov 2026) ── */}
+        <section aria-label="Retailer and scanning" className="rounded-2xl border border-border bg-card p-3">
+          <div className="flex flex-wrap items-stretch gap-2">
+            <div className="min-w-0 flex-[1_1_240px]">
               {!selectedVendor ? (
                 <SearchCombobox<BillingVendor>
                   id="vendor-search"
-                  label="Search retailer"
+                  label="Retailer"
+                  hideLabel
+                  dropUp={false}
                   required
-                  placeholder="Type retailer name, area or phone…"
+                  placeholder="Retailer — type name, area or phone…"
                   inputValue={skQuery}
                   onInputChange={setSkQuery}
                   onSelect={v => { setSelectedVendor(v); setSkQuery(v.name); focusScan() }}
@@ -938,27 +913,23 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
                   )}
                 />
               ) : (
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">{selectedVendor.name[0].toUpperCase()}</div>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-foreground">{selectedVendor.name}</p>
-                    <p className="truncate text-xs text-muted-foreground">{[selectedVendor.code, selectedVendor.phone, selectedVendor.address].filter(Boolean).join(' · ')}</p>
-                  </div>
+                <div className="flex h-12 items-center gap-2.5 rounded-xl border border-border bg-muted/40 px-2.5">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-sm font-bold text-primary" data-no-translate>{selectedVendor.name[0].toUpperCase()}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-foreground" data-no-translate>{selectedVendor.name}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{[selectedVendor.code, selectedVendor.phone].filter(Boolean).join(' · ') || selectedVendor.address || ''}</span>
+                  </span>
+                  <button type="button" onClick={() => { setSelectedVendor(null); setSkQuery('') }} className="shrink-0 rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-semibold hover:bg-muted">Change</button>
                 </div>
               )}
-            </section>
+            </div>
 
-            {/* Scan */}
-            <section aria-labelledby="scan-heading" className="rounded-2xl border border-border bg-card p-4 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <h2 id="scan-heading" className="text-sm font-semibold">2. Scan boxes</h2>
-                <button type="button" onClick={() => scanInputRef.current?.focus()}
-                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${scanFocused ? 'bg-emerald-600 text-white' : 'bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200'}`}>
-                  {scanFocused ? '● Scanner ready' : 'Click here to scan'}
-                </button>
-              </div>
-              <form onSubmit={e => { e.preventDefault(); submitScan() }}>
-                <label htmlFor="scan-box" className="sr-only">Scan box</label>
+            <form onSubmit={e => { e.preventDefault(); submitScan() }} className="min-w-0 flex-[2_1_300px]">
+              <label htmlFor="scan-box" className="sr-only">Scan box</label>
+              <div className={`flex h-12 items-center gap-2.5 rounded-xl border-2 bg-background px-3 transition-colors ${scanFocused ? 'border-primary' : 'border-border'}`}>
+                <button type="button" onClick={() => scanInputRef.current?.focus()} title={scanFocused ? 'Scanner ready' : 'Click to scan'}
+                  aria-label={scanFocused ? 'Scanner ready' : 'Click here to scan'}
+                  className={`h-2.5 w-2.5 shrink-0 rounded-full ${scanFocused ? 'bg-emerald-500 shadow-[0_0_0_4px_rgb(16_185_129/0.2)]' : 'bg-amber-500'}`} />
                 <input
                   ref={scanInputRef}
                   id="scan-box"
@@ -968,173 +939,247 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
                   onFocus={() => setScanFocused(true)}
                   onBlur={() => setScanFocused(false)}
                   autoComplete="off" autoCorrect="off" autoCapitalize="characters" spellCheck={false} enterKeyHint="done"
-                  placeholder="Scan the box QR — or type the code and press Enter"
-                  className={`h-12 w-full rounded-xl border-2 bg-background px-3 font-mono text-sm focus:outline-none ${scanFocused ? 'border-emerald-500' : 'border-border'}`}
+                  placeholder={scanFocused ? 'Scanner ready — scan a box, or type the code + Enter' : 'Click here, then scan a box'}
+                  className="h-full min-w-0 flex-1 bg-transparent font-mono text-sm focus:outline-none"
                 />
-              </form>
+              </div>
+            </form>
 
-              {lastResult && (
-                <div className={`rounded-xl border px-3 py-2.5 ${TONE[lastResult.tone]}`} role="status" aria-live="polite">
-                  <p className="text-sm font-semibold">{lastResult.text}</p>
-                  {canUndo && (
-                    <button type="button" onClick={undoLastScan} disabled={pendingScans > 0} className="mt-1 text-xs underline disabled:opacity-50">Undo last scan</button>
-                  )}
-                </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={isCameraActive ? stopCamera : startCamera}
+                className={`flex h-12 items-center gap-2 rounded-xl px-3.5 text-sm font-semibold ${isCameraActive ? 'border border-border hover:bg-muted' : 'bg-primary text-primary-foreground hover:bg-primary/90'}`}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-[18px] w-[18px]" aria-hidden><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><circle cx="12" cy="13" r="3.5" /></svg>
+                {isCameraActive ? 'Stop camera' : 'Camera'}
+              </button>
+              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+              <button type="button" disabled={uploadProcessing || isCameraActive} onClick={() => fileInputRef.current?.click()}
+                className="h-12 rounded-xl border border-border px-3.5 text-sm font-semibold hover:bg-muted disabled:opacity-50">
+                {uploadProcessing ? 'Reading…' : 'QR photo'}
+              </button>
+              <button type="button" onClick={() => setHandOpen(true)}
+                className="h-12 rounded-xl border border-dashed border-border px-3.5 text-sm font-semibold hover:bg-muted">
+                + By hand
+              </button>
+              {isCameraActive && (
+                <button type="button" onClick={toggleFlashlight} aria-pressed={isFlashlightOn}
+                  className={`h-12 rounded-xl border px-3.5 text-sm font-medium ${isFlashlightOn ? 'border-yellow-400 bg-yellow-400/15 text-yellow-700 dark:text-yellow-200' : 'border-border hover:bg-muted'}`}>
+                  {isFlashlightOn ? 'Light on' : 'Light'}
+                </button>
               )}
-
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={isCameraActive ? stopCamera : startCamera}
-                  className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold ${isCameraActive ? 'border border-border hover:bg-muted' : 'bg-foreground text-background hover:opacity-90'}`}>
-                  {isCameraActive ? 'Stop camera' : 'Scan with camera'}
-                </button>
-                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
-                <button type="button" disabled={uploadProcessing || isCameraActive} onClick={() => fileInputRef.current?.click()}
-                  className="rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">
-                  {uploadProcessing ? 'Reading…' : 'QR photo'}
-                </button>
-                {isCameraActive && (
-                  <button type="button" onClick={toggleFlashlight} aria-pressed={isFlashlightOn}
-                    className={`rounded-lg border px-3 py-2 text-sm font-medium ${isFlashlightOn ? 'border-yellow-400 bg-yellow-50 text-yellow-900 dark:bg-yellow-900/30 dark:text-yellow-200' : 'border-border hover:bg-muted'}`}>
-                    {isFlashlightOn ? '⚡ Light on' : '⚡ Light'}
-                  </button>
-                )}
-              </div>
-              <div className={`relative overflow-hidden rounded-lg bg-black aspect-[4/3] sm:aspect-video ${isCameraActive ? '' : 'hidden'}`}>
-                <video ref={videoRef} autoPlay playsInline className="h-full w-full object-cover" />
-                <canvas ref={canvasRef} className="hidden" />
-                {isCameraActive && <div className={`pointer-events-none absolute inset-0 rounded-lg border-4 ${qrDetected ? 'border-green-400 animate-pulse' : 'border-white/20'}`} />}
-              </div>
-            </section>
-
-            {/* Box without QR */}
-            <details className="rounded-2xl border border-border bg-card p-4 [&_summary::-webkit-details-marker]:hidden">
-              <summary className="cursor-pointer list-none text-sm font-semibold">Box without QR? Add by hand ▾</summary>
-              <form onSubmit={e => { handleManualAdd(e); focusScan() }} className="mt-3 space-y-2">
-                <div className="relative">
-                  <label htmlFor="b-art" className="text-xs font-medium text-muted-foreground">Article</label>
-                  <input id="b-art" type="text" autoComplete="off" value={artQuery} placeholder="Search article…"
-                    onChange={e => { setArtQuery(e.target.value); setManualArt(e.target.value.toUpperCase()); setArtSelected(false) }}
-                    onFocus={() => setArtSelected(false)}
-                    className="mt-0.5 h-9 w-full rounded-lg border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
-                  {artQuery && !artSelected && artResults.length > 0 && (
-                    <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-y-auto rounded-lg border border-border bg-card shadow-xl">
-                      {artResults.map(a => (
-                        <li key={a} onMouseDown={e => { e.preventDefault(); setArtQuery(a); setManualArt(a.toUpperCase()); setArtSelected(true) }}
-                          className="cursor-pointer px-3 py-1.5 font-mono text-sm hover:bg-muted">{a}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <label className="text-xs font-medium text-muted-foreground">MRP (₹)
-                    <input type="number" min="0" step="0.01" value={manualMrp} onChange={e => setManualMrp(e.target.value)} placeholder="0.00"
-                      className="mt-0.5 h-9 w-full rounded-lg border border-input bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring" />
-                  </label>
-                  <label className="text-xs font-medium text-muted-foreground">Boxes
-                    <input type="number" min="1" value={manualQty} onChange={e => setManualQty(e.target.value === '' ? '' : parseInt(e.target.value) || 1)}
-                      className="mt-0.5 h-9 w-full rounded-lg border border-input bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring" />
-                  </label>
-                  <button type="submit" className="mt-4 h-9 rounded-lg bg-foreground px-3 text-sm font-semibold text-background hover:opacity-90">Add</button>
-                </div>
-              </form>
-            </details>
+            </div>
           </div>
 
-          {/* ════════ RIGHT: the bill ════════ */}
-          <section aria-labelledby="bill-heading" className="min-w-0 rounded-2xl border border-border bg-card lg:sticky lg:top-4">
+          {lastResult && (
+            <div className={`mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-3 py-2 ${TONE[lastResult.tone]}`} role="status" aria-live="polite">
+              <p className="min-w-0 flex-1 text-sm font-semibold">{lastResult.text}</p>
+              {canUndo && (
+                <button type="button" onClick={undoLastScan} disabled={pendingScans > 0} className="text-xs font-semibold underline disabled:opacity-50">Undo last scan</button>
+              )}
+            </div>
+          )}
+
+          <div className={`relative mt-2 overflow-hidden rounded-xl bg-black aspect-[4/3] sm:aspect-video lg:max-w-xl ${isCameraActive ? '' : 'hidden'}`}>
+            <video ref={videoRef} autoPlay playsInline className="h-full w-full object-cover" />
+            <canvas ref={canvasRef} className="hidden" />
+            {isCameraActive && <div className={`pointer-events-none absolute inset-0 rounded-xl border-4 ${qrDetected ? 'border-green-400 animate-pulse' : 'border-white/20'}`} />}
+          </div>
+        </section>
+
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
+          {/* ════════ The bill ════════ */}
+          <section aria-labelledby="bill-heading" className="min-w-0 rounded-2xl border border-border bg-card">
             <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <h2 id="bill-heading" className="text-sm font-semibold">3. Bill{selectedVendor ? ` — ${selectedVendor.name}` : ''}</h2>
-                <p className="text-xs text-muted-foreground">{`${billLines.length} line(s) · ${totalQty} box(es)`}</p>
-              </div>
-              <label className="flex items-center gap-1.5 rounded-lg border border-border bg-muted/30 px-2 py-1 text-[11px] text-muted-foreground">
-                Disc %
-                <input type="number" min="0" max="100" step="0.5" value={lineDiscPct}
-                  onChange={e => setLineDiscPct(e.target.value === '' ? '' : Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
-                  onBlur={() => { if (lineDiscPct === '') setLineDiscPct(30) }}
-                  className="h-6 w-14 rounded border border-input bg-background px-1.5 text-center text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring" />
-              </label>
-              {billLines.length > 0 && (
-                <button type="button" onClick={() => setDeleteTarget('__all__')} className="rounded-lg border border-border px-2.5 py-1 text-xs text-destructive hover:bg-muted">Clear all</button>
+              <h2 id="bill-heading" className="text-base font-bold">Bill</h2>
+              <span className="text-xs text-muted-foreground">{`${billLines.length} line(s) · ${totalQty} box(es)`}</span>
+              <span className="flex-1" />
+              {directBill && draftId != null && (
+                <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${pendingScans > 0 ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300' : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'}`}>
+                  {pendingScans > 0 ? `Draft #${draftId} · saving…` : `Draft #${draftId} · saved`}
+                </span>
+              )}
+              {directBill && (
+                <button type="button" onClick={() => setDraftsOpen(true)} className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-semibold hover:bg-muted">
+                  Drafts{otherDrafts.length > 0 && <span className="rounded-full bg-primary/15 px-1.5 text-[10px] font-bold text-primary">{otherDrafts.length}</span>}
+                </button>
               )}
             </div>
 
             {billLines.length === 0 ? (
-              <p className="px-4 py-10 text-center text-sm text-muted-foreground">No boxes yet. Scan a box — it appears here at once.</p>
+              <div className="px-4 py-14 text-center">
+                <p className="text-sm font-medium text-foreground">No boxes yet</p>
+                <p className="mt-1 text-xs text-muted-foreground">{selectedVendor ? 'Scan a box — it appears here at once.' : 'Choose the retailer, then scan boxes.'}</p>
+              </div>
             ) : (
-              <div className="max-h-[55vh] overflow-y-auto lg:max-h-[50vh]">
+              <div className="max-h-[55vh] overflow-y-auto lg:max-h-[calc(100dvh-300px)]">
                 <table className="w-full border-collapse text-sm">
-                  <thead className="sticky top-0 bg-card">
-                    <tr className="border-b border-border/60 text-xs text-muted-foreground">
-                      <th className="px-3 py-2 text-left font-medium">Article</th>
+                  <thead className="sticky top-0 z-10 bg-card">
+                    <tr className="border-b border-border text-xs text-muted-foreground">
+                      <th className="w-8 px-3 py-2 text-left font-medium">#</th>
+                      <th className="px-2 py-2 text-left font-medium">Article</th>
                       <th className="px-2 py-2 text-right font-medium">MRP</th>
-                      <th className="px-2 py-2 text-right font-medium">Rate</th>
                       <th className="px-2 py-2 text-center font-medium">Boxes</th>
+                      <th className="px-2 py-2 text-right font-medium">Rate</th>
                       <th className="whitespace-nowrap px-2 py-2 text-right font-medium">Amount</th>
-                      <th className="w-8 px-2 py-2" />
+                      <th className="w-8 px-2 py-2"><span className="sr-only">Remove</span></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {billGroups.map(group => group.lines.map((line, i) => {
+                    {billGroups.flatMap(group => group.lines.map((line, i) => ({ group, line, i }))).map(({ group, line, i }, n) => {
                       const rate = Math.ceil(line.mrp * (1 - LINE_DISC_PCT / 100))
+                      const isLast = lastAdded?.key === line.key
                       return (
-                        <tr key={line.key} className="border-b border-border/40">
-                          <td className="px-3 py-2 align-top">
-                            {i === 0 && <span className="whitespace-nowrap text-xs font-bold text-foreground" data-no-translate>{group.artNumber}</span>}
-                            {line.notInStock > 0 && <span className="block whitespace-nowrap text-[10px] text-amber-700 dark:text-amber-400" title="Not scanned into stock: goes out as Unscanned dispatch">{`${line.notInStock} not in stock`}</span>}
-                            {line.qty > line.boxCodes.length && <span className="block text-[10px] text-muted-foreground">{`${line.qty - line.boxCodes.length} added by hand`}</span>}
+                        <tr key={line.key} className={`border-b border-border/50 ${isLast ? 'bg-primary/10' : ''}`}>
+                          <td className="px-3 py-2.5 align-top text-xs text-muted-foreground tabular-nums">{n + 1}</td>
+                          <td className="px-2 py-2.5 align-top">
+                            <span className={`whitespace-nowrap text-sm font-bold ${i === 0 ? 'text-foreground' : 'text-muted-foreground'}`} data-no-translate>{group.artNumber}</span>
+                            {isLast && <span className="ml-2 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">just scanned</span>}
+                            {line.notInStock > 0 && <span className="block whitespace-nowrap text-[11px] text-amber-700 dark:text-amber-400" title="Not scanned into stock: goes out as Unscanned dispatch">{`${line.notInStock} not in stock`}</span>}
+                            {line.qty > line.boxCodes.length && <span className="block text-[11px] text-muted-foreground">{`${line.qty - line.boxCodes.length} added by hand`}</span>}
                           </td>
-                          <td className="whitespace-nowrap px-2 py-2 text-right text-xs text-muted-foreground tabular-nums">₹{line.mrp.toFixed(2)}</td>
-                          <td className="whitespace-nowrap px-2 py-2 text-right text-xs tabular-nums">₹{rate.toFixed(2)}</td>
-                          <td className="px-2 py-2">
-                            <div className="flex items-center justify-center gap-1">
+                          <td className="whitespace-nowrap px-2 py-2.5 text-right text-muted-foreground tabular-nums">{line.mrp.toFixed(2)}</td>
+                          <td className="px-2 py-2.5">
+                            <div className="flex items-center justify-center gap-1.5">
                               <button type="button" onClick={() => decrementLine(line.key)} disabled={pendingScans > 0} aria-label={`One box less of ${line.artNumber}`}
-                                className="flex h-6 w-6 items-center justify-center rounded-md border border-border text-sm hover:bg-muted disabled:opacity-40">−</button>
-                              <span className="w-6 text-center font-bold tabular-nums">{line.qty}</span>
+                                className="flex h-7 w-7 items-center justify-center rounded-lg border border-border text-sm hover:bg-muted disabled:opacity-40">−</button>
+                              <span className="w-7 text-center text-base font-bold tabular-nums">{line.qty}</span>
                             </div>
                           </td>
-                          <td className="whitespace-nowrap px-2 py-2 text-right text-xs font-medium tabular-nums">₹{(rate * line.qty).toFixed(2)}</td>
-                          <td className="px-2 py-2 text-right">
-                            <button type="button" onClick={() => setDeleteTarget(line.key)} aria-label={`Remove ${line.artNumber}`} className="text-muted-foreground hover:text-destructive">✕</button>
+                          <td className="whitespace-nowrap px-2 py-2.5 text-right tabular-nums">{rate.toFixed(2)}</td>
+                          <td className="whitespace-nowrap px-2 py-2.5 text-right font-semibold tabular-nums">₹{(rate * line.qty).toFixed(2)}</td>
+                          <td className="px-2 py-2.5 text-right">
+                            <button type="button" onClick={() => setDeleteTarget(line.key)} aria-label={`Remove ${line.artNumber}`} className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-destructive">✕</button>
                           </td>
                         </tr>
                       )
-                    }))}
+                    })}
                   </tbody>
                 </table>
               </div>
             )}
+          </section>
 
-            <div className="space-y-1 border-t border-border px-4 py-3 text-xs">
-              <div className="flex justify-between text-muted-foreground"><span>{`Sub total (${totalQty} boxes)`}</span><span className="tabular-nums">₹{subTotal.toFixed(2)}</span></div>
-              <div className="flex justify-between text-red-600"><span>{`Discount (${DISC_PCT}%)`}</span><span className="tabular-nums">− ₹{discAmt.toFixed(2)}</span></div>
-              <div className="flex justify-between text-muted-foreground"><span>{`CGST (${CGST_PCT}%)`}</span><span className="tabular-nums">+ ₹{cgstAmt.toFixed(2)}</span></div>
-              <div className="flex justify-between text-muted-foreground"><span>{`SGST (${SGST_PCT}%)`}</span><span className="tabular-nums">+ ₹{sgstAmt.toFixed(2)}</span></div>
-              <div className="flex justify-between pt-1 text-base font-bold text-foreground"><span>Net payable</span><span className="tabular-nums">₹{netAmt.toFixed(2)}</span></div>
+          {/* ════════ Totals ════════ */}
+          <aside aria-label="Totals" className="rounded-2xl border border-border bg-card p-4 lg:sticky lg:top-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h2 className="text-base font-bold">Total</h2>
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                Disc %
+                <input type="number" min="0" max="100" step="0.5" value={lineDiscPct}
+                  onChange={e => setLineDiscPct(e.target.value === '' ? '' : Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                  onBlur={() => { if (lineDiscPct === '') setLineDiscPct(30) }}
+                  className="h-8 w-16 rounded-lg border border-input bg-background px-1.5 text-center text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+              </label>
             </div>
-            <div className="hidden px-4 pb-4 lg:block">
+            <div className="space-y-1.5 text-sm tabular-nums">
+              <div className="flex justify-between text-muted-foreground"><span>{`Sub total (${totalQty} boxes)`}</span><span className="text-foreground">₹{subTotal.toFixed(2)}</span></div>
+              <div className="flex justify-between text-muted-foreground"><span>{`Discount (${DISC_PCT}%)`}</span><span className="text-red-600 dark:text-red-400">− ₹{discAmt.toFixed(2)}</span></div>
+              <div className="flex justify-between text-muted-foreground"><span>{`CGST (${CGST_PCT}%)`}</span><span className="text-foreground">₹{cgstAmt.toFixed(2)}</span></div>
+              <div className="flex justify-between text-muted-foreground"><span>{`SGST (${SGST_PCT}%)`}</span><span className="text-foreground">₹{sgstAmt.toFixed(2)}</span></div>
+            </div>
+            <div className="mt-3 flex items-baseline justify-between rounded-xl border-2 border-foreground/80 px-3 py-2.5">
+              <span className="text-sm font-bold">Net payable</span>
+              <span className="font-display text-2xl font-bold tabular-nums">₹{netAmt.toFixed(2)}</span>
+            </div>
+            <div className="mt-3 hidden lg:block">
               {generateHint && <p className="mb-2 text-xs text-amber-700 dark:text-amber-400">{generateHint}</p>}
               <button type="button" onClick={() => { void handlePrint().then(focusScan) }} disabled={!canGenerate}
-                className="w-full rounded-xl bg-purple-600 px-4 py-3 text-sm font-semibold text-white hover:bg-purple-700 disabled:opacity-50">
+                className="h-12 w-full rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
                 {isSaving ? 'Generating…' : onBillGenerated ? 'Generate bill → Receipts' : 'Generate & print bill'}
               </button>
             </div>
-          </section>
+            {billLines.length > 0 && (
+              <button type="button" onClick={() => setDeleteTarget('__all__')} className="mt-2 w-full rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-destructive">
+                {directBill ? 'Clear the bill (discard draft)' : 'Clear all'}
+              </button>
+            )}
+          </aside>
         </div>
 
-        {/* Phones: totals and Generate stay at the bottom */}
-        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-background/95 px-3 py-2.5 backdrop-blur lg:hidden pb-[max(0.625rem,env(safe-area-inset-bottom))]">
+        {/* Phones: totals and Generate stay at the bottom, just above the app's bottom menu bar (4rem). */}
+        <div className="fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-30 border-t border-border bg-background/95 px-3 py-2 backdrop-blur md:bottom-0 lg:hidden">
           <div className="mx-auto flex max-w-3xl items-center gap-3">
-            <div className="min-w-0 flex-1 text-xs">
-              <p className="font-semibold text-foreground">{`${totalQty} box(es) · ₹${netAmt.toFixed(2)}`}</p>
-              <p className="truncate text-muted-foreground">{generateHint || (selectedVendor?.name ?? '')}</p>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] text-muted-foreground">{`Net payable · ${totalQty} box(es)`}</p>
+              <p className="font-display text-lg font-bold tabular-nums text-foreground">₹{netAmt.toFixed(2)}</p>
+              {generateHint && <p className="truncate text-[11px] text-amber-700 dark:text-amber-400">{generateHint}</p>}
             </div>
             <button type="button" onClick={() => { void handlePrint() }} disabled={!canGenerate}
-              className="shrink-0 rounded-xl bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">
+              className="h-12 shrink-0 rounded-xl bg-primary px-5 text-sm font-bold text-primary-foreground disabled:opacity-50">
               {isSaving ? 'Generating…' : 'Generate bill'}
             </button>
           </div>
         </div>
+
+        {/* ── Side panel: box without QR, added by hand ── */}
+        {handOpen && (
+          <SidePanel title="Add a box by hand" onClose={closeHand}>
+            <p className="mb-4 text-sm text-muted-foreground">For a box whose QR is damaged or missing. It is billed as an unscanned box.</p>
+            <form onSubmit={e => { handleManualAdd(e); closeHand() }} className="space-y-3">
+              <div className="relative">
+                <label htmlFor="b-art" className="text-sm font-medium">Article</label>
+                <input id="b-art" type="text" autoComplete="off" value={artQuery} placeholder="Search article…" autoFocus
+                  onChange={e => { setArtQuery(e.target.value); setManualArt(e.target.value.toUpperCase()); setArtSelected(false) }}
+                  onFocus={() => setArtSelected(false)}
+                  className="mt-1 h-11 w-full rounded-xl border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                {artQuery && !artSelected && artResults.length > 0 && (
+                  <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-xl border border-border bg-popover shadow-xl">
+                    {artResults.map(a => (
+                      <li key={a} onMouseDown={e => { e.preventDefault(); setArtQuery(a); setManualArt(a.toUpperCase()); setArtSelected(true) }}
+                        className="cursor-pointer px-3 py-2 font-mono text-sm hover:bg-muted">{a}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-sm font-medium">MRP (₹)
+                  <input type="number" min="0" step="0.01" value={manualMrp} onChange={e => setManualMrp(e.target.value)} placeholder="0.00"
+                    className="mt-1 h-11 w-full rounded-xl border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                </label>
+                <label className="text-sm font-medium">Boxes
+                  <input type="number" min="1" value={manualQty} onChange={e => setManualQty(e.target.value === '' ? '' : parseInt(e.target.value) || 1)}
+                    className="mt-1 h-11 w-full rounded-xl border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                </label>
+              </div>
+              <button type="submit" className="h-12 w-full rounded-xl bg-primary text-sm font-bold text-primary-foreground hover:bg-primary/90">Add to bill</button>
+            </form>
+          </SidePanel>
+        )}
+
+        {/* ── Side panel: saved drafts ── */}
+        {draftsOpen && directBill && (
+          <SidePanel title="Draft bills" onClose={closeDrafts}>
+            <p className="mb-4 text-sm text-muted-foreground">Bills that were started and not generated. Every scan is saved as it happens.</p>
+            {draftId != null && (
+              <div className="mb-3 rounded-xl border-2 border-primary/60 px-3 py-2.5">
+                <p className="text-sm font-semibold"><span data-no-translate>{selectedVendor?.name || 'No retailer yet'}</span> <span className="text-muted-foreground">· #{draftId}</span></p>
+                <p className="text-xs text-muted-foreground">{`Open now · ${billLines.length} line(s) · ${totalQty} box(es)`}</p>
+                {billLines.length > 0 && (
+                  <button type="button" onClick={() => { resetLocal(); closeDrafts() }} disabled={pendingScans > 0}
+                    className="mt-2 rounded-lg border border-border px-2.5 py-1 text-xs font-semibold hover:bg-muted disabled:opacity-50">
+                    Start a new bill (keep this as draft)
+                  </button>
+                )}
+              </div>
+            )}
+            {otherDrafts.length === 0 && <p className="text-sm text-muted-foreground">No other saved drafts.</p>}
+            {otherDrafts.length > 0 && (
+              <ul className="divide-y divide-border rounded-xl border border-border">
+                {otherDrafts.map(d => (
+                  <li key={d.id} className="flex items-center gap-2 px-3 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium"><span data-no-translate>{d.shopkeeperName || 'No retailer yet'}</span> <span className="text-muted-foreground">· #{d.id}</span></p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {d.boxes} box{d.boxes === 1 ? '' : 'es'}{d.manualPairs ? ` + ${d.manualPairs} typed` : ''} · {d.billerName || '—'} · {new Date(d.updatedAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+                    <button type="button" onClick={() => { setDraftsOpen(false); void resumeDraft(d.id).then(focusScan) }} className="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary-foreground">Open</button>
+                    <button type="button" onClick={() => discardDraftById(d.id)} className="rounded-lg border border-border px-2.5 py-1.5 text-xs text-destructive hover:bg-muted">Discard</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </SidePanel>
+        )}
 
         {articleDialog && (
           <NewArticleDialog
