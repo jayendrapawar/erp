@@ -116,3 +116,24 @@ Queries per send: settings 1 + bills with lines 1 (json_agg) + remember 0–1 + 
 
 Receipts also: clicking a bill opens a full preview (`components/bill-preview-dialog.tsx`, the
 printed bill in a frame, Big/Small, print icon — prints from the frame, no pop-up).
+
+## Bill numbers and HSN (22 Nov 2026, migration 0016)
+
+Every sale bill gets an official number when it is billed (`lib/billing/bill-number.ts`): one locked
+`UPDATE document_sequences … RETURNING` inside the billing transaction, so two bills never share a
+number and a failed bill gives its number back (no gaps). A bill sent back and billed again keeps
+its number (`orders.billNo`, unique). Master → Bill template → **Bill numbers** (admin): prefix,
+next number, digits; "next" must be above the highest number already used. At go-live the owner
+sets "next" to the old software's next bill number so both systems continue the same series.
+
+HSN prints on the big (A4) bill only. It is copied from the article (`articles.hsn`, one per code,
+all colours) onto `bill_lines.hsn` when billed, so later master edits do not change old bills.
+Sources: Master → Articles → HSN (by hand, applies to all colours of the code); each imported
+Relaxo bill fills articles that have none; and the one-off list from Relaxo's proforma invoices:
+
+    npx tsx scripts/catalog/fill-hsn.ts --env-file <file>                  # preview
+    npx tsx scripts/catalog/fill-hsn.ts --env-file <file> --apply --confirm <endpoint>
+
+`docs/catalog/relaxo-invoice-hsn.json` (582 invoices, 17 Jun – 21 Nov 2026): 336 codes with one
+HSN; 10 codes printed with two HSNs are not filled (owner decides). It never overwrites an HSN that
+is already set. Dev filled 22 Nov 2026 (525 rows). Live: run after migration 0016, with a backup.
