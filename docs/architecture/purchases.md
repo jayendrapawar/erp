@@ -61,7 +61,9 @@ first). One active receipt per carton label.
   and receive**, or picks another assortment that fits, or — when none fits or none is right — types
   the pairs per size (must add up to the invoice's pairs per carton). A typed one is saved to
   Master → Assortments (only for this article when others with these pairs exist) and proposed for
-  the next carton. "Not now" leaves the carton unreceived. Cartons scanned meanwhile wait in turn.
+  the next carton. Typed pairs equal to an assortment already there (same division, pairs, code, segment
+  or "Any") use that one instead of a copy. There is no skip (owner: crucial for inventory): cartons
+  scanned meanwhile wait in turn, and waiting cartons come back after a tab switch or reload.
   Single-size cartons, unexpected and duplicate ones are recorded at once as before.
 - Matched + confirmed + every size is in the article master → contents enter stock at once: +pairs
   per size, provenance **carton**, movement `receipt`. A **single-size carton** needs no assortment

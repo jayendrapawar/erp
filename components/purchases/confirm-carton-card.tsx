@@ -18,10 +18,10 @@ type Props = {
   busy: boolean
   error: string
   onAnswer: (answer: AssortmentAnswer) => void
-  onSkip: () => void
 }
 
-export function ConfirmCartonCard({ ask, waiting, busy, error, onAnswer, onSkip }: Props) {
+// No "skip" (owner, 22 Nov 2026: crucial for inventory): a scanned carton is confirmed or its pairs are entered.
+export function ConfirmCartonCard({ ask, waiting, busy, error, onAnswer }: Props) {
   const [choice, setChoice] = useState<number | 'new' | null>(ask.proposal?.id ?? (ask.options.length ? null : 'new'))
   const [segment, setSegment] = useState(ask.articleSegment ?? '')
   const [pairs, setPairs] = useState<Record<string, string>>({})
@@ -71,7 +71,7 @@ export function ConfirmCartonCard({ ask, waiting, busy, error, onAnswer, onSkip 
         )}
         {choice === 'new' && (
           <div className="space-y-2 rounded-lg border border-border bg-background p-3">
-            <p className="text-xs text-muted-foreground">{ask.options.length ? 'Saved for this article in Master → Assortments.' : 'No assortment for this carton in the master yet. Enter it once; it is saved to Master → Assortments for the next carton.'}</p>
+            <p className="text-xs text-muted-foreground">{ask.options.length ? 'Saved for this article in Master → Assortments (or, when the same pairs are already there, that one is used).' : 'No assortment for this carton in the master yet. Enter it once; it is saved to Master → Assortments for the next carton.'}</p>
             <label className="block text-xs">
               <span className="mb-1 block font-medium">Segment</span>
               <select value={segment} onChange={(e) => setSegment(e.target.value)} disabled={busy} className={`${inputCls} w-full`}>
@@ -96,12 +96,9 @@ export function ConfirmCartonCard({ ask, waiting, busy, error, onAnswer, onSkip 
       </div>
 
       {error && <p className="rounded-lg bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">{error}</p>}
-      <div className="flex gap-2">
-        <button onClick={confirm} disabled={!ready} className="flex-1 rounded-lg bg-foreground px-3 py-2.5 text-sm font-semibold text-background hover:opacity-90 disabled:opacity-50">
-          {busy ? 'Saving…' : 'Confirm and receive'}
-        </button>
-        <button onClick={onSkip} disabled={busy} className="rounded-lg border border-border px-3 py-2.5 text-xs font-medium hover:bg-muted disabled:opacity-50">Not now</button>
-      </div>
+      <button onClick={confirm} disabled={!ready} className="w-full rounded-lg bg-foreground px-3 py-2.5 text-sm font-semibold text-background hover:opacity-90 disabled:opacity-50">
+        {busy ? 'Saving…' : 'Confirm and receive'}
+      </button>
       {waiting > 0 && <p className="text-[11px] text-muted-foreground">{`${waiting} more carton(s) scanned — they come next.`}</p>}
     </section>
   )

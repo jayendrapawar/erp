@@ -4,14 +4,15 @@
 // size and it is saved to Master → Assortments.
 //
 // Runs inside the caller's transaction with the bill line locked. Statements: confirm an existing
-// assortment 1–3; a new one ~6 (lock, read, insert, audit, propose for other open lines, segment).
+// assortment 1–3; typed pairs ~4–8 (lock, look for the same pairs already in the master, else insert +
+// audit; propose for other open lines; article segment).
 
 import { sql } from 'drizzle-orm'
 import type { AssortmentSize } from '@/lib/db/schema'
 import type { Actor, DbOrTx } from '@/lib/db/types'
 import { audit } from '@/lib/audit'
 import { expandSizeRange } from '@/lib/catalog/sizes'
-import { SEGMENTS, sameSizes, validateAssortment } from '@/lib/catalog/assortments'
+import { ANY_SEGMENT, SEGMENTS, sameSizes, validateAssortment } from '@/lib/catalog/assortments'
 import { addArticleToAssortment } from '@/lib/catalog/assortment-store'
 import { coverRankSql, proposeOpenLines } from './assortment-match'
 
@@ -74,6 +75,24 @@ async function createFromCarton(tx: DbOrTx, actor: Actor, line: LockedLine, code
   })
   if (v.errors.length) throw new Error(v.errors.join(' '))
   if (v.value.sizes.some((s) => !sizes.includes(s.size))) throw new Error(`Only sizes ${sizes.join(', ')} belong to this carton.`)
+  // Owner, 22 Nov 2026: typed pairs per size that match an assortment already in the master (same
+  // division, pairs per carton, size code, and the typed segment or "Any") → that one is used, no
+  // copy is made. Already for this article first, then the typed segment; one "only for" other
+  // articles gets this article added (the receiver has just confirmed the same contents).
+  const twins = (await tx.execute<{ id: number; segment: string; sizes: AssortmentSize[]; cover: number }>(sql`
+    SELECT id, segment, sizes, ${coverRankSql(sql`${line.articleCode}::text`, sql`"onlyFor"`)} AS cover FROM carton_assortments
+     WHERE active AND division = ${v.value.division} AND packing = ${v.value.packing} AND code = ${v.value.code}
+       AND segment IN (${v.value.segment}, ${ANY_SEGMENT})`)).rows
+    .filter((t) => sameSizes(t.sizes, v.value.sizes))
+    .sort((a, b) => Number(b.cover >= 0) - Number(a.cover >= 0) || Number(b.segment === v.value.segment) - Number(a.segment === v.value.segment) || Number(b.cover) - Number(a.cover))
+  if (twins[0]) {
+    if (Number(twins[0].cover) < 0) {
+      await addArticleToAssortment(tx, actor, Number(twins[0].id), line.articleCode)
+      await proposeOpenLines(tx, { division: v.value.division, packing: v.value.packing, code: v.value.code })
+    }
+    await setSegmentIfBlank(tx, line.articleCode, v.value.segment)
+    return Number(twins[0].id)
+  }
   const same = await tx.execute<{ id: number; sizes: AssortmentSize[] }>(sql`
     SELECT id, sizes FROM carton_assortments WHERE active AND division = ${v.value.division} AND segment = ${v.value.segment}
        AND packing = ${v.value.packing} AND code = ${v.value.code} AND "onlyFor" = ${v.value.onlyFor ?? ''}`)
@@ -90,9 +109,12 @@ async function createFromCarton(tx: DbOrTx, actor: Actor, line: LockedLine, code
   await audit(tx, { actor, action: 'assortment.created', entityType: 'carton_assortment', entityId: id, after: { ...v.value, from } })
   // Other open lines of this kind without an assortment get a proposal now (still confirmed per carton).
   await proposeOpenLines(tx, { division: v.value.division, packing: v.value.packing, code: v.value.code })
-  // The article gets this segment if it has none yet.
-  if ((SEGMENTS as readonly string[]).includes(v.value.segment)) {
-    await tx.execute(sql`UPDATE articles SET segment = ${v.value.segment} WHERE ${NORM(sql`"artCode"`)} = ${line.articleCode} AND segment IS NULL`)
-  }
+  await setSegmentIfBlank(tx, line.articleCode, v.value.segment)
   return id
+}
+
+/** The article gets the typed segment if it has none yet. */
+async function setSegmentIfBlank(tx: DbOrTx, articleCode: string, segment: string) {
+  if (!(SEGMENTS as readonly string[]).includes(segment)) return
+  await tx.execute(sql`UPDATE articles SET segment = ${segment} WHERE ${NORM(sql`"artCode"`)} = ${articleCode} AND segment IS NULL`)
 }

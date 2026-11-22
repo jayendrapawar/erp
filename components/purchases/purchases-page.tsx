@@ -523,9 +523,10 @@ function ReceiptRows({ rows, canManage, busy, voiding, setVoiding, reason, setRe
 
 // ── Receive ────────────────────────────────────────────────────────────
 
-interface LogItem { id: string; raw: string; at: number; pending: boolean; out?: ReceiveOutcome; error?: string; skipped?: boolean }
+interface LogItem { id: string; raw: string; at: number; pending: boolean; out?: ReceiveOutcome; error?: string }
 /** A scanned carton waiting for its assortment to be confirmed (owner, 22 Nov 2026). */
 interface Ask { id: string; raw: string; ask: ConfirmCarton }
+const PENDING_KEY = 'shayona.receive.waitingCartons'
 
 function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpenBill: (id: number) => void }) {
   const [openBills, setOpenBills] = useState<BillRow[]>([])
@@ -551,15 +552,16 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
     if (out.status === 'received') onReceived()
   }, [onReceived])
 
-  const submit = useCallback((raw: string) => {
-    if (boxHandlerRef.current) { boxHandlerRef.current(raw); return }
-    const id = uuid()
+  // Cartons re-asked after coming back to this tab (see below), until their answer arrives.
+  const [restoring, setRestoring] = useState<Record<string, string>>({})
+  const request = useCallback((raw: string, id: string) => {
     setLog((l) => [{ id, raw, at: Date.now(), pending: true }, ...l].slice(0, 100))
     receiveCartonAction({ rawInput: raw, clientEventId: id, billId: billRef.current || null })
       .then((out) => {
+        setRestoring((r) => { if (!(id in r)) return r; const n = { ...r }; delete n[id]; return n })
         if (out.status === 'confirm') {
           setLog((l) => l.map((x) => (x.id === id ? { ...x, pending: false, out } : x)))
-          setAsks((a) => [...a, { id, raw, ask: out }])
+          setAsks((a) => (a.some((x) => x.id === id) ? a : [...a, { id, raw, ask: out }]))
           playScanOk()
           return
         }
@@ -567,6 +569,29 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
       })
       .catch((e) => setLog((l) => l.map((x) => (x.id === id ? { ...x, pending: false, error: errText(e, 'Not saved — scan again.') } : x))))
   }, [settle])
+  const submit = useCallback((raw: string) => {
+    if (boxHandlerRef.current) { boxHandlerRef.current(raw); return }
+    request(raw, uuid())
+  }, [request])
+
+  // A carton waiting for its assortment is not received yet. It is kept for this browser session, so
+  // switching tab or page (or reloading) brings it back here to be confirmed — never silently dropped.
+  const restoredRef = useRef(false)
+  useEffect(() => {
+    if (restoredRef.current) return
+    restoredRef.current = true
+    let saved: { id: string; raw: string }[] = []
+    try { saved = JSON.parse(sessionStorage.getItem(PENDING_KEY) ?? '[]') } catch { /* storage unavailable */ }
+    const valid = (Array.isArray(saved) ? saved : []).filter((s) => typeof s?.id === 'string' && typeof s?.raw === 'string')
+    if (!valid.length) return
+    setRestoring(Object.fromEntries(valid.map((s) => [s.id, s.raw])))
+    for (const s of valid) request(s.raw, s.id)
+  }, [request])
+  useEffect(() => {
+    if (!restoredRef.current) return
+    const keep = [...asks.map((a) => ({ id: a.id, raw: a.raw })), ...Object.entries(restoring).filter(([id]) => !asks.some((a) => a.id === id)).map(([id, raw]) => ({ id, raw }))]
+    try { sessionStorage.setItem(PENDING_KEY, JSON.stringify(keep)) } catch { /* storage unavailable */ }
+  }, [asks, restoring])
 
   const current = asks[0] ?? null
   async function answer(a: AssortmentAnswer) {
@@ -582,11 +607,13 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
       setAskError(errText(e, 'Not saved — try again.'))
     } finally { setAskBusy(false) }
   }
-  function skip() {
-    if (!current) return
-    setLog((l) => l.map((x) => (x.id === current.id ? { ...x, skipped: true } : x)))
-    setAsks((q) => q.slice(1)); setAskError('')
-  }
+  // A carton waiting for its assortment is not received yet: warn before leaving the page.
+  useEffect(() => {
+    if (!asks.length) return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [asks.length])
 
   // Camera only here: the Scan box below takes USB / Bluetooth scanners.
   const { videoRef, active, error, start, stop } = useQrScanner(submit, { hardware: false })
@@ -676,7 +703,7 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
           onResult={addManualResult} onClose={() => setManualOpen(false)} />
       )}
 
-      {current && <ConfirmCartonCard key={current.id} ask={current.ask} waiting={asks.length - 1} busy={askBusy} error={askError} onAnswer={answer} onSkip={skip} />}
+      {current && <ConfirmCartonCard key={current.id} ask={current.ask} waiting={asks.length - 1} busy={askBusy} error={askError} onAnswer={answer} />}
 
       {last && <ResultBanner item={last} onOpenBill={onOpenBill} />}
 
@@ -693,11 +720,7 @@ function describe(x: LogItem): { tone: 'ok' | 'warn' | 'err' | 'wait'; title: st
   if (x.pending) return { tone: 'wait', title: 'Saving…', detail: x.raw }
   if (x.error) return { tone: 'err', title: 'Not saved', detail: x.error }
   const o = x.out!
-  if (o.status === 'confirm') {
-    return x.skipped
-      ? { tone: 'warn', title: `Not received · ${o.label}`, detail: 'Left at the assortment check. Scan it again to receive it.' }
-      : { tone: 'wait', title: `Check pairs per size · ${o.label}`, detail: `Bill ${o.refNo} line ${o.lineNo} — confirm the assortment to receive it.` }
-  }
+  if (o.status === 'confirm') return { tone: 'wait', title: `Check pairs per size · ${o.label}`, detail: `Bill ${o.refNo} line ${o.lineNo} — confirm the assortment to receive it.` }
   if (o.status === 'rejected') return { tone: 'err', title: 'Not received', detail: o.message }
   if (o.status === 'duplicate') return { tone: 'warn', title: `Already received · ${o.label}`, detail: o.message }
   if (o.match === 'unexpected') return { tone: 'err', title: `Unexpected carton · ${o.label}`, detail: o.reason }

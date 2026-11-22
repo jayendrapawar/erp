@@ -7,7 +7,7 @@ import { sql } from 'drizzle-orm'
 import { createHarness, harnessEnabled, type Harness } from './_harness'
 import { applyUpload, listActiveAssortments, previewUpload } from '../../lib/catalog/assortment-store'
 import { parseAssortmentSheet } from '../../lib/catalog/assortments'
-import { billDetail, saveBill, setLineAssortment } from '../../lib/purchases/store'
+import { billDetail, receiveCarton, saveBill, setLineAssortment } from '../../lib/purchases/store'
 import { manualCartonOptions, receiveManualCarton } from '../../lib/purchases/manual-carton'
 import type { ParsedBill } from '../../lib/purchases/relaxo-bill'
 import type { Actor } from '../../lib/db/types'
@@ -84,6 +84,26 @@ describe('"only for" carton assortments (integration)', { skip: !harnessEnabled(
     assert.equal(res.status, 'received')
     const both = (await listActiveAssortments(h.db)).filter(a => a.packing === 30 && a.code === '610')
     assert.deepEqual(both.map(a => a.onlyFor).sort(), ['FIP002G', 'NEW001G'])
+  })
+
+  // Owner, 22 Nov 2026: pairs typed at receiving that equal an assortment already in the master use it.
+  test('typed pairs equal to an existing assortment: that one is used (article added), no copy', async () => {
+    const b3: ParsedBill = { ...bill, refNo: '0520777781/1062', invoiceNo: 'RV0000000013', totalCartons: 2, totalPairs: 84, lines: [line(1, 'ZZZ001G', 42)] }
+    const s = await saveBill(h.db, admin, b3, { name: 'b3.pdf', sha256: '8'.repeat(64) }, 'Bahamas')
+    assert.equal(s.status, 'saved')
+    const raw = 'ZZZ001GBKBK0608A299.00010920261010' + '7770000001'
+    const id = randomUUID()
+    const ask = await receiveCarton(h.db, admin, { rawInput: raw, clientEventId: id })
+    assert.ok(ask.status === 'confirm' && ask.proposal === null && ask.options.length === 1 && !ask.options[0].covers, JSON.stringify(ask))
+    const hc = (await listActiveAssortments(h.db)).find(a => a.packing === 42 && a.code === '608')!
+    const r = await receiveCarton(h.db, admin, { rawInput: raw, clientEventId: id,
+      answer: { newAssortment: { segment: 'Gents', sizes: [{ size: '6', pairs: 14 }, { size: '7', pairs: 14 }, { size: '8', pairs: 14 }] } } })
+    assert.equal(r.status, 'received')
+    const rows = (await listActiveAssortments(h.db)).filter(a => a.packing === 42 && a.code === '608')
+    assert.deepEqual(rows.map(a => a.id), [hc.id]) // no copy
+    assert.ok(rows[0].onlyFor.split(',').includes('ZZZ001G'))
+    const used = await h.db.execute<{ id: number }>(sql`SELECT l."assortmentId" AS id FROM purchase_bill_lines l JOIN purchase_bills b ON b.id = l."billId" WHERE b."refNo" = '0520777781/1062'`)
+    assert.equal(Number(used.rows[0].id), hc.id)
   })
 
   // Owner, 22 Nov 2026: code families ("PUB*") and "Any" segment rows; the most specific wins (same
