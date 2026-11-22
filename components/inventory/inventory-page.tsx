@@ -458,7 +458,7 @@ function VariantDialog({ articleId, canAdjust, onClose, onChanged }: { articleId
                 {v.sizes.map((s) => {
                   const on = s.skuId === skuId
                   return (
-                    <button key={s.skuId} disabled={!canAdjust || busy} onClick={() => setSkuId(on ? null : s.skuId)}
+                    <button key={s.skuId} type="button" aria-pressed={on} aria-label={`Size ${s.size}: ${s.pairs} pairs`} disabled={!canAdjust || busy} onClick={() => setSkuId(on ? null : s.skuId)}
                       className={`rounded-lg border px-1 py-1.5 text-center transition-colors ${on ? 'border-foreground bg-muted' : 'border-border'} ${canAdjust ? 'hover:bg-muted' : 'cursor-default'}`}>
                       <span className="block text-[10px] text-muted-foreground">{s.size}</span>
                       <span className={`text-sm font-semibold tabular-nums ${s.pairs < 0 ? 'text-red-600 dark:text-red-400' : s.pairs === 0 ? 'text-muted-foreground/60' : ''}`}>{s.pairs}</span>

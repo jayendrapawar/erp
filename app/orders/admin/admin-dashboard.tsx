@@ -64,6 +64,44 @@ function orderTag(orderedAt: Date, updatedAt: Date): 'new' | 'updated' | null {
 
 const ALL_STATUSES = ['pending', 'assigned', 'packed', 'dispatched', 'delivered', 'cancelled']
 
+/**
+ * Picker list. A pick with the mouse or a finger saves at once (as before). With the keyboard, ↑↓
+ * on a closed list change the value on every press (Windows), so a keyboard change waits: Enter or
+ * leaving the list saves it, Esc puts the old picker back (docs/architecture/keyboard.md).
+ */
+function PickerSelect({ value, pickers, onCommit, disabled, className, ...rest }: {
+  value: string; pickers: Props['pickers']; onCommit: (pickerId: string) => void; disabled?: boolean; className?: string; 'aria-label'?: string
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const byKey = useRef(false)
+  const shown = draft ?? value
+  const commit = () => { if (draft !== null && draft !== value) onCommit(draft); setDraft(null) }
+  return (
+    <select
+      {...rest}
+      disabled={disabled}
+      value={shown}
+      onKeyDown={e => {
+        if (e.key === 'Enter') { e.preventDefault(); commit() }
+        else if (e.key === 'Escape' && draft !== null) { e.preventDefault(); setDraft(null) }
+        else byKey.current = true
+      }}
+      onChange={e => {
+        if (byKey.current) { byKey.current = false; setDraft(e.target.value); return }
+        setDraft(null); onCommit(e.target.value)
+      }}
+      onBlur={commit}
+      onMouseDown={() => { byKey.current = false }}
+      className={className}
+    >
+      <option value="">Select picker</option>
+      {pickers.map(p => (
+        <option key={p.id} value={p.id}>{p.name ?? p.email}</option>
+      ))}
+    </select>
+  )
+}
+
 export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = false, pickerMapOverride, onPickerChange }: Props) {
   const [isPending, startTransition] = useTransition()
   const [filters, setFilters] = useState<FilterValues>({})
@@ -292,17 +330,13 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                   <div className="space-y-2">
                     <div>
                       <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Assign Picker</p>
-                      <select
+                      <PickerSelect
                         disabled={isPending}
                         value={pickerMap[detailOrder.id] ?? ''}
-                        onChange={e => handlePickerSelect(detailOrder.id, e.target.value)}
+                        pickers={pickers}
+                        onCommit={v => handlePickerSelect(detailOrder.id, v)}
                         className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
-                      >
-                        <option value="">Select picker</option>
-                        {pickers.map(p => (
-                          <option key={p.id} value={p.id}>{p.name ?? p.email}</option>
-                        ))}
-                      </select>
+                      />
                     </div>
                   </div>
                 </div>
@@ -728,17 +762,14 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                         </div>
                       </td>
                       <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                        <select
+                        <PickerSelect
                           disabled={isPending}
                           value={pickerMap[order.id] ?? ''}
-                          onChange={e => handlePickerSelect(order.id, e.target.value)}
+                          pickers={pickers}
+                          onCommit={v => handlePickerSelect(order.id, v)}
+                          aria-label={`Picker for ${order.orderNumber}`}
                           className="rounded-md border border-border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
-                        >
-                          <option value="">Select picker</option>
-                          {pickers.map(p => (
-                            <option key={p.id} value={p.id}>{p.name ?? p.email}</option>
-                          ))}
-                        </select>
+                        />
                       </td>
                     </tr>
                   )

@@ -24,11 +24,17 @@ export function focusFirstError(root: HTMLElement): boolean {
   const invalid = root.querySelector<HTMLElement>('[aria-invalid="true"]')
   const emptyRequired = [...root.querySelectorAll<HTMLInputElement>('input[required], select[required], textarea[required]')].find((f) => !f.value)
   const message = root.querySelector<HTMLElement>('[role="alert"]')
-  // "Party name is required." on a form without required markers: the first empty field.
-  const emptyField = message && /required|missing|enter |empty|choose|select/i.test(message.textContent ?? '')
+  // "Phone is required." on a form without required markers: the field it names, else the first empty one.
+  const named = /^\s*(.+?)\s+(?:is|are)\s+(?:required|missing|needed)/i.exec(message?.textContent ?? '')?.[1]?.toLowerCase()
+  const namedField = named ? [...root.querySelectorAll('label')].map((l) => {
+    if (!l.textContent?.replace(/[*:]/g, '').trim().toLowerCase().startsWith(named)) return null
+    return (l.control as HTMLElement | null) ?? l.querySelector<HTMLElement>('input, select, textarea')
+      ?? l.parentElement?.querySelector<HTMLElement>('input:not([type="hidden"]), select, textarea') ?? null
+  }).find((f): f is HTMLElement => !!f && f.getClientRects().length > 0) : undefined
+  const emptyField = namedField ?? (message && /required|missing|enter |empty|choose|select/i.test(message.textContent ?? '')
     ? [...root.querySelectorAll<HTMLInputElement>('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([disabled]):not([readonly]), select:not([disabled]), textarea:not([disabled])')]
         .find((f) => !f.value && f.getClientRects().length > 0)
-    : undefined
+    : undefined)
   const target = invalid ?? emptyRequired ?? emptyField ?? message
   if (!target) return false
   if (target === message && !target.hasAttribute('tabindex')) target.tabIndex = -1
