@@ -162,7 +162,7 @@ export function ManualCartonPanel({ registerBoxHandler, cameraActive, onStartCam
               ) : (
                 <div className="space-y-1.5">
                   {line.options.length > 0 && <p className="text-xs text-muted-foreground">Check the suggested pairs per size against the carton, or choose another.</p>}
-                  {line.options.map((o) => (
+                  {[...line.options].sort((a, b) => Number(b.id === line.proposalId) - Number(a.id === line.proposalId)).map((o) => (
                     <label key={o.id} className="flex items-center gap-2 text-xs">
                       <input type="radio" name="manual-assortment" checked={choice === o.id} onChange={() => setChoice(o.id)} />
                       <span>

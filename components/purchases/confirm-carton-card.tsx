@@ -26,6 +26,8 @@ export function ConfirmCartonCard({ ask, waiting, busy, error, onAnswer, onSkip 
   const [segment, setSegment] = useState(ask.articleSegment ?? '')
   const [pairs, setPairs] = useState<Record<string, string>>({})
   const total = useMemo(() => Object.values(pairs).reduce((n, v) => n + (Number(v) || 0), 0), [pairs])
+  // The suggested one first.
+  const options = useMemo(() => [...ask.options].sort((a, b) => Number(b.id === ask.proposal?.id) - Number(a.id === ask.proposal?.id)), [ask])
   const chosen = typeof choice === 'number' ? ask.options.find((o) => o.id === choice) ?? null : null
   const ready = !busy && (chosen != null || (choice === 'new' && Boolean(segment) && total === ask.pairsPerCarton))
 
@@ -46,7 +48,7 @@ export function ConfirmCartonCard({ ask, waiting, busy, error, onAnswer, onSkip 
       <div className="space-y-1.5">
         <p className="text-sm font-medium">{ask.options.length ? 'Pairs in each size — check against the carton' : 'Pairs in each size'}</p>
         {ask.options.length > 0 && !ask.proposal && <p className="text-xs text-amber-700 dark:text-amber-400">More than one assortment fits. Choose the one in this carton.</p>}
-        {ask.options.map((o) => (
+        {options.map((o) => (
           <label key={o.id} className={`flex items-start gap-2 rounded-lg border p-2.5 text-xs ${choice === o.id ? 'border-foreground bg-background' : 'border-border'}`}>
             <input type="radio" name="confirm-assortment" checked={choice === o.id} onChange={() => setChoice(o.id)} disabled={busy} className="mt-0.5" />
             <span>
