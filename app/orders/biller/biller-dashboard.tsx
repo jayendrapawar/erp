@@ -1818,7 +1818,11 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   }`}>
                     {/* Article header */}
                     <div
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={isExpanded}
                       onClick={() => setExpandedArticle(isExpanded ? null : artNumber)}
+                      onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setExpandedArticle(isExpanded ? null : artNumber) } }}
                       className={`px-4 py-3.5 border-b cursor-pointer transition-colors select-none ${
                         artDone
                           ? 'border-emerald-100/60 dark:border-emerald-900/40 bg-emerald-50/20 dark:bg-emerald-950/10 hover:bg-emerald-50/40'
@@ -1926,6 +1930,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                               return (
                                 <tr
                                   key={size}
+                                  tabIndex={isClickable ? 0 : undefined}
+                                  onKeyDown={isClickable ? e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.currentTarget.click() } } : undefined}
                                   onClick={isClickable ? () => {
                                     const repItem = sizeItems.find(i => i.status !== 'out_of_stock') ?? sizeItems[0]
                                     if (canEdit) {

@@ -93,15 +93,20 @@ export function Sidebar({ sections }: { sections: SideSection[] }) {
   useShortcut([], () => setTheme(currentTheme() === 'dark' ? 'light' : 'dark'), { label: 'Switch light / dark theme', group: 'Global', global: true, action: true, hidden: true })
   useShortcut([], () => setLanguage(language === 'en' ? 'hi' : 'en'), { label: 'Switch language (English / हिंदी)', group: 'Global', global: true, action: true, hidden: true })
 
-  // Not on sign-in pages, and never in the retailer shop (/shop), even if staff are signed in.
-  if (HIDDEN_ON.includes(pathname) || pathname === '/shop' || pathname.startsWith('/shop/')) return null
-
   const toggleCollapsed = () => {
     setCollapsed((c) => {
       try { localStorage.setItem(COLLAPSE_KEY, c ? '0' : '1') } catch { /* this visit only */ }
       return !c
     })
   }
+  // Computers only (the menu is hidden on phones, so the shortcut is too).
+  useShortcut('mod+b', () => { if (!window.matchMedia('(min-width: 768px)').matches) return false; toggleCollapsed() }, {
+    label: 'Make the menu narrow / wide', group: 'Global', global: true, action: true,
+    enabled: !(HIDDEN_ON.includes(pathname) || pathname === '/shop' || pathname.startsWith('/shop/')),
+  })
+
+  // Not on sign-in pages, and never in the retailer shop (/shop), even if staff are signed in.
+  if (HIDDEN_ON.includes(pathname) || pathname === '/shop' || pathname.startsWith('/shop/')) return null
   const onPath = (href: string) => { const p = href.split('#')[0]; return pathname === p || pathname.startsWith(`${p}/`) }
   const childActive = (l: SideLink) => l.children?.find((c) => c.href.split('#')[1] === hash && onPath(c.href))
   const letters = user ? initials(user.name) : ''

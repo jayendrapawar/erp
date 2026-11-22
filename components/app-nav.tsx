@@ -21,9 +21,11 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
   const info = u ? { name: u.name, roleLabel: u.roles.map((r) => ROLE_LABELS[r]).join(', ') || 'No role yet' } : null
   return (
     <SessionUserProvider user={info}>
+      {/* First Tab stop on every page (keyboard): jump past the menu. */}
+      <a href="#main" className="skip-link rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg">Skip to content</a>
       <div className="md:flex md:min-h-dvh">
         {u && <Sidebar sections={sections} />}
-        <div className="min-w-0 flex-1">{children}</div>
+        <div id="main" tabIndex={-1} className="min-w-0 flex-1 outline-none">{children}</div>
       </div>
       {u && <BottomNav items={items} />}
       {u && <KeyboardHelp />}

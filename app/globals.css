@@ -176,13 +176,21 @@
   .no-scrollbar::-webkit-scrollbar { display: none; }
 }
 
-/* Keyboard (docs/architecture/keyboard.md). The highlighted row of a list (lib/shortcuts/list.ts):
-   real focus, shown only for keyboard use (:focus-visible), in both themes. */
-@layer base {
-  [data-list-row]:focus { outline: none; }
-  [data-list-row]:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: -2px;
-    background-color: color-mix(in oklab, var(--ring) 14%, transparent);
-  }
+/* Keyboard (docs/architecture/keyboard.md). Not in a layer on purpose: it must win over the
+   "focus:outline-none" utilities many controls carry. Keyboard focus only (:focus-visible, not a
+   mouse click on a button), the --ring colour of each theme (light and dark). Controls that already
+   draw their own focus ring (focus:ring / focus-visible:ring) keep it. */
+:where(a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"]), [role="button"], [role="tab"], [role="menuitem"], [contenteditable="true"]):focus-visible:not([data-list-row]):not([class*="focus:ring"]):not([class*="focus-visible:ring"]) {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
+/* The highlighted row of a list (lib/shortcuts/list.ts): real focus, inside the row. */
+[data-list-row]:focus { outline: none; }
+[data-list-row]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+  background-color: color-mix(in oklab, var(--ring) 14%, transparent);
+}
+/* "Skip to content": the first Tab stop, shown only when it has the focus. */
+.skip-link { position: fixed; left: 12px; top: -48px; z-index: 100; transition: top 0.1s; }
+.skip-link:focus { top: 12px; }
