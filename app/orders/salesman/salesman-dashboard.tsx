@@ -3,13 +3,18 @@
 import { sizeWithCode } from '@/lib/orders/size-label'
 import { useState, useTransition, useRef, useEffect, useMemo, useId, useCallback, forwardRef, useImperativeHandle, Fragment } from 'react'
 import { useAutoRefresh } from '@/lib/use-auto-refresh'
-import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
+import { StatusPill, fmt, PageHeader, StatButton, SegTabs, SidePanel, isInProgress, type SegTab } from '../_components/shared'
 import { createOrder, updateOrder, cancelOrder, getOlderSalesmanOrders, getSalesmanOrderWithItems, salesmanAssignPicker } from '@/app/actions/orders'
 import { PageNav } from '@/components/page-nav'
+import { useShowMore } from '@/components/show-more'
 import { fuzzyFilter } from '@/lib/fuzzy'
 import type { ArticleDetail, CatalogueData } from '@/app/actions/catalogue'
 import { useCatalogueCache } from '@/lib/use-catalogue-cache'
 import type { OrderSet } from '@/app/actions/sets'
+import {
+  deleteDraft, draftArticles, draftHasContent, draftPairs, draftStorageKey, readDrafts, saveDraft,
+  type OrderDraft, type OrderLine, type SizeEntry,
+} from '@/lib/orders/drafts'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -34,6 +39,8 @@ const EDITABLE_STATUSES = ['pending', 'assigned', 'packed', 'billed']
 interface Props {
   orders: ExistingOrder[]
   userName: string
+  /** Whose drafts on this phone (falls back to the name). */
+  userId?: string
   embedded?: boolean
   catalogue: CatalogueData
   sets: OrderSet[]
@@ -44,20 +51,8 @@ interface Props {
 type ShopkeeperResult = CatalogueData['vendors'][number]
 type ArticleResult = { artNumber: string }
 
-// One line in the current order cart (article + color + per-size quantities)
-interface OrderLine {
-  id: string // local uuid for stable keys
-  articleId: number
-  artNumber: string
-  colorId: number
-  colorName: string
-  colorHex: string | null
-  sizes: SizeEntry[]
-  quantities: Record<string, number> // size key → qty (key = size, or "CODE:size" when a colour spans several codes)
-}
-
-/** A size of a colour. `key` is "CODE:size" when one colour spans several article codes (SS-101). */
-type SizeEntry = { id: number; sizeLabel: string; sortOrder: number; articleId?: number; artCode?: string; key?: string }
+// OrderLine (article + colour + per-size quantities; size key = size, or "CODE:size" when a colour
+// spans several codes) and SizeEntry live in lib/orders/drafts.ts, shared with the drafts.
 const sizeKey = (s: SizeEntry) => s.key ?? s.sizeLabel
 const isMultiCode = (sizes: SizeEntry[]) => sizes.some(s => sizeKey(s) !== s.sizeLabel)
 
@@ -187,7 +182,8 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
     } else if (e.key === 'ArrowDown') {
       e.preventDefault()
       setActiveIdx(i => Math.max(i - 1, 0))
-    } else if (e.key === 'Enter') {
+    } else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+      // Ctrl+Enter is left to the page shortcut (create the order).
       e.preventDefault()
       const item = displayedResults[activeIdx]
       if (item) { onSelect(item); setOpen(false); inputRef.current?.blur() }
@@ -389,6 +385,9 @@ interface SizeMatrixProps {
 
 export interface SizeMatrixHandle { focus: () => void }
 
+// The New Order keyboard flow: keys the focused control handles itself (search boxes, colour chips,
+// size matrix, Next Article / Add buttons). Listed in the global "?" cheat sheet from the registry;
+// Ctrl+Enter (create the order) is a real shortcut registered below.
 const SHORTCUTS: [string, string][] = [
   ['Enter', 'Go to the next step: vendor → article → colour → sizes'],
   ['Enter on sizes', 'Next size; after the last size: go to Next Article / Add to Order'],
@@ -730,7 +729,21 @@ interface DetailItem {
   status: string
 }
 
-export function SalesmanDashboard({ orders: recentOrders, userName, embedded, catalogue: serverCatalogue, sets = [], pickers = [] }: Props) {
+type View = 'list' | 'new' | 'detail' | 'print'
+/** All Orders filter: one status, or the "In progress" group (same rule as its card). */
+type StatusFilter = 'all' | 'pending' | 'in_progress' | 'dispatched' | 'delivered' | 'cancelled'
+const STATUS_CHIPS: { value: StatusFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'in_progress', label: 'In progress' },
+  { value: 'dispatched', label: 'Dispatched' },
+  { value: 'delivered', label: 'Delivered' },
+  { value: 'cancelled', label: 'Cancelled' },
+]
+const matchesStatus = (status: string, f: StatusFilter) =>
+  f === 'all' ? true : f === 'in_progress' ? isInProgress(status) : status === f
+
+export function SalesmanDashboard({ orders: recentOrders, userName, userId, embedded, catalogue: serverCatalogue, sets = [], pickers = [] }: Props) {
   // The page sends open orders + the last 60 days (max 2000). "Load older" adds 100 at a time
   // (keyset after the oldest shown); repeats are dropped, so the list never shows an order twice.
   const [older, setOlder] = useState<ExistingOrder[]>([])
@@ -774,7 +787,7 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
   // then silently hydrates from Cache API / re-fetches in background
   const catalogue = useCatalogueCache(serverCatalogue)
 
-  const [view, setView] = useState<'list' | 'new' | 'detail' | 'print'>('new')
+  const [view, setView] = useState<View>('new')
 
   // ── Auto-refresh (All Orders stays live) ──
   const [lastRefreshed, setLastRefreshed] = useState<Date>(() => new Date())
@@ -793,8 +806,9 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
   const [detailError, setDetailError] = useState('')
 
   // ── Filter + sort state ──
-  const [filterStatus, setFilterStatus] = useState<string>('all')
+  const [filterStatus, setFilterStatus] = useState<StatusFilter>('all')
   const [filterSalesman, setFilterSalesman] = useState<string>(userName || 'all')
+  const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'order'>('date-desc')
 
   // ── SizeMatrix reset key — increment to force SizeMatrix remount after Add to Order ──
@@ -916,6 +930,46 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+
+  // ── Drafts (this phone only, lib/orders/drafts.ts) ──
+  // A new order is saved as a draft on every change, so leaving New Order (or the app) never loses
+  // it. Editing an existing order is never a draft. Creating the order removes its draft.
+  const draftKey = draftStorageKey(userId || userName)
+  const [drafts, setDrafts] = useState<OrderDraft[]>([])
+  const draftIdRef = useRef<string | null>(null)
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null)
+  const [openDraftId, setOpenDraftId] = useState<string | null>(null)
+  const [draftsOpen, setDraftsOpen] = useState(false)
+  const [draftStoreFailed, setDraftStoreFailed] = useState(false)
+  const [deleteDraftId, setDeleteDraftId] = useState<string | null>(null)
+  const [discardOpen, setDiscardOpen] = useState(false)
+  // Read after the first render (the server has no localStorage).
+  useEffect(() => { setDrafts(readDrafts(draftKey)) }, [draftKey])
+
+  useEffect(() => {
+    if (editingOrderId != null) return
+    if (skipSaveRef.current) { skipSaveRef.current = false; return }
+    const id = draftIdRef.current
+    if (!draftHasContent({ vendor: selectedSk, lines })) {
+      // Everything taken out of an open draft: the draft goes too.
+      if (id) { setDrafts(deleteDraft(draftKey, id)); draftIdRef.current = null; setOpenDraftId(null); setDraftSavedAt(null) }
+      return
+    }
+    const draft: OrderDraft = {
+      id: id ?? uid(),
+      savedAt: Date.now(),
+      vendor: selectedSk ? { id: selectedSk.id, name: selectedSk.name, code: selectedSk.code, phone: selectedSk.phone, address: selectedSk.address } : null,
+      lines,
+      notes,
+    }
+    const next = saveDraft(draftKey, draft)
+    if (!next) { setDraftStoreFailed(true); return }
+    setDraftStoreFailed(false)
+    draftIdRef.current = draft.id
+    setOpenDraftId(draft.id)
+    setDraftSavedAt(draft.savedAt)
+    setDrafts(next)
+  }, [selectedSk, lines, notes, editingOrderId, draftKey])
 
   // ── Preloaded catalogue lookup map (artNumber → ArticleDetail) ──
   const artCatalogueMap = useMemo(() => {
@@ -1044,7 +1098,6 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
   /** Esc: next article without adding what is typed for this one. */
   function skipArticle() {
     setArtQuery('')
-    setArtResults([])
     setSelectedArt(null)
     setSelectedColorId(null)
     setColorQuantities({})
@@ -1086,7 +1139,6 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
 
   function clearArticle() {
     setArtQuery('')
-    setArtResults([])
     setSelectedArt(null)
     setSelectedColorId(null)
     setColorQuantities({})
@@ -1221,7 +1273,6 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
 
     // Clear article and focus the search input
     setArtQuery('')
-    setArtResults([])
     setSelectedArt(null)
     setSelectedColorId(null)
     setColorQuantities({})
@@ -1269,7 +1320,11 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
   }, [])
 
   // ── Reset everything ──
+  // The open draft is only let go of here (it stays saved); deleting it is done by the caller.
   function resetForm() {
+    draftIdRef.current = null
+    setOpenDraftId(null)
+    setDraftSavedAt(null)
     setSelectedSk(null); setSkQuery('')
     clearArticle()
     setLines([]); setNotes('')
@@ -1281,6 +1336,76 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
     setDetailOrder(null)
     setDetailItems([])
     setDetailError('')
+  }
+
+  // ── Moving between tabs ──
+  // The draft left by going to another tab; New Order opens it again (an empty form otherwise).
+  const leftDraftRef = useRef<string | null>(null)
+  const skipSaveRef = useRef(false)
+
+  function goTo(next: View, filter?: StatusFilter) {
+    if (filter) setFilterStatus(filter)
+    if (next === view && next !== 'new') return
+    if (view === 'new' && next !== 'new') {
+      if (editingOrderId == null && draftIdRef.current) {
+        leftDraftRef.current = draftIdRef.current
+        setNotice('Kept in Drafts')
+      }
+      resetForm()
+    }
+    if (next === 'new' && view !== 'new' && leftDraftRef.current) {
+      const d = drafts.find(x => x.id === leftDraftRef.current)
+      leftDraftRef.current = null
+      if (d) { openDraft(d); return }
+    }
+    if (next === 'print') { setPrintSelectedIds(new Set()); setPrintItemsMap({}) }
+    setView(next)
+  }
+
+  /** Put a draft back into the New Order form. */
+  function openDraft(d: OrderDraft) {
+    resetForm()
+    const vendor = d.vendor
+      ? (catalogue.vendors.find(v => v.name === d.vendor!.name) ?? (d.vendor as ShopkeeperResult))
+      : null
+    skipSaveRef.current = true // opening is not a change: keep its saved time
+    setSelectedSk(vendor)
+    setSkQuery(vendor?.name ?? '')
+    setLines(d.lines)
+    setNotes(d.notes)
+    draftIdRef.current = d.id
+    setOpenDraftId(d.id)
+    setDraftSavedAt(d.savedAt)
+    leftDraftRef.current = null
+    setView('new')
+  }
+
+  /** "Save draft": it is already saved — keep it in Drafts and start a fresh order here. */
+  function handleSaveDraft() {
+    leftDraftRef.current = null
+    resetForm()
+    setDraftsOpen(false)
+    setNotice('Draft saved · new order started')
+    setView('new')
+    setTimeout(() => (hasKeyboard() ? skSearchRef.current?.focus() : undefined), 50)
+  }
+
+  function handleDiscardCurrent() {
+    const id = draftIdRef.current
+    resetForm()
+    if (id) setDrafts(deleteDraft(draftKey, id))
+    setDiscardOpen(false)
+    setTimeout(() => (hasKeyboard() ? skSearchRef.current?.focus() : undefined), 50)
+  }
+
+  function handleDeleteDraft() {
+    const id = deleteDraftId
+    if (!id) return
+    if (draftIdRef.current === id) resetForm()
+    if (leftDraftRef.current === id) leftDraftRef.current = null
+    setDrafts(deleteDraft(draftKey, id))
+    setDeleteDraftId(null)
+    setNotice('Draft discarded')
   }
 
   // ── Submit order (create new OR update existing) ──
@@ -1320,6 +1445,10 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
           const row = await createOrder(payload)
           keepSaved(row, userName || null)
           setNotice('Order created')
+          // Sent: its draft is done with.
+          const id = draftIdRef.current
+          if (id) setDrafts(deleteDraft(draftKey, id))
+          leftDraftRef.current = null
         }
         resetForm()
         setView('list')
@@ -1676,11 +1805,12 @@ ${bills}
   }
 
   // ── Counts for stats ──
-  const counts = {
-    total: orders.length,
-    pending: orders.filter(o => o.status === 'pending').length,
-    inProgress: orders.filter(o => !['pending', 'cancelled', 'dispatched', 'delivered'].includes(o.status)).length,
-  }
+  // Counted once per list change; the cards and the status chips show the same numbers.
+  const statusCounts = useMemo(() => {
+    const c = Object.fromEntries(STATUS_CHIPS.map(s => [s.value, 0])) as Record<StatusFilter, number>
+    for (const o of orders) for (const s of STATUS_CHIPS) if (matchesStatus(o.status, s.value)) c[s.value]++
+    return c
+  }, [orders])
 
   // ── Unique salesmen list for filter dropdown ──
   const uniqueSalesmen = useMemo(() => {
@@ -1700,18 +1830,31 @@ ${bills}
   const displayedOrders = useMemo(() => {
     let list = orders
     if (filterStatus !== 'all') {
-      list = list.filter(o => o.status === filterStatus)
+      list = list.filter(o => matchesStatus(o.status, filterStatus))
     }
-    if (filterSalesman !== 'all') {
+    if (filterSalesman !== 'all' && uniqueSalesmen.length > 1) {
       list = list.filter(o => o.salesmanName === filterSalesman)
+    }
+    const q = search.trim().toLowerCase()
+    if (q) {
+      list = list.filter(o => o.shopkeeperName.toLowerCase().includes(q) || o.orderNumber.toLowerCase().includes(q))
     }
     if (sortBy === 'date-desc') list = [...list].sort((a, b) => new Date(b.orderedAt).getTime() - new Date(a.orderedAt).getTime())
     if (sortBy === 'date-asc')  list = [...list].sort((a, b) => new Date(a.orderedAt).getTime() - new Date(b.orderedAt).getTime())
     if (sortBy === 'order')     list = [...list].sort((a, b) => a.orderNumber.localeCompare(b.orderNumber))
     return list
-  }, [orders, filterStatus, filterSalesman, sortBy])
+  }, [orders, filterStatus, filterSalesman, uniqueSalesmen, search, sortBy])
 
-  const ALL_STATUSES = ['pending', 'assigned', 'packed', 'dispatched', 'delivered', 'cancelled']
+  const TABS: SegTab<'new' | 'list' | 'print'>[] = [
+    { value: 'new', label: 'New' },
+    { value: 'list', label: 'Orders' },
+    { value: 'print', label: 'Print' },
+  ]
+  const activeTab = view === 'detail' ? 'list' : view
+  const otherDrafts = drafts.filter(d => d.id !== openDraftId)
+  const listShowing = view === 'list' || view === 'detail'
+  // Draws 100 rows at a time (filters and search still cover every order).
+  const { visible: shownOrders, more: moreOrders } = useShowMore(displayedOrders, 100, [filterStatus, filterSalesman, search, sortBy])
 
   // ─────────────────────────────────────────────────────────────────────────
   // Render
@@ -1719,153 +1862,149 @@ ${bills}
 
   return (
     <div className={embedded ? '' : 'min-h-screen bg-background'}>
-      <div className={embedded ? 'pb-32' : 'max-w-4xl mx-auto px-4 py-6 pb-32'}>
+      <div className={embedded ? 'pb-40 md:pb-28' : 'max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 pb-40 md:pb-28'}>
         {!embedded && (
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-4">
           <PageHeader title="My Orders" subtitle={`Welcome, ${userName}`} />
           <PageNav />
         </div>
         )}
 
-        <div className="grid grid-cols-3 gap-3 mb-6">
-          <StatCard label="Total" value={counts.total} />
-          <StatCard label="Pending" value={counts.pending} color="text-yellow-600 dark:text-yellow-400" />
-          <StatCard label="In Progress" value={counts.inProgress} color="text-blue-600 dark:text-blue-400" />
+        {/* Cards open their list: Pending → All Orders · Pending, In progress → All Orders · In progress. */}
+        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-3">
+          <StatButton label="All" value={statusCounts.all}
+            active={listShowing && filterStatus === 'all'} onClick={() => goTo('list', 'all')} />
+          <StatButton label="Pending" value={statusCounts.pending} color="text-yellow-600 dark:text-yellow-400"
+            active={listShowing && filterStatus === 'pending'} onClick={() => goTo('list', 'pending')} />
+          <StatButton label="In progress" value={statusCounts.in_progress} color="text-blue-600 dark:text-blue-400"
+            hint="With the picker or biller, not dispatched yet"
+            active={listShowing && filterStatus === 'in_progress'} onClick={() => goTo('list', 'in_progress')} />
         </div>
 
         {/* Tab bar */}
-        <div className="flex border-b border-border mb-6">
-          {(['list', 'new', 'print'] as const)
-            .map(t => (
-            <button key={t} type="button"
-              onClick={() => {
-                setView(t)
-                if (t === 'list') resetForm()
-                if (t === 'print') { setPrintSelectedIds(new Set()); setPrintItemsMap({}) }
-              }}
-              className={`flex-1 px-2 py-2 text-xs sm:text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
-                (view === t || (view === 'detail' && t === 'list')) ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
-              }`}>
-              {t === 'list' ? 'All Orders' : t === 'new' ? 'New Order' : 'Print Orders'}
-            </button>
-          ))}
+        <div className="mb-4">
+          <SegTabs label="Orders" tabs={TABS} active={activeTab} onChange={v => goTo(v)} />
         </div>
+
+        {/* Messages shown on every tab (saved, cancelled, draft kept…) */}
+        {notice && (
+          <p role="status" className="mb-3 text-sm font-medium text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/20 rounded-xl px-3 py-2">{`✓ ${notice}`}</p>
+        )}
 
         {/* ═══════════════════════════════════════════════════════════════
             ALL ORDERS LIST
         ════════════════════════════════════════════════════════════════ */}
         {view === 'list' && (
-          <div className="space-y-3">
-            {notice && (
-              <p role="status" className="text-sm font-medium text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/20 rounded-xl px-3 py-2">{`✓ ${notice}`}</p>
-            )}
+          <div className="space-y-2.5">
             {orderActionError && (
               <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
             )}
 
-            {/* Live refresh indicator */}
-            <LiveBadge lastRefreshed={lastRefreshed} onRefresh={refresh} />
-
-            {/* Filter + Sort bar (Compact & Sleek) */}
-            {orders.length > 0 && (
-              <div className="bg-card border border-border rounded-xl p-2.5 space-y-2 mb-3 text-xs shadow-sm">
-                {/* 1st Line: Salesman Selector (Compact & Full-width) */}
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-muted-foreground uppercase tracking-wide flex-shrink-0">Salesman:</span>
-                  <select
-                    value={filterSalesman}
-                    onChange={e => setFilterSalesman(e.target.value)}
-                    className="flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer min-w-0"
-                  >
-                    <option value="all">All Salesmen</option>
-                    {uniqueSalesmen.map(name => (
-                      <option key={name} value={name}>{name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* 2nd Line: Status (left) & Sort (right) (Compact) */}
-                <div className="flex items-center justify-between gap-4">
-                  {/* Status Filter */}
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-semibold text-muted-foreground uppercase tracking-wide flex-shrink-0">Status:</span>
-                    <select
-                      value={filterStatus}
-                      onChange={e => setFilterStatus(e.target.value)}
-                      className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer w-32 sm:w-36"
-                    >
-                      <option value="all">All Statuses</option>
-                      {ALL_STATUSES.map(s => (
-                        <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Sort Filter */}
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-semibold text-muted-foreground uppercase tracking-wide flex-shrink-0">Sort:</span>
-                    <select
-                      value={sortBy}
-                      onChange={e => setSortBy(e.target.value as typeof sortBy)}
-                      className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer w-32 sm:w-36"
-                    >
-                      <option value="date-desc">Newest first</option>
-                      <option value="date-asc">Oldest first</option>
-                      <option value="order">Order number</option>
-                    </select>
-                  </div>
-                </div>
+            {/* Search + sort on one line */}
+            <div className="flex items-center gap-2">
+              <div className="relative min-w-0 flex-1">
+                <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input type="search" value={search} onChange={e => setSearch(e.target.value)} aria-label="Search orders"
+                  placeholder="Shop or order number"
+                  className="h-10 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
+              <select value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)} aria-label="Sort"
+                className="h-10 w-[7.5rem] shrink-0 rounded-xl border border-border bg-background px-2 text-xs font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                <option value="date-desc">Newest</option>
+                <option value="date-asc">Oldest</option>
+                <option value="order">Order no.</option>
+              </select>
+            </div>
+
+            {/* Status chips — scroll sideways on a phone */}
+            <div className="-mx-3 flex gap-1.5 overflow-x-auto px-3 pb-0.5 sm:mx-0 sm:flex-wrap sm:px-0 [scrollbar-width:none]" role="group" aria-label="Status">
+              {STATUS_CHIPS.map(s => {
+                const on = filterStatus === s.value
+                return (
+                  <button key={s.value} type="button" aria-pressed={on} onClick={() => setFilterStatus(s.value)}
+                    className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition-colors ${
+                      on ? 'border-foreground bg-foreground text-background' : 'border-border bg-card text-muted-foreground hover:text-foreground'
+                    }`}>
+                    {s.label}
+                    <span className={`tabular-nums ${on ? 'opacity-70' : 'opacity-60'}`}>{statusCounts[s.value]}</span>
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Only when there is more than one salesman in the list (admin) */}
+            {uniqueSalesmen.length > 1 && (
+              <label className="flex items-center gap-2 text-xs">
+                <span className="shrink-0 font-semibold uppercase tracking-wide text-muted-foreground">Salesman</span>
+                <select value={filterSalesman} onChange={e => setFilterSalesman(e.target.value)}
+                  className="h-9 min-w-0 flex-1 rounded-lg border border-border bg-background px-2 text-xs font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                  <option value="all">All Salesmen</option>
+                  {uniqueSalesmen.map(name => <option key={name} value={name}>{name}</option>)}
+                </select>
+              </label>
             )}
+
+            <LiveBadge lastRefreshed={lastRefreshed} onRefresh={refresh} />
 
             {orders.length === 0 && (
               <div className="text-center py-12 text-muted-foreground">
                 <p className="text-sm">No open orders and none in the last 60 days.</p>
-                <button type="button" onClick={() => setView('new')}
+                <button type="button" onClick={() => goTo('new')}
                   className="mt-2 text-sm text-primary hover:underline">
                   Create your first order →
                 </button>
               </div>
             )}
             {displayedOrders.length === 0 && orders.length > 0 && (
-              <p className="text-center py-8 text-sm text-muted-foreground">No orders match this filter.</p>
+              <div className="py-8 text-center">
+                <p className="text-sm text-muted-foreground">No orders match this filter.</p>
+                {(filterStatus !== 'all' || search) && (
+                  <button type="button" onClick={() => { setFilterStatus('all'); setSearch('') }} className="mt-2 text-sm font-medium text-primary hover:underline">
+                    Show all orders
+                  </button>
+                )}
+              </div>
             )}
-            {displayedOrders.map(order => {
-              const tag = orderTag(order)
-              return (
-                <button
-                  key={order.id}
-                  type="button"
-                  onClick={() => handleViewOrder(order)}
-                  className="w-full text-left rounded-xl border border-border bg-card p-4 hover:bg-muted/30 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="font-medium text-sm">{order.shopkeeperName}</p>
-                    <StatusPill status={order.status} />
-                  </div>
-                  <div className="mt-2 flex items-center gap-2 flex-wrap">
-                    <span className="font-mono text-xs text-muted-foreground">{order.orderNumber}</span>
-                    {order.salesmanName && (
-                      <span className="text-xs text-muted-foreground">• Created by: <span className="font-medium text-foreground">{order.salesmanName}</span></span>
-                    )}
-                    {tag === 'new' && (
-                      <span className="inline-flex items-center border-l-2 border-green-500 pl-1.5 pr-1 py-px text-[10px] font-medium text-green-600 dark:text-green-400 tracking-wide">NEW</span>
-                    )}
-                    {tag === 'updated' && (
-                      <span className="inline-flex items-center border-l-2 border-blue-400 pl-1.5 pr-1 py-px text-[10px] font-medium text-blue-500 dark:text-blue-400 tracking-wide">UPDATED</span>
-                    )}
-                    <span className="text-xs text-muted-foreground">
-                      {tag === 'updated' ? fmt(order.updatedAt) : fmt(order.orderedAt)}
-                    </span>
-                  </div>
-                  {order.notes && <p className="mt-1.5 text-xs text-muted-foreground italic">{order.notes}</p>}
-                </button>
-              )
-            })}
+            <div className="space-y-2">
+              {shownOrders.map(order => {
+                const tag = orderTag(order)
+                return (
+                  <button
+                    key={order.id}
+                    type="button"
+                    onClick={() => handleViewOrder(order)}
+                    className="w-full text-left rounded-xl border border-border bg-card px-3.5 py-3 hover:bg-muted/30 active:bg-muted/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="min-w-0 flex-1 truncate font-semibold text-sm text-foreground">{order.shopkeeperName}</p>
+                      <StatusPill status={order.status} />
+                    </div>
+                    <div className="mt-1 flex items-center gap-x-2 gap-y-0.5 flex-wrap text-xs text-muted-foreground">
+                      <span className="font-mono" data-no-translate>{order.orderNumber}</span>
+                      <span aria-hidden>·</span>
+                      <span>{tag === 'updated' ? fmt(order.updatedAt) : fmt(order.orderedAt)}</span>
+                      {tag === 'new' && (
+                        <span className="rounded bg-green-100 px-1.5 py-px text-[10px] font-semibold text-green-700 dark:bg-green-900/30 dark:text-green-400">NEW</span>
+                      )}
+                      {tag === 'updated' && (
+                        <span className="rounded bg-blue-100 px-1.5 py-px text-[10px] font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">UPDATED</span>
+                      )}
+                      {uniqueSalesmen.length > 1 && order.salesmanName && (
+                        <span className="truncate">{`· ${order.salesmanName}`}</span>
+                      )}
+                    </div>
+                    {order.notes && <p className="mt-1 line-clamp-1 text-xs italic text-muted-foreground">{order.notes}</p>}
+                  </button>
+                )
+              })}
+            </div>
+            {moreOrders}
             {/* Also when the list is empty: all of a salesman's orders may be older than 60 days. */}
             {olderState !== 'done' && (
               <button type="button" onClick={loadOlder} disabled={olderState === 'loading'}
-                className="w-full rounded-xl border border-border py-2.5 text-xs font-medium text-muted-foreground hover:bg-muted disabled:opacity-60">
+                className="w-full rounded-xl border border-dashed border-border py-2.5 text-xs font-medium text-muted-foreground hover:bg-muted disabled:opacity-60">
                 {olderState === 'loading' ? 'Loading…' : olderState === 'error' ? 'Could not load — try again' : 'Load older orders'}
               </button>
             )}
@@ -2116,8 +2255,40 @@ ${bills}
             NEW ORDER FORM
         ════════════════════════════════════════════════════════════════ */}
         {view === 'new' && (
-          <form id="new-order-form" onSubmit={handleSubmit} className="space-y-4" noValidate>
-            <ShortcutGuide />
+          <form id="new-order-form" onSubmit={handleSubmit} className="space-y-3 sm:space-y-4" noValidate>
+            {/* Status line: editing / draft saved · Start over · keyboard help */}
+            <div className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1">
+              {editingOrderId != null ? (
+                <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">
+                  {`Editing order ${orders.find(o => o.id === editingOrderId)?.orderNumber ?? ''}`.trim()}
+                </span>
+              ) : draftSavedAt != null ? (
+                <span className="rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300" role="status">
+                  {`Draft · saved ${new Date(draftSavedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`}
+                </span>
+              ) : (
+                <span className="text-xs text-muted-foreground">Saved as a draft while you work</span>
+              )}
+              {draftStoreFailed && editingOrderId == null && (
+                <span className="text-xs font-medium text-red-600 dark:text-red-400">This phone could not save the draft</span>
+              )}
+              <div className="ml-auto flex items-center gap-2">
+                {editingOrderId == null && (selectedSk || lines.length > 0) && (
+                  <button type="button" onClick={() => setDiscardOpen(true)}
+                    className="h-8 rounded-lg px-2 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+                    Start over
+                  </button>
+                )}
+                {editingOrderId == null && (
+                  <button type="button" onClick={() => setDraftsOpen(true)}
+                    className="flex h-8 items-center gap-1.5 rounded-lg border border-border px-2.5 text-xs font-semibold hover:bg-muted">
+                    Drafts
+                    {otherDrafts.length > 0 && <span className="rounded-full bg-primary/15 px-1.5 text-[10px] font-bold text-primary">{otherDrafts.length}</span>}
+                  </button>
+                )}
+                <ShortcutGuide />
+              </div>
+            </div>
 
             {/* ── 1. SHOPKEEPER ── */}
             <section aria-labelledby="sk-heading" className="rounded-2xl border border-border bg-card">
@@ -2584,20 +2755,26 @@ ${bills}
 
       {/* ── Sticky bottom actions (new order only) ── */}
       {view === 'new' && (
-        <div className="fixed bottom-0 left-0 right-0 z-20 bg-background/95 backdrop-blur border-t border-border pb-safe">
-          <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2.5 sm:py-3 flex gap-2 items-center">
-            {lines.length > 0 && (
-              <div className="flex gap-2 sm:gap-4 mr-auto text-xs sm:text-sm min-w-0 shrink">
-                <span className="text-muted-foreground whitespace-nowrap">{lines.length} line{lines.length !== 1 ? 's' : ''}</span>
-                <span className="font-semibold text-foreground whitespace-nowrap">{totalPairs} pairs</span>
-              </div>
+        // Sits above the phone's bottom menu (z-40 there), at the very bottom from md up.
+        <div className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] left-0 right-0 z-30 bg-background/95 backdrop-blur border-t border-border md:bottom-0 md:pb-[env(safe-area-inset-bottom)]">
+          <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2 sm:py-3 flex gap-2 items-center">
+            <div className="mr-auto flex min-w-0 shrink flex-col text-xs leading-tight sm:flex-row sm:gap-3 sm:text-sm">
+              <span className="font-semibold text-foreground whitespace-nowrap tabular-nums">{`${totalPairs} pairs`}</span>
+              <span className="text-muted-foreground whitespace-nowrap">{`${lines.length} line${lines.length !== 1 ? 's' : ''}`}</span>
+            </div>
+            {editingOrderId != null ? (
+              <button type="button" onClick={() => goTo('list')}
+                className="h-11 shrink-0 rounded-xl border border-border px-3 sm:px-5 text-sm font-medium hover:bg-muted transition-colors">
+                Cancel
+              </button>
+            ) : (
+              <button type="button" onClick={handleSaveDraft} disabled={!(selectedSk || lines.length > 0) || draftStoreFailed}
+                className="h-11 shrink-0 rounded-xl border border-border px-3 sm:px-5 text-sm font-medium hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                Save draft
+              </button>
             )}
-            <button type="button" onClick={() => { setView('list'); resetForm() }}
-              className="shrink-0 rounded-xl border border-border px-3 sm:px-5 py-2.5 text-sm font-medium hover:bg-muted transition-colors">
-              Cancel
-            </button>
             <button ref={createOrderRef} type="submit" form="new-order-form" disabled={!canSubmit}
-              className="shrink-0 rounded-xl bg-primary px-4 sm:px-6 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              className="h-11 shrink-0 rounded-xl bg-primary px-4 sm:px-6 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               {isPending ? (editingOrderId != null ? 'Saving…' : 'Creating…') : (editingOrderId != null ? 'Save Changes' : 'Create Order')}
             </button>
           </div>
@@ -2614,7 +2791,7 @@ ${bills}
           (s, o) => s + (printItemsMap[o.id] ?? []).reduce((ss, i) => ss + i.quantityOrdered, 0), 0
         )
         return (
-          <div className="fixed bottom-0 left-0 right-0 z-20 bg-background/95 backdrop-blur-sm border-t border-border">
+          <div className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] left-0 right-0 z-30 bg-background/95 backdrop-blur-sm border-t border-border md:bottom-0">
             <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2.5 flex items-center gap-3">
               {/* Left stat pills — only shown when something is selected */}
               {selectedOrders.length > 0 && (
@@ -2974,6 +3151,65 @@ ${bills}
           onConfirm={confirmApplySet}
         />
       )}
+
+      {/* ── Drafts panel (same pattern as Direct Billing's draft bills) ── */}
+      {draftsOpen && (
+        <SidePanel title="Draft orders" onClose={() => setDraftsOpen(false)}>
+          <p className="mb-4 text-sm text-muted-foreground">Orders that were started and not created. Saved on this phone as you work; not sent to the warehouse.</p>
+          {openDraftId != null && (
+            <div className="mb-3 rounded-xl border-2 border-primary/60 px-3 py-2.5">
+              <p className="truncate text-sm font-semibold"><span data-no-translate>{selectedSk?.name || 'No vendor yet'}</span></p>
+              <p className="text-xs text-muted-foreground">{`Open now · ${draftArticles({ lines })} article(s) · ${totalPairs} pairs`}</p>
+              <button type="button" onClick={handleSaveDraft}
+                className="mt-2 h-9 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-muted">
+                Start a new order (keep this as draft)
+              </button>
+            </div>
+          )}
+          {otherDrafts.length === 0 && <p className="text-sm text-muted-foreground">No other saved drafts.</p>}
+          {otherDrafts.length > 0 && (
+            <ul className="divide-y divide-border rounded-xl border border-border">
+              {otherDrafts.map(d => (
+                <li key={d.id} className="flex items-center gap-2 px-3 py-2.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium"><span data-no-translate>{d.vendor?.name || 'No vendor yet'}</span></p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {`${draftArticles(d)} article(s) · ${draftPairs(d)} pairs · ${fmt(new Date(d.savedAt))}`}
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => { setDraftsOpen(false); openDraft(d) }}
+                    className="h-9 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground">Open</button>
+                  <button type="button" onClick={() => setDeleteDraftId(d.id)}
+                    className="h-9 rounded-lg border border-border px-3 text-xs text-destructive hover:bg-muted">Discard</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SidePanel>
+      )}
+
+      {/* ── Drafts: start over / delete ── */}
+      {discardOpen && (
+        <ConfirmDialog
+          title="Start over?"
+          message="This order and its draft will be removed from this phone."
+          confirmLabel="Start over"
+          onCancel={() => setDiscardOpen(false)}
+          onConfirm={handleDiscardCurrent}
+        />
+      )}
+      {deleteDraftId != null && (() => {
+        const d = drafts.find(x => x.id === deleteDraftId)
+        return (
+          <ConfirmDialog
+            title="Discard this draft?"
+            message={<><strong>{d?.vendor?.name ?? 'No vendor yet'}</strong>{d ? ` · ${draftPairs(d)} pairs` : ''}<br />This cannot be undone.</>}
+            confirmLabel="Discard"
+            onCancel={() => setDeleteDraftId(null)}
+            onConfirm={handleDeleteDraft}
+          />
+        )
+      })()}
 
       {/* ── Cancel order confirmation ── */}
       {cancelOrderId != null && (() => {

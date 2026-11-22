@@ -24,6 +24,7 @@ export default async function SalesmanPage() {
     <SalesmanDashboard
       orders={myOrders}
       userName={sessionUser?.name ?? ''}
+      userId={me.id}
       catalogue={catalogue}
       sets={sets}
       pickers={pickers}

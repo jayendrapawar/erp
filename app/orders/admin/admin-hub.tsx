@@ -346,7 +346,7 @@ export function AdminHub({
         <AutoRefreshContext.Provider value={refreshOpenTab}>
         {activeTab === 'salesman' && tabBody('salesman', d => (
           <WithCatalogue>{catalogue => (
-            <SalesmanDashboard orders={d.salesmanOrders} userName={adminName} embedded catalogue={catalogue} sets={d.sets} pickers={d.pickers_list} />
+            <SalesmanDashboard orders={d.salesmanOrders} userName={adminName} userId={adminId} embedded catalogue={catalogue} sets={d.sets} pickers={d.pickers_list} />
           )}</WithCatalogue>
         ))}
 
