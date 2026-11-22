@@ -2,7 +2,7 @@
 
 import { assignBillNo, stampBillLineHsn } from '@/lib/billing/bill-number'
 import { db } from '@/lib/db'
-import { orders, orderItems, billLines, user, retailers } from '@/lib/db/schema'
+import { orders, orderItems, billLines, retailers } from '@/lib/db/schema'
 import type { OrderStatus } from '@/lib/db/schema'
 import { eq, desc, inArray, sql, and, ilike, gte, lte } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
@@ -10,6 +10,7 @@ import { requireAnyRole } from '@/lib/authz'
 import type { Role } from '@/lib/permissions'
 import type { Tx } from '@/lib/db/types'
 import { releaseOrderScans } from '@/lib/billing/bill-stock'
+import { olderOrders, recentOrders, type OrderScope } from '@/lib/orders/order-list'
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -133,43 +134,28 @@ export async function updateOrder(orderId: number, input: CreateOrderInput) {
   revalidatePath('/orders/salesman')
 }
 
-export async function getSalesmanOrders() {
-  await requireRole('salesman', 'admin', 'picker', 'dispatcher', 'accountant')
-  return db
-    .select({
-      id: orders.id,
-      orderNumber: orders.orderNumber,
-      shopkeeperName: orders.shopkeeperName,
-      shopkeeperAddress: orders.shopkeeperAddress,
-      status: orders.status,
-      notes: orders.notes,
-      orderedAt: orders.orderedAt,
-      updatedAt: orders.updatedAt,
-      salesmanName: user.name,
-    })
-    .from(orders)
-    .leftJoin(user, eq(orders.salesmanId, user.id))
-    .orderBy(desc(orders.orderedAt))
+/** Admin and accountant see every salesman's orders; anyone else only their own (owner, 22 Nov 2026). */
+function orderScope(u: { id: string; roles: Role[] }): OrderScope {
+  return u.roles.includes('admin') || u.roles.includes('accountant') ? { all: true } : { salesmanId: u.id }
 }
 
-/** Admin/accountant: returns ALL orders regardless of salesmanId. */
+/** Salesman screen: own orders (admin/accountant: all) — open + last 60 days, max 2000. One query. */
+export async function getSalesmanOrders() {
+  const u = await requireRole('salesman', 'admin', 'picker', 'dispatcher', 'accountant')
+  return recentOrders(db, orderScope(u))
+}
+
+/** Admin/accountant: ALL salesmen's orders — open + last 60 days, max 2000. One query. */
 export async function getAllSalesmanOrders() {
   await requireRole('admin', 'accountant')
-  return db
-    .select({
-      id: orders.id,
-      orderNumber: orders.orderNumber,
-      shopkeeperName: orders.shopkeeperName,
-      shopkeeperAddress: orders.shopkeeperAddress,
-      status: orders.status,
-      notes: orders.notes,
-      orderedAt: orders.orderedAt,
-      updatedAt: orders.updatedAt,
-      salesmanName: user.name,
-    })
-    .from(orders)
-    .leftJoin(user, eq(orders.salesmanId, user.id))
-    .orderBy(desc(orders.orderedAt))
+  return recentOrders(db, { all: true })
+}
+
+/** "Load older": the next 100 orders older than `beforeId` (null = from the 60-day line), same who-sees-what. One query. */
+export async function getOlderSalesmanOrders(beforeId: number | null) {
+  const u = await requireRole('salesman', 'admin', 'picker', 'dispatcher', 'accountant')
+  if (beforeId != null && (!Number.isInteger(beforeId) || beforeId <= 0)) throw new Error('Invalid request.')
+  return olderOrders(db, orderScope(u), beforeId)
 }
 
 export async function getSalesmanOrderWithItems(orderId: number) {

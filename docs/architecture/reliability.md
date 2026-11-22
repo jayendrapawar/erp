@@ -19,3 +19,9 @@ including Server Actions issues that applied to this app).
 - Lists that can grow: limit in SQL, and draw with `useShowMore` or pages.
 - Design for the database sleeping (Neon free plan, 5 min): first request after a pause pays ~1–3 s.
   Measured 22 Nov from India on the dev branch: connect 1.7 s asleep vs 0.5 s awake (+ network).
+
+## Orders speed (22 Nov 2026)
+
+| Change | Queries per action, before → after | Notes |
+|---|---|---|
+| Salesman order lists capped (`lib/orders/order-list.ts`) | 1 → 1, but every order ever → open orders + delivered/cancelled of the last 60 days, max 2000 | Salesman page and the admin "Salesman" tab. **A salesman sees only his own orders** (owner, 22 Nov 2026); admin and accountant see all. "Load older orders" fetches 100 more per press (keyset on orderedAt, id), also when the list is empty, so no history is lost. |

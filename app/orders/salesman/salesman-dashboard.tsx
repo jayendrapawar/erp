@@ -5,7 +5,7 @@ import { useState, useTransition, useRef, useEffect, useMemo, useId, useCallback
 import { useRouter } from 'next/navigation'
 import { useAutoRefresh } from '@/lib/use-auto-refresh'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
-import { createOrder, updateOrder, cancelOrder, getSalesmanOrderWithItems, salesmanAssignPicker } from '@/app/actions/orders'
+import { createOrder, updateOrder, cancelOrder, getOlderSalesmanOrders, getSalesmanOrderWithItems, salesmanAssignPicker } from '@/app/actions/orders'
 import { PageNav } from '@/components/page-nav'
 import { fuzzyFilter } from '@/lib/fuzzy'
 import type { ArticleDetail, CatalogueData } from '@/app/actions/catalogue'
@@ -731,7 +731,30 @@ interface DetailItem {
   status: string
 }
 
-export function SalesmanDashboard({ orders, userName, embedded, catalogue: serverCatalogue, sets = [], pickers = [] }: Props) {
+export function SalesmanDashboard({ orders: recentOrders, userName, embedded, catalogue: serverCatalogue, sets = [], pickers = [] }: Props) {
+  // The page sends open orders + the last 60 days (max 2000). "Load older" adds 100 at a time
+  // (keyset after the oldest shown); repeats are dropped, so the list never shows an order twice.
+  const [older, setOlder] = useState<ExistingOrder[]>([])
+  const [olderState, setOlderState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
+  const orders = useMemo(() => {
+    const seen = new Set(recentOrders.map(o => o.id))
+    return [...recentOrders, ...older.filter(o => !seen.has(o.id))]
+  }, [recentOrders, older])
+  const loadOlder = useCallback(async () => {
+    // Continue after the oldest order that is closed or recent (or already loaded as older). An open
+    // order older than 60 days is on the first page too, but starting after it would skip history.
+    const line = Date.now() - 60 * 86_400_000
+    const from = [...recentOrders.filter(o => ['delivered', 'cancelled'].includes(o.status) || new Date(o.orderedAt).getTime() >= line), ...older]
+      .sort((a, b) => new Date(a.orderedAt).getTime() - new Date(b.orderedAt).getTime() || a.id - b.id)[0]
+    setOlderState('loading')
+    try {
+      const page = await getOlderSalesmanOrders(from?.id ?? null)
+      setOlder(prev => [...prev, ...page])
+      setOlderState(page.length < 100 ? 'done' : 'idle')
+    } catch {
+      setOlderState('error')
+    }
+  }, [recentOrders, older])
   // Use cache-first catalogue: returns serverCatalogue immediately on first render,
   // then silently hydrates from Cache API / re-fetches in background
   const catalogue = useCatalogueCache(serverCatalogue)
@@ -1778,7 +1801,7 @@ ${bills}
 
             {orders.length === 0 && (
               <div className="text-center py-12 text-muted-foreground">
-                <p className="text-sm">No orders yet.</p>
+                <p className="text-sm">No open orders and none in the last 60 days.</p>
                 <button type="button" onClick={() => setView('new')}
                   className="mt-2 text-sm text-primary hover:underline">
                   Create your first order →
@@ -1820,6 +1843,14 @@ ${bills}
                 </button>
               )
             })}
+            {/* Also when the list is empty: all of a salesman's orders may be older than 60 days. */}
+            {olderState !== 'done' && (
+              <button type="button" onClick={loadOlder} disabled={olderState === 'loading'}
+                className="w-full rounded-xl border border-border py-2.5 text-xs font-medium text-muted-foreground hover:bg-muted disabled:opacity-60">
+                {olderState === 'loading' ? 'Loading…' : olderState === 'error' ? 'Could not load — try again' : 'Load older orders'}
+              </button>
+            )}
+            {olderState === 'done' && <p className="text-center text-xs text-muted-foreground">No older orders.</p>}
           </div>
         )}
 
