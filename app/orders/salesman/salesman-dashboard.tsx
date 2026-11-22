@@ -2,7 +2,6 @@
 
 import { sizeWithCode } from '@/lib/orders/size-label'
 import { useState, useTransition, useRef, useEffect, useMemo, useId, useCallback, forwardRef, useImperativeHandle, Fragment } from 'react'
-import { useRouter } from 'next/navigation'
 import { useAutoRefresh } from '@/lib/use-auto-refresh'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
 import { createOrder, updateOrder, cancelOrder, getOlderSalesmanOrders, getSalesmanOrderWithItems, salesmanAssignPicker } from '@/app/actions/orders'
@@ -736,10 +735,26 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
   // (keyset after the oldest shown); repeats are dropped, so the list never shows an order twice.
   const [older, setOlder] = useState<ExistingOrder[]>([])
   const [olderState, setOlderState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
+  // Orders this screen just saved, as the server returned them: shown at once, until the refreshed
+  // list (same id, same or newer update time) takes over. Never a guess — always the saved row.
+  const [saved, setSaved] = useState<ExistingOrder[]>([])
   const orders = useMemo(() => {
-    const seen = new Set(recentOrders.map(o => o.id))
-    return [...recentOrders, ...older.filter(o => !seen.has(o.id))]
-  }, [recentOrders, older])
+    const byId = new Map<number, ExistingOrder>()
+    for (const o of [...recentOrders, ...older, ...saved]) {
+      const p = byId.get(o.id)
+      if (!p || new Date(o.updatedAt).getTime() > new Date(p.updatedAt).getTime()) byId.set(o.id, o)
+    }
+    return [...byId.values()]
+  }, [recentOrders, older, saved])
+  const [notice, setNotice] = useState('')
+  useEffect(() => {
+    if (!notice) return
+    const t = setTimeout(() => setNotice(''), 3000)
+    return () => clearTimeout(t)
+  }, [notice])
+  const keepSaved = useCallback((row: ExistingOrder, salesmanName: string | null) => {
+    setSaved(prev => [...prev.filter(o => o.id !== row.id), { ...row, salesmanName: row.salesmanName ?? salesmanName }])
+  }, [])
   const loadOlder = useCallback(async () => {
     // Continue after the oldest order that is closed or recent (or already loaded as older). An open
     // order older than 60 days is on the first page too, but starting after it would skip history.
@@ -760,7 +775,6 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
   const catalogue = useCatalogueCache(serverCatalogue)
 
   const [view, setView] = useState<'list' | 'new' | 'detail' | 'print'>('new')
-  const router = useRouter()
 
   // ── Auto-refresh (All Orders stays live) ──
   const [lastRefreshed, setLastRefreshed] = useState<Date>(() => new Date())
@@ -1296,18 +1310,19 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
 
     startTransition(async () => {
       try {
+        // The saved order goes into the list at once; the action also refreshes the page (or, in the
+        // admin hub, the open tab), so no extra refresh and no waiting here.
         if (editingOrderId != null) {
-          await updateOrder(editingOrderId, payload)
-          setSuccess('Order updated!')
+          const row = await updateOrder(editingOrderId, payload)
+          keepSaved(row, orders.find(o => o.id === row.id)?.salesmanName ?? null)
+          setNotice('Order updated')
         } else {
-          await createOrder(payload)
-          setSuccess('Order created!')
+          const row = await createOrder(payload)
+          keepSaved(row, userName || null)
+          setNotice('Order created')
         }
-        setTimeout(() => {
-          resetForm()
-          router.refresh()   // re-fetch server props so orders list is up to date
-          setView('list')
-        }, 1200)
+        resetForm()
+        setView('list')
       } catch {
         setError(editingOrderId != null ? 'Failed to update order. Please try again.' : 'Failed to create order. Please try again.')
       }
@@ -1381,13 +1396,14 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
     if (cancelOrderId == null) return
     startCancelTransition(async () => {
       try {
-        await cancelOrder(cancelOrderId)
+        const row = await cancelOrder(cancelOrderId)
+        keepSaved(row, orders.find(o => o.id === row.id)?.salesmanName ?? null)
+        setNotice('Order cancelled')
         setCancelOrderId(null)
         // If we cancelled from the detail view, close it and go back to list
         setDetailOrder(null)
         setDetailItems([])
         setView('list')
-        router.refresh()
       } catch (e: unknown) {
         setOrderActionError(e instanceof Error ? e.message : 'Failed to cancel order.')
         setCancelOrderId(null)
@@ -1740,6 +1756,9 @@ ${bills}
         ════════════════════════════════════════════════════════════════ */}
         {view === 'list' && (
           <div className="space-y-3">
+            {notice && (
+              <p role="status" className="text-sm font-medium text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/20 rounded-xl px-3 py-2">{`✓ ${notice}`}</p>
+            )}
             {orderActionError && (
               <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
             )}

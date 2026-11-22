@@ -154,27 +154,29 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
     }
   }
 
+  // Assign / unassign a picker: shown at once (safe and reversible); if the server refuses, the
+  // previous picker comes back and the reason is shown (Orders speed, 22 Nov 2026).
+  const [assignError, setAssignError] = useState('')
+  function setPickerLocally(orderId: number, pickerId: string | null) {
+    setLocalPickerMap(prev => { const n = { ...prev }; if (pickerId) n[orderId] = pickerId; else delete n[orderId]; return n })
+    onPickerChange?.(orderId, pickerId)
+  }
   function handlePickerSelect(orderId: number, pickerId: string) {
-    if (pickerId) {
-      // Optimistic assign
-      setLocalPickerMap(prev => ({ ...prev, [orderId]: pickerId }))
-      onPickerChange?.(orderId, pickerId)
-      startTransition(async () => {
-        await adminAssignPicker(orderId, pickerId)
+    const before = pickerMap[orderId] ?? null
+    setAssignError('')
+    setPickerLocally(orderId, pickerId || null)
+    startTransition(async () => {
+      try {
+        if (pickerId) await adminAssignPicker(orderId, pickerId)
+        else await adminUnassignPicker(orderId)
         // Refresh local map to authoritative state (standalone page only)
-        if (!pickerMapOverride) {
-          const fresh = await getPickerAssignments()
-          setLocalPickerMap(fresh)
-        }
-      })
-    } else {
-      // Optimistic unassign
-      setLocalPickerMap(prev => { const n = { ...prev }; delete n[orderId]; return n })
-      onPickerChange?.(orderId, null)
-      startTransition(async () => {
-        await adminUnassignPicker(orderId)
-      })
-    }
+        if (pickerId && !pickerMapOverride) setLocalPickerMap(await getPickerAssignments())
+      } catch (e) {
+        setPickerLocally(orderId, before)
+        const order = orders.find(o => o.id === orderId)
+        setAssignError(`${order?.orderNumber ?? 'Order'}: ${e instanceof Error && e.message ? e.message : 'picker not changed'} — it is back as it was.`)
+      }
+    })
   }
 
   // Orders list filters (one per column; phones: Filters button).
@@ -204,6 +206,10 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
           <PageHeader title="Orders &amp; Billing" subtitle="Every order from booking to billing and dispatch" />
           <a href="/home" className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Home</a>
         </div>
+        )}
+
+        {assignError && (
+          <p role="alert" className="mb-4 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">{assignError}</p>
         )}
 
         {/* Stats */}

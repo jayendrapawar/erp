@@ -89,33 +89,41 @@ export async function createOrder(input: CreateOrderInput) {
   return order
 }
 
+/** The order as the salesman list shows it (returned by saves, so the screen shows it at once). */
+const LIST_ROW = {
+  id: orders.id, orderNumber: orders.orderNumber, shopkeeperName: orders.shopkeeperName, shopkeeperAddress: orders.shopkeeperAddress,
+  status: orders.status, notes: orders.notes, orderedAt: orders.orderedAt, updatedAt: orders.updatedAt,
+}
+
 export async function updateOrder(orderId: number, input: CreateOrderInput) {
   const u = await requireRole('salesman', 'admin')
-  const [order] = await db.select({ salesmanId: orders.salesmanId, status: orders.status })
-    .from(orders).where(eq(orders.id, orderId)).limit(1)
-  if (!order) throw new Error('Order not found')
   const userRoles = u.role.split(',').map(r => r.trim())
-  if (order.salesmanId !== u.id && !userRoles.includes('admin')) throw new Error('Forbidden')
-  if (!['pending', 'assigned', 'packed', 'billed'].includes(order.status)) throw new Error('Only pending, assigned, packed, or billed orders can be edited')
+  // Check and change in one transaction with the order row locked, so a picker packing it at the
+  // same moment cannot slip between the status check and the edit.
+  const saved = await db.transaction(async (tx) => {
+    const [order] = await tx.select({ salesmanId: orders.salesmanId, status: orders.status })
+      .from(orders).where(eq(orders.id, orderId)).limit(1).for('update')
+    if (!order) throw new Error('Order not found')
+    if (order.salesmanId !== u.id && !userRoles.includes('admin')) throw new Error('Forbidden')
+    if (!['pending', 'assigned', 'packed', 'billed'].includes(order.status)) throw new Error('Only pending, assigned, packed, or billed orders can be edited')
 
-  // Reset order to pending so it re-enters the picker queue
-  const statusPatch: Record<string, unknown> = {
-    shopkeeperName: input.shopkeeperName,
-    notes: input.notes ?? null,
-    updatedAt: sql`now()`,
-  }
-  if (['packed', 'billed'].includes(order.status)) {
-    // Send back to pending — clear picker/biller assignment so it re-queues
-    statusPatch.status = 'pending'
-    statusPatch.pickerId = null
-    statusPatch.billerId = null
-    statusPatch.packedAt = null
-    statusPatch.billedAt = null
-  }
-  // Header and replacement lines are written together or not at all.
-  await db.transaction(async (tx) => {
+    // Reset order to pending so it re-enters the picker queue
+    const statusPatch: Record<string, unknown> = {
+      shopkeeperName: input.shopkeeperName,
+      notes: input.notes ?? null,
+      updatedAt: sql`now()`,
+    }
+    if (['packed', 'billed'].includes(order.status)) {
+      // Send back to pending — clear picker/biller assignment so it re-queues
+      statusPatch.status = 'pending'
+      statusPatch.pickerId = null
+      statusPatch.billerId = null
+      statusPatch.packedAt = null
+      statusPatch.billedAt = null
+    }
+    // Header and replacement lines are written together or not at all.
     statusPatch.retailerId = await retailerIdFor(tx, input.shopkeeperName)
-    await tx.update(orders).set(statusPatch).where(eq(orders.id, orderId))
+    const [row] = await tx.update(orders).set(statusPatch).where(eq(orders.id, orderId)).returning(LIST_ROW)
     await tx.delete(orderItems).where(eq(orderItems.orderId, orderId))
     await tx.insert(orderItems).values(
       input.items.map(item => ({
@@ -127,11 +135,15 @@ export async function updateOrder(orderId: number, input: CreateOrderInput) {
         quantityOrdered: item.quantityOrdered,
       }))
     )
+    return row
   })
 
+  // Kept: the hub (/orders), admin hub and salesman page show this order; the page the user is on is
+  // re-rendered with it, the others are fresh when opened. The screen also shows `saved` at once.
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
   revalidatePath('/orders/salesman')
+  return saved
 }
 
 /** Admin and accountant see every salesman's orders; anyone else only their own (owner, 22 Nov 2026). */
@@ -175,12 +187,16 @@ export async function cancelOrder(orderId: number) {
   const userRoles = u.role.split(',').map(r => r.trim())
   if (order.salesmanId !== u.id && !userRoles.includes('admin') && !userRoles.includes('accountant')) throw new Error('Forbidden')
   if (!['pending', 'assigned'].includes(order.status)) throw new Error('Only pending or assigned orders can be cancelled')
-  await db.update(orders)
+  // The status is checked again in the UPDATE itself: an order packed in the meantime is not cancelled.
+  const [saved] = await db.update(orders)
     .set({ status: 'cancelled', updatedAt: sql`now()` })
-    .where(eq(orders.id, orderId))
+    .where(and(eq(orders.id, orderId), inArray(orders.status, ['pending', 'assigned'])))
+    .returning(LIST_ROW)
+  if (!saved) throw new Error('Only pending or assigned orders can be cancelled (it was just picked up). Reload and check.')
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
   revalidatePath('/orders/salesman')
+  return saved
 }
 
 // ── Picker actions ────────────────────────────────────────────────────────────
@@ -546,12 +562,12 @@ export async function adminUpdateOrderStatus(orderId: number, status: OrderStatu
 
 export async function salesmanAssignPicker(orderId: number, pickerId: string) {
   await requireRole('salesman', 'admin')
-  const [order] = await db.select({ status: orders.status })
-    .from(orders).where(eq(orders.id, orderId)).limit(1)
-  if (!order) throw new Error('Order not found')
-  const patch: Record<string, unknown> = { pickerId, updatedAt: sql`now()` }
-  if (order.status === 'pending') patch.status = 'assigned'
-  await db.update(orders).set(patch).where(eq(orders.id, orderId))
+  // One statement: the status is decided from the row as it is at that moment (no gap between a read
+  // and the write in which a picker could change it).
+  const [row] = await db.update(orders)
+    .set({ pickerId, status: sql`CASE WHEN ${orders.status} = 'pending' THEN 'assigned'::order_status ELSE ${orders.status} END`, updatedAt: sql`now()` })
+    .where(eq(orders.id, orderId)).returning({ id: orders.id })
+  if (!row) throw new Error('Order not found')
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
   revalidatePath('/orders/picker')
@@ -562,12 +578,12 @@ export async function adminAssignPicker(orderId: number, pickerId: string) {
   // Fetch current status so we only advance to 'assigned' from 'pending'.
   // If already 'packed', 'dispatched', etc., just update the pickerId without
   // changing status — the order is already progressing through the pipeline.
-  const [order] = await db.select({ status: orders.status })
-    .from(orders).where(eq(orders.id, orderId)).limit(1)
-  if (!order) throw new Error('Order not found')
-  const patch: Record<string, unknown> = { pickerId, updatedAt: sql`now()` }
-  if (order.status === 'pending') patch.status = 'assigned'
-  await db.update(orders).set(patch).where(eq(orders.id, orderId))
+  // One statement: the status is decided from the row as it is at that moment (no gap between a read
+  // and the write in which a picker could change it).
+  const [row] = await db.update(orders)
+    .set({ pickerId, status: sql`CASE WHEN ${orders.status} = 'pending' THEN 'assigned'::order_status ELSE ${orders.status} END`, updatedAt: sql`now()` })
+    .where(eq(orders.id, orderId)).returning({ id: orders.id })
+  if (!row) throw new Error('Order not found')
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
   revalidatePath('/orders/picker')
@@ -577,12 +593,11 @@ export async function adminUnassignPicker(orderId: number) {
   await requireRole('admin')
   // Only revert to pending if still in picker hands (pending/assigned).
   // A packed/dispatched/delivered order keeps its status when unassigning.
-  const [order] = await db.select({ status: orders.status })
-    .from(orders).where(eq(orders.id, orderId)).limit(1)
-  if (!order) throw new Error('Order not found')
-  const patch: Record<string, unknown> = { pickerId: null, updatedAt: sql`now()` }
-  if (order.status === 'assigned') patch.status = 'pending'
-  await db.update(orders).set(patch).where(eq(orders.id, orderId))
+  // One statement (see adminAssignPicker): a packed order is never sent back to pending.
+  const [row] = await db.update(orders)
+    .set({ pickerId: null, status: sql`CASE WHEN ${orders.status} = 'assigned' THEN 'pending'::order_status ELSE ${orders.status} END`, updatedAt: sql`now()` })
+    .where(eq(orders.id, orderId)).returning({ id: orders.id })
+  if (!row) throw new Error('Order not found')
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
   revalidatePath('/orders/picker')
