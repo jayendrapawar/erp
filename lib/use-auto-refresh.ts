@@ -1,7 +1,13 @@
 'use client'
 
-import { useEffect, useCallback, useRef } from 'react'
+import { createContext, useContext, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+
+/**
+ * A screen that loads its data itself (the admin Orders hub loads one tab at a time) provides its own
+ * refresh here, so embedded dashboards refresh that data instead of re-rendering the whole page.
+ */
+export const AutoRefreshContext = createContext<(() => void) | null>(null)
 
 /**
  * Polls `router.refresh()` every `intervalMs` (default 30 s) so the page
@@ -13,11 +19,13 @@ import { useRouter } from 'next/navigation'
  */
 export function useAutoRefresh(intervalMs = 30_000) {
   const router = useRouter()
+  const override = useContext(AutoRefreshContext)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const refresh = useCallback(() => {
-    router.refresh()
-  }, [router])
+    if (override) override()
+    else router.refresh()
+  }, [router, override])
 
   const start = useCallback(() => {
     if (timerRef.current) return

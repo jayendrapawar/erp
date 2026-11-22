@@ -1,7 +1,9 @@
 'use client'
 
 import { ShopOrdersPanel } from '@/components/orders/shop-orders-panel'
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { AutoRefreshContext } from '@/lib/use-auto-refresh'
+import { useCatalogueCache } from '@/lib/use-catalogue-cache'
 import { PageNav } from '@/components/page-nav'
 import { AdminDashboard } from './admin-dashboard'
 import { SalesmanDashboard } from '../salesman/salesman-dashboard'
@@ -74,18 +76,42 @@ interface Props {
   adminId: string
   isAccountant?: boolean
   userRoles?: string[]
-  stats: { total: number; pending: number; packed: number; dispatched: number; delivered: number; cancelled: number }
-  allOrders: OrderRow[]
-  pickers: Picker[]
-  salesmanOrders: SalesmanOrder[]
-  pickerQueue: QueueItem[]
-  billerOrders: any[]
-  dispatchOrders: DispatchOrder[]
-  procurementRows: ProcurementRow[]
-  catalogue: CatalogueData
-  sets: OrderSet[]
-  pickers_list: { id: string; name: string | null }[]
-  billingVendors?: BillingVendor[]
+  /** Overview tab, prepared by the page. */
+  overview: { stats: { total: number; pending: number; packed: number; dispatched: number; delivered: number; cancelled: number }; allOrders: OrderRow[]; pickers: Picker[] }
+  /** Time the page was rendered on the server: a newer one means a save re-ran it, so the open tab refetches. */
+  renderedAt: number
+}
+
+/** One tab's data as GET /api/orders/admin-tab returns it (Orders speed, 22 Nov 2026). */
+type TabData = {
+  overview: Props['overview']
+  salesman: { salesmanOrders: SalesmanOrder[]; sets: OrderSet[]; pickers_list: { id: string; name: string | null }[] }
+  picker: { pickerQueue: QueueItem[] }
+  biller: { billerOrders: any[]; billingVendors: BillingVendor[] }
+  dispatcher: { dispatchOrders: DispatchOrder[] }
+  procurement: { procurementRows: ProcurementRow[] }
+}
+type TabName = keyof TabData
+
+// JSON has no dates: turn ISO timestamps back into Date (the dashboards expect Date, as from the page).
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/
+const revive = (_k: string, v: unknown) => (typeof v === 'string' && ISO.test(v) ? new Date(v) : v)
+
+const EMPTY_CATALOGUE: CatalogueData = { vendors: [], articles: [] }
+
+/** Reference data only where it is used: the catalogue (browser cache + /api/catalogue) for Salesman and Biller. */
+function WithCatalogue({ children }: { children: (c: CatalogueData) => React.ReactNode }) {
+  const catalogue = useCatalogueCache(EMPTY_CATALOGUE)
+  return <>{children(catalogue)}</>
+}
+
+function TabSkeleton() {
+  return (
+    <div className="space-y-3 animate-pulse" aria-busy="true" aria-label="Loading">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{[0, 1, 2, 3].map(i => <div key={i} className="h-20 rounded-xl bg-muted" />)}</div>
+      {[0, 1, 2, 3, 4].map(i => <div key={i} className="h-12 rounded-xl bg-muted" />)}
+    </div>
+  )
 }
 
 // ── Grid-based tab bar ────────────────────────────────────────────────────────
@@ -170,19 +196,42 @@ export function AdminHub({
   adminId,
   isAccountant = false,
   userRoles = [],
-  stats,
-  allOrders,
-  pickers,
-  salesmanOrders,
-  pickerQueue,
-  billerOrders,
-  dispatchOrders,
-  procurementRows,
-  catalogue,
-  sets,
-  pickers_list,
-  billingVendors = [],
+  overview,
+  renderedAt,
 }: Props) {
+  // ── One tab at a time (Orders speed, 22 Nov 2026) ──
+  // Each tab's data is kept once loaded (switching back is instant) and refetched in the background
+  // whenever the tab is opened again, so it is never older than the last time it was shown.
+  const [data, setData] = useState<Partial<TabData>>({ overview })
+  const [tabError, setTabError] = useState<Partial<Record<TabName, string>>>({})
+  const seq = useRef<Partial<Record<TabName, number>>>({})
+  const fetchTab = useCallback(async (tab: TabName) => {
+    const n = (seq.current[tab] ?? 0) + 1
+    seq.current[tab] = n
+    try {
+      const res = await fetch(`/api/orders/admin-tab?tab=${tab}`, { cache: 'no-store' })
+      const text = await res.text()
+      if (seq.current[tab] !== n) return // a newer request for this tab is on its way
+      if (!res.ok) throw new Error((() => { try { return JSON.parse(text).error } catch { return '' } })() || `Error ${res.status}`)
+      const body = JSON.parse(text, revive) as TabData[typeof tab]
+      setData(d => ({ ...d, [tab]: body }))
+      setTabError(e => ({ ...e, [tab]: undefined }))
+    } catch (e) {
+      if (seq.current[tab] === n) setTabError(prev => ({ ...prev, [tab]: e instanceof Error ? e.message : 'Could not load this tab' }))
+    }
+  }, [])
+
+  // A save that re-ran the page brings new Overview data; the open tab refetches too.
+  const firstRender = useRef(true)
+  const activeTabRef = useRef('overview')
+  useEffect(() => {
+    if (firstRender.current) { firstRender.current = false; return }
+    setData(d => ({ ...d, overview }))
+    if (activeTabRef.current !== 'overview') void fetchTab(activeTabRef.current as TabName)
+  }, [renderedAt, overview, fetchTab])
+
+  const { stats, allOrders, pickers } = data.overview ?? overview
+
   // Shared picker assignment map — owned here so Overview + Picker tab stay in sync
   const [sharedPickerMap, setSharedPickerMap] = useState<Record<number, string>>(() =>
     Object.fromEntries(allOrders.filter(o => o.pickerId).map(o => [o.id, o.pickerId!]))
@@ -230,6 +279,34 @@ export function AdminHub({
     window.location.hash = tab
   }
 
+  // Opening a tab loads it (skeleton the first time) or refreshes it in the background. Overview
+  // comes with the page, so it is refetched only when opened again later.
+  const leftOverview = useRef(false)
+  useEffect(() => {
+    activeTabRef.current = activeTab
+    if (activeTab === 'overview' && !leftOverview.current) return // the page's own copy is fresh
+    leftOverview.current = true
+    void fetchTab(activeTab as TabName)
+  }, [activeTab, fetchTab])
+
+  // Embedded dashboards' refresh (salesman's 30 s auto-refresh) refetches only the open tab.
+  const refreshOpenTab = useCallback(() => { void fetchTab(activeTabRef.current as TabName) }, [fetchTab])
+
+  /** The tab's data, or a skeleton / error with retry until it arrives. */
+  function tabBody<T extends TabName>(tab: T, render: (d: TabData[T]) => React.ReactNode) {
+    const d = data[tab] as TabData[T] | undefined
+    if (d) return render(d)
+    if (tabError[tab]) {
+      return (
+        <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">
+          {`Could not load this tab: ${tabError[tab]}`}
+          <button type="button" onClick={() => void fetchTab(tab)} className="ml-3 underline">Try again</button>
+        </div>
+      )
+    }
+    return <TabSkeleton />
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-7xl mx-auto px-4 py-6">
@@ -266,28 +343,36 @@ export function AdminHub({
           />
         )}
 
-        {activeTab === 'salesman' && (
-          <SalesmanDashboard orders={salesmanOrders} userName={adminName} embedded catalogue={catalogue} sets={sets} pickers={pickers_list} />
-        )}
+        <AutoRefreshContext.Provider value={refreshOpenTab}>
+        {activeTab === 'salesman' && tabBody('salesman', d => (
+          <WithCatalogue>{catalogue => (
+            <SalesmanDashboard orders={d.salesmanOrders} userName={adminName} embedded catalogue={catalogue} sets={d.sets} pickers={d.pickers_list} />
+          )}</WithCatalogue>
+        ))}
 
-        {showPicker && activeTab === 'picker' && (
+        {showPicker && activeTab === 'picker' && tabBody('picker', d => (
           <PickerDashboard
-            queue={pickerQueue}
+            queue={d.pickerQueue}
             currentPickerId={adminId}
             embedded
             onPickerChange={handlePickerChange}
           />
-        )}
+        ))}
 
-        {showBiller && (
+        {/* Biller stays mounted once loaded (its scanner keeps its state when another tab is open). */}
+        {showBiller && (data.biller || activeTab === 'biller') && (
           <div className={activeTab === 'biller' ? '' : 'hidden'}>
-            <BillerDashboard orders={billerOrders} currentBillerId={adminId} vendors={billingVendors} articles={catalogue.articles.map(a => a.artNumber)} embedded />
+            {tabBody('biller', d => (
+              <WithCatalogue>{catalogue => (
+                <BillerDashboard orders={d.billerOrders} currentBillerId={adminId} vendors={d.billingVendors} articles={catalogue.articles.map(a => a.artNumber)} embedded />
+              )}</WithCatalogue>
+            ))}
           </div>
         )}
 
-        {showDispatcher && activeTab === 'dispatcher' && (
-          <DispatcherDashboard orders={dispatchOrders} currentDispatcherId={adminId} embedded />
-        )}
+        {showDispatcher && activeTab === 'dispatcher' && tabBody('dispatcher', d => (
+          <DispatcherDashboard orders={d.dispatchOrders} currentDispatcherId={adminId} embedded />
+        ))}
 
         {activeTab === 'procurement' && (
           <div className="rounded-xl border border-border bg-card p-4">
@@ -297,9 +382,10 @@ export function AdminHub({
                 Total pairs needed per article · colour · vendor — use these numbers to place upstream orders.
               </p>
             </div>
-            <ProcurementSummary initialRows={procurementRows} />
+            {tabBody('procurement', d => <ProcurementSummary initialRows={d.procurementRows} />)}
           </div>
         )}
+        </AutoRefreshContext.Provider>
 
       </div>
     </div>
