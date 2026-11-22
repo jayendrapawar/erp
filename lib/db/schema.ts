@@ -75,6 +75,12 @@ export const retailers = pgTable('retailers', {
   day:        text('day').notNull().default(''),
   salesman:   text('salesman').notNull().default(''),
   status:     text('status').notNull().default('active'),
+  // Payments (migration 0017): how the party is billed, credit terms, early-payment discount.
+  taxType:            text('taxType').$type<TaxType>().notNull().default('intra_state'),
+  creditLimitPaise:   bigint('creditLimitPaise', { mode: 'number' }),
+  creditDays:         integer('creditDays'),
+  earlyPayDiscountBp: integer('earlyPayDiscountBp'),
+  earlyPayDays:       integer('earlyPayDays'),
   // Retailer shop sign-in (migration 0015): phone + PIN (scrypt hash). A new PIN signs out old sessions.
   shopPhone:       text('shopPhone').notNull().default(''),
   shopPinHash:     text('shopPinHash').notNull().default(''),
@@ -705,3 +711,117 @@ export const cartonReceipts = pgTable('carton_receipts', {
 }, (t) => [
   uniqueIndex('carton_receipts_active_label').on(t.dedupeKey).where(sql`status = 'active'`),
 ])
+
+// --- Payments: party ledger (migration 0017; docs/architecture/payments.md) ---
+
+/** Within the state (CGST + SGST), outside the state (IGST), or no GST. */
+export type TaxType = 'intra_state' | 'inter_state' | 'untaxed'
+
+/** Frozen amounts of a sale bill. Amounts never change; only active → cancelled. */
+export const saleBills = pgTable('sale_bills', {
+  id:              bigserial('id', { mode: 'number' }).primaryKey(),
+  orderId:         integer('orderId').notNull().references(() => orders.id, { onDelete: 'restrict' }),
+  retailerId:      text('retailerId').references(() => retailers.id, { onDelete: 'restrict' }),
+  customerName:    text('customerName').notNull().default(''),
+  customerPhone:   text('customerPhone').notNull().default(''),
+  paidMode:        text('paidMode').$type<'cash' | 'upi'>(),
+  billNo:          text('billNo').notNull(),
+  billDate:        text('billDate').notNull(), // date, YYYY-MM-DD (IST)
+  billedAt:        timestamp('billedAt', { withTimezone: true }).notNull().defaultNow(),
+  source:          text('source').$type<'invoice' | 'direct' | 'backfill'>().notNull(),
+  taxType:         text('taxType').$type<TaxType>().notNull(),
+  totalQty:        integer('totalQty').notNull(),
+  lineDiscPct:     numeric('lineDiscPct', { precision: 5, scale: 2 }).notNull(),
+  grossPaise:      bigint('grossPaise', { mode: 'number' }).notNull(),
+  discountPct:     numeric('discountPct', { precision: 5, scale: 2 }).notNull(),
+  discountPaise:   bigint('discountPaise', { mode: 'number' }).notNull(),
+  taxablePaise:    bigint('taxablePaise', { mode: 'number' }).notNull(),
+  cgstPct:         numeric('cgstPct', { precision: 5, scale: 2 }).notNull().default('0'),
+  cgstPaise:       bigint('cgstPaise', { mode: 'number' }).notNull().default(0),
+  sgstPct:         numeric('sgstPct', { precision: 5, scale: 2 }).notNull().default('0'),
+  sgstPaise:       bigint('sgstPaise', { mode: 'number' }).notNull().default(0),
+  igstPct:         numeric('igstPct', { precision: 5, scale: 2 }).notNull().default('0'),
+  igstPaise:       bigint('igstPaise', { mode: 'number' }).notNull().default(0),
+  roundOffPaise:   integer('roundOffPaise').notNull().default(0),
+  grandTotalPaise: bigint('grandTotalPaise', { mode: 'number' }).notNull(),
+  status:          text('status').$type<'active' | 'cancelled'>().notNull().default('active'),
+  cancelledAt:     timestamp('cancelledAt', { withTimezone: true }),
+  cancelledBy:     text('cancelledBy').references(() => user.id, { onDelete: 'set null' }),
+  cancelReason:    text('cancelReason'),
+  createdBy:       text('createdBy').references(() => user.id, { onDelete: 'set null' }),
+  createdByName:   text('createdByName').notNull().default(''),
+  createdAt:       timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export type PaymentMode = 'cash' | 'upi' | 'cheque' | 'bank'
+export type PaymentStatus = 'pending' | 'active' | 'returned' | 'bounced' | 'reversed'
+
+/** Money received. A cheque is 'pending' (in hand, not counted) until deposited. */
+export const payments = pgTable('payments', {
+  id:             bigserial('id', { mode: 'number' }).primaryKey(),
+  clientId:       uuid('clientId').notNull().unique(),
+  receiptNo:      text('receiptNo').notNull().unique(),
+  retailerId:     text('retailerId').notNull().references(() => retailers.id, { onDelete: 'restrict' }),
+  receivedOn:     text('receivedOn').notNull(),
+  countedOn:      text('countedOn'),
+  mode:           text('mode').$type<PaymentMode>().notNull(),
+  amountPaise:    bigint('amountPaise', { mode: 'number' }).notNull(),
+  chequeNo:       text('chequeNo').notNull().default(''),
+  chequeBank:     text('chequeBank').notNull().default(''),
+  chequeDate:     text('chequeDate'),
+  reference:      text('reference').notNull().default(''),
+  note:           text('note').notNull().default(''),
+  source:         text('source').$type<'office' | 'salesman'>().notNull().default('office'),
+  collectedBy:    text('collectedBy').references(() => user.id, { onDelete: 'set null' }),
+  status:         text('status').$type<PaymentStatus>().notNull().default('active'),
+  countedBy:      text('countedBy').references(() => user.id, { onDelete: 'set null' }),
+  countedByName:  text('countedByName').notNull().default(''),
+  reversedAt:     timestamp('reversedAt', { withTimezone: true }),
+  reversedBy:     text('reversedBy').references(() => user.id, { onDelete: 'set null' }),
+  reversedByName: text('reversedByName').notNull().default(''),
+  reversalReason: text('reversalReason'),
+  createdBy:      text('createdBy').references(() => user.id, { onDelete: 'set null' }),
+  createdByName:  text('createdByName').notNull().default(''),
+  createdAt:      timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export type LedgerKind = 'opening' | 'bill' | 'payment' | 'charge' | 'discount' | 'adjustment' | 'reversal'
+
+/** Append-only. + = the party owes more, − = owes less. party_balances is kept by a trigger. */
+export const partyLedgerEntries = pgTable('party_ledger_entries', {
+  id:             bigserial('id', { mode: 'number' }).primaryKey(),
+  retailerId:     text('retailerId').notNull().references(() => retailers.id, { onDelete: 'restrict' }),
+  kind:           text('kind').$type<LedgerKind>().notNull(),
+  amountPaise:    bigint('amountPaise', { mode: 'number' }).notNull(),
+  entryDate:      text('entryDate').notNull(),
+  saleBillId:     bigint('saleBillId', { mode: 'number' }).references(() => saleBills.id, { onDelete: 'restrict' }),
+  paymentId:      bigint('paymentId', { mode: 'number' }).references(() => payments.id, { onDelete: 'restrict' }),
+  reversalOfId:   bigint('reversalOfId', { mode: 'number' }),
+  refNo:          text('refNo').notNull().default(''),
+  note:           text('note').notNull().default(''),
+  reason:         text('reason'),
+  idempotencyKey: text('idempotencyKey').notNull().unique(),
+  createdBy:      text('createdBy').references(() => user.id, { onDelete: 'set null' }),
+  createdByName:  text('createdByName').notNull().default(''),
+  createdAt:      timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/** Which credit pays which debit. Append-only; undo = a negative row pointing at the original. */
+export const partyAllocations = pgTable('party_allocations', {
+  id:            bigserial('id', { mode: 'number' }).primaryKey(),
+  retailerId:    text('retailerId').notNull().references(() => retailers.id, { onDelete: 'restrict' }),
+  debitEntryId:  bigint('debitEntryId', { mode: 'number' }).notNull().references(() => partyLedgerEntries.id, { onDelete: 'restrict' }),
+  creditEntryId: bigint('creditEntryId', { mode: 'number' }).notNull().references(() => partyLedgerEntries.id, { onDelete: 'restrict' }),
+  amountPaise:   bigint('amountPaise', { mode: 'number' }).notNull(),
+  reversalOfId:  bigint('reversalOfId', { mode: 'number' }),
+  method:        text('method').$type<'auto' | 'manual' | 'reversal'>().notNull(),
+  createdBy:     text('createdBy').references(() => user.id, { onDelete: 'set null' }),
+  createdAt:     timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/** Read-only from the application: written only by the party_ledger_entries trigger. */
+export const partyBalances = pgTable('party_balances', {
+  retailerId:   text('retailerId').primaryKey().references(() => retailers.id, { onDelete: 'restrict' }),
+  balancePaise: bigint('balancePaise', { mode: 'number' }).notNull().default(0),
+  updatedAt:    timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+})

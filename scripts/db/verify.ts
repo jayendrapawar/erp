@@ -38,6 +38,25 @@ async function main() {
     check(legacyQty === importedQty, 'legacy quantity fully imported', `${legacyQty} legacy vs ${importedQty} imported (differences are listed by the import script)`)
     check(Number(await one(`select count(*) from (select 1 from scan_events where status='active' and "dedupeKey" is not null group by purpose, "dedupeKey" having count(*)>1) d`)) === 0, 'no label has two active scans')
 
+    // Party ledger (migration 0017; docs/architecture/payments.md)
+    if (await one(`select to_regclass('party_ledger_entries') is not null`)) {
+      check(Number(await one(`select count(*) from party_balance_mismatches`)) === 0, 'party_balances equal the ledger')
+      check(Number(await one(`select count(*) from party_open_item_mismatches`)) === 0, 'per party: unpaid − advance = balance')
+      check(Number(await one(`select count(*) from sale_bills b where b."retailerId" is not null and (
+        (b.status = 'active' and not exists (select 1 from party_ledger_entries e where e.kind = 'bill' and e."saleBillId" = b.id
+           and not exists (select 1 from party_ledger_entries r where r."reversalOfId" = e.id)))
+        or (b.status = 'cancelled' and exists (select 1 from party_ledger_entries e where e.kind = 'bill' and e."saleBillId" = b.id
+           and not exists (select 1 from party_ledger_entries r where r."reversalOfId" = e.id))))`)) === 0,
+        'every active party bill is in the ledger once; every cancelled one is reversed')
+      check(Number(await one(`select count(*) from sale_bills b where b."retailerId" is null
+        and exists (select 1 from party_ledger_entries e where e."saleBillId" = b.id)`)) === 0, 'walk-in bills have no ledger entry')
+      check(Number(await one(`select count(*) from payments p where
+        (select count(*) from party_ledger_entries e where e.kind = 'payment' and e."paymentId" = p.id) <> (case when p.status in ('pending', 'returned') then 0 else 1 end)
+        or (p.status in ('bounced', 'reversed')) <> exists (select 1 from party_ledger_entries e join party_ledger_entries r on r."reversalOfId" = e.id
+           where e.kind = 'payment' and e."paymentId" = p.id)`)) === 0,
+        'cheques in hand are not counted; counted payments are in the ledger once; bounced / reversed ones are reversed')
+    }
+
     // Article catalogue (migration 0003 + catalogue imports)
     if (await one(`select to_regclass('catalog_articles') is not null`)) {
       check(Number(await one(`select count(*) from articles a join catalog_articles c on c.id = a."catalogArticleId" where a."artCode" <> c."artCode"`)) === 0, 'every variant matches its article code record')

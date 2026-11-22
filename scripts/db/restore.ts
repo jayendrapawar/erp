@@ -15,7 +15,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { arg, connect, flag, log, requireWriteConfirmation, resolveTarget } from './_connect'
 
-const LEDGER = new Set(['stock_movements', 'stock_balances'])
+const LEDGER = new Set(['stock_movements', 'stock_balances', 'party_ledger_entries', 'party_allocations', 'party_balances'])
 
 async function main() {
   const t = resolveTarget()
@@ -33,7 +33,7 @@ async function main() {
     )).rows.map((r) => r.table_name))
     let tables = Object.keys(manifest.tables).filter((n) => existing.has(n) && (!wanted || wanted.includes(n)))
     if (tables.some((n) => LEDGER.has(n)) && !flag('allow-ledger')) {
-      throw new Error('Selected tables include the stock ledger. Pass --allow-ledger only if you mean to rewrite it.')
+      throw new Error('Selected tables include the stock or party ledger. Pass --allow-ledger only if you mean to rewrite it.')
     }
 
     // Order parents before children using FK edges among selected tables.
@@ -61,6 +61,12 @@ async function main() {
       // Balances are derived: clear them, restore movements, then rebuild from the ledger.
       await c.query('DELETE FROM stock_balances')
       tables = tables.filter((n) => n !== 'stock_balances')
+    }
+    const rebuildParty = tables.includes('party_ledger_entries')
+    if (rebuildParty) {
+      // Same for the party ledger (migration 0017).
+      await c.query('DELETE FROM party_balances')
+      tables = tables.filter((n) => n !== 'party_balances')
     }
     for (const n of [...tables].reverse()) await c.query(`DELETE FROM "${n}"`)
     for (const n of tables) {
@@ -90,6 +96,10 @@ async function main() {
       // Movement inserts above already re-applied balances through the trigger; rebuild to be exact.
       const n = (await c.query('SELECT stock_balances_rebuild() AS n')).rows[0].n
       log(`  stock_balances rebuilt from ledger: ${n} rows`)
+    }
+    if (rebuildParty) {
+      const n = (await c.query('SELECT party_balances_rebuild() AS n')).rows[0].n
+      log(`  party_balances rebuilt from ledger: ${n} rows`)
     }
     for (const s of manifest.sequences as Array<{ sequencename: string; last_value: string | null }>) {
       if (s.last_value !== null) await c.query(`SELECT setval($1, $2)`, [`${schema}.${s.sequencename}`, s.last_value]).catch(() => undefined)

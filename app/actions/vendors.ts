@@ -12,7 +12,9 @@ import { fuzzyScore } from '@/lib/fuzzy'
 import { retailerColumns } from '@/lib/retailer-columns'
 
 /** A retailer as pages see it: never the shop PIN hash (migration 0015). */
-export type Vendor = Omit<typeof vendors.$inferSelect, 'shopPinHash'>
+// Credit terms / bill type (migration 0017) join the master screen in the payments step; until then
+// they are not part of what the retailer screens load.
+export type Vendor = Omit<typeof vendors.$inferSelect, 'shopPinHash' | 'taxType' | 'creditLimitPaise' | 'creditDays' | 'earlyPayDiscountBp' | 'earlyPayDays'>
 /** Fields the Retailers form saves; shop sign-in fields change only through the shop-access screen. */
 type VendorFields = Pick<Vendor, 'partyName' | 'gst' | 'phone' | 'email' | 'address' | 'city' | 'area' | 'day' | 'salesman' | 'status'>
 
