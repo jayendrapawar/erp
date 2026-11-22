@@ -175,3 +175,14 @@
   .no-scrollbar { scrollbar-width: none; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
 }
+
+/* Keyboard (docs/architecture/keyboard.md). The highlighted row of a list (lib/shortcuts/list.ts):
+   real focus, shown only for keyboard use (:focus-visible), in both themes. */
+@layer base {
+  [data-list-row]:focus { outline: none; }
+  [data-list-row]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+    background-color: color-mix(in oklab, var(--ring) 14%, transparent);
+  }
+}

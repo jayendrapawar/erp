@@ -2,8 +2,9 @@
 
 import { useShowMore } from '@/components/show-more'
 import { sizeWithCode } from '@/lib/orders/size-label'
-import { useState, useTransition, useMemo, useEffect, useCallback } from 'react'
+import { useState, useTransition, useMemo, useEffect, useCallback, useRef } from 'react'
 import { useUrlFilters } from '@/lib/use-url-filters'
+import { useListKeys } from '@/lib/shortcuts/list'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
 import { adminAssignPicker, adminUnassignPicker, getOrderWithItems, getPickerAssignments, deleteOrder, getBillLines } from '@/app/actions/orders'
@@ -67,6 +68,9 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
   const [filters, setFilters] = useState<FilterValues>({})
   // Opened from Ctrl+K "# " search: /orders/admin?f.order=…#overview
   useUrlFilters(['order', 'shop'], v => setFilters(f => ({ ...f, ...v })))
+  // Keyboard: ↑↓ / j k rows, Enter opens, / filters (lib/shortcuts/list.ts).
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Orders list' })
 
   // ── Filter + sort ──
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'order'>('date-desc')
@@ -623,6 +627,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
           </div>
         )}
 
+        <div ref={listRef}>
         {/* Filters (under each column on wide screens; Filters button on phones) + sort */}
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <FiltersButton className="sm:hidden" defs={orderFilters} values={filters} onChange={setFilters} />
@@ -651,6 +656,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
               <button
                 key={order.id}
                 type="button"
+                data-list-row
                 onClick={() => handleViewOrder(order)}
                 className="w-full text-left rounded-xl border border-border bg-card p-4 hover:bg-muted/30 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
@@ -696,11 +702,13 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                 {shownOrders.map(order => {
                   const tag = orderTag(order.orderedAt, order.updatedAt)
                   return (
-                    <tr key={order.id}
+                    <tr key={order.id} data-list-row
                       className="hover:bg-muted/30 transition-colors cursor-pointer"
                       onClick={() => handleViewOrder(order)}
                     >
-                      <td className="px-4 py-3 font-mono text-xs font-medium">{order.orderNumber}</td>
+                      <td className="px-4 py-3 font-mono text-xs font-medium">
+                        <button type="button" data-row-open onClick={e => { e.stopPropagation(); handleViewOrder(order) }} className="rounded hover:underline">{order.orderNumber}</button>
+                      </td>
                       <td className="px-4 py-3">{order.shopkeeperName}</td>
                       <td className="px-4 py-3"><StatusPill status={order.status} /></td>
                       <td className="px-4 py-3">
@@ -737,6 +745,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
           </div>
         </div>
         {moreOrders}
+        </div>
       </div>
     </div>
   )

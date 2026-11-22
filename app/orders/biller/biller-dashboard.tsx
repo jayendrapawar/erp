@@ -16,6 +16,13 @@ import { BillMailDialog } from '@/components/bill-mail-dialog'
 import { getBillTemplate } from '@/app/actions/bill-template'
 import type { BillTemplate } from '@/lib/bill-template'
 import { BillingScannerPage, type BillingVendor } from '@/components/billing-scanner-page'
+import { useShortcut } from '@/lib/shortcuts'
+import { useListKeys } from '@/lib/shortcuts/list'
+import { tablistKeyDown, tabProps, useTabKeys } from '@/lib/shortcuts/tabs'
+
+const BILLER_TABS: { value: BillerTab; label: string }[] = [
+  { value: 'verify', label: 'Invoices' }, { value: 'emergency', label: 'Direct Billing' }, { value: 'generated', label: 'Receipts' },
+]
 
 type BillerTab = 'verify' | 'emergency' | 'generated'
 
@@ -67,6 +74,15 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
   // ── Tab state ────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<BillerTab>('verify')
+  // Keyboard (docs/architecture/keyboard.md): tabs Alt+1…3 (Alt+Shift inside the Orders hub), lists, Direct bill action.
+  const rootRef = useRef<HTMLDivElement>(null)
+  const verifyListRef = useRef<HTMLDivElement>(null)
+  const receiptsListRef = useRef<HTMLDivElement>(null)
+  const switchTab = (tab: string) => { setActiveTab(tab as BillerTab); setPrintSelectedIds(new Set()) }
+  useTabKeys(BILLER_TABS, switchTab, { nested: embedded, within: rootRef, group: 'Biller tabs' })
+  useShortcut([], () => switchTab('emergency'), { label: 'Direct bill', group: 'Biller', action: true, within: rootRef })
+  useListKeys(verifyListRef, { label: 'Invoices list' })
+  useListKeys(receiptsListRef, { label: 'Receipts list', tickable: true })
   // Shop / bank / QR details for printed bills (Master → Bill template). One query on open.
   const [billTemplate, setBillTemplate] = useState<BillTemplate | undefined>(undefined)
   // Receipts: the bill being previewed (click a bill; print from the preview — owner, 21 Nov 2026)
@@ -955,7 +971,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   }
 
   return (
-    <div className={embedded ? '' : 'min-h-screen bg-background'}>
+    <div ref={rootRef} className={embedded ? '' : 'min-h-screen bg-background'}>
       {/* Direct Billing needs room for the bill beside the scanner: wider page on that tab. */}
       <div className={embedded ? '' : `${activeTab === 'emergency' ? 'max-w-6xl' : 'max-w-2xl'} mx-auto px-4 py-6`}>
         {!embedded && (
@@ -974,13 +990,14 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
         </div>
 
         {/* ── Tabs ── */}
-        <div className="flex rounded-xl border border-border bg-muted/40 p-1 mb-4 gap-1">
+        <div role="tablist" aria-label="Biller" onKeyDown={tablistKeyDown} className="flex rounded-xl border border-border bg-muted/40 p-1 mb-4 gap-1">
           {/* Invoices */}
           {(['verify', 'emergency', 'generated'] as BillerTab[]).map(tab => (
             <button
               key={tab}
               type="button"
-              onClick={() => { setActiveTab(tab); setPrintSelectedIds(new Set()) }}
+              {...tabProps(activeTab === tab)}
+              onClick={() => switchTab(tab)}
               className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-colors ${
                 activeTab === tab
                   ? 'bg-primary text-primary-foreground shadow-sm'
@@ -1001,7 +1018,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
         {/* ── Verify Orders tab ── */}
         {activeTab === 'verify' && (
-          <div className="space-y-3">
+          <div ref={verifyListRef} className="space-y-3">
             {verifyOrders.length === 0 && (
               <div className="text-center py-12 text-muted-foreground text-sm">No orders to verify 🎉</div>
             )}
@@ -1010,12 +1027,13 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
               return (
                 <div
                   key={order.id}
+                  data-list-row
                   onClick={() => handleViewOrder(order)}
                   className="w-full text-left rounded-xl border border-border bg-card p-4 hover:bg-muted/30 transition-colors cursor-pointer"
                 >
                   <div className="flex items-start justify-between gap-2 mb-3">
                     <div>
-                      <p className="font-medium text-sm">{order.shopkeeperName}</p>
+                      <button type="button" data-row-open onClick={e => { e.stopPropagation(); handleViewOrder(order) }} className="rounded text-left font-medium text-sm hover:underline">{order.shopkeeperName}</button>
                       <p className="font-mono text-xs text-muted-foreground mt-0.5">{order.orderNumber}</p>
                     </div>
                     <StatusPill status={order.status} />
@@ -1137,7 +1155,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   </div>
 
                   {/* Rows */}
-                  <div className="divide-y divide-border">
+                  <div ref={receiptsListRef} className="divide-y divide-border">
                     {billedOrders.map(order => {
                       const checked = printSelectedIds.has(order.id)
                       const loading = printLoadingIds.has(order.id)
@@ -1149,6 +1167,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                       return (
                         <div
                           key={order.id}
+                          data-list-row
                           onClick={() => setPreviewOrder(order)}
                           className={`flex items-center gap-3 px-3 py-3 sm:px-4 cursor-pointer transition-colors ${
                             checked ? 'bg-primary/5' : 'hover:bg-muted/30 active:bg-muted/50'
@@ -1158,6 +1177,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                           <button
                             type="button"
                             aria-label={checked ? 'Deselect for mail' : 'Select for mail'}
+                            aria-pressed={checked}
+                            data-row-tick
                             onClick={e => { e.stopPropagation(); handleTogglePrintBill(order) }}
                             className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                               checked ? 'border-primary bg-primary' : 'border-border bg-background hover:border-primary/60'
@@ -1173,7 +1194,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                           {/* Text — clicking opens detail preview */}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5">
-                              <p className="text-sm font-medium text-foreground truncate leading-snug">{order.shopkeeperName}</p>
+                              <button type="button" data-row-open onClick={e => { e.stopPropagation(); setPreviewOrder(order) }} className="min-w-0 truncate rounded text-left text-sm font-medium text-foreground leading-snug hover:underline">{order.shopkeeperName}</button>
                               {order.isEmergency && (
                                 <span className="shrink-0 inline-flex items-center rounded-full bg-red-100 dark:bg-red-900/30 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-red-700 dark:text-red-400">
                                   Direct Bill

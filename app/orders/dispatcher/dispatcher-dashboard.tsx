@@ -1,7 +1,8 @@
 'use client'
 
 import { sizeWithCode } from '@/lib/orders/size-label'
-import { useState, useTransition } from 'react'
+import { useRef, useState, useTransition } from 'react'
+import { useListKeys } from '@/lib/shortcuts/list'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
 import { markDispatched, markDelivered, getOrderWithItems } from '@/app/actions/orders'
 import { PageNav } from '@/components/page-nav'
@@ -33,6 +34,9 @@ interface DetailItem {
 export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId = '', embedded }: Props) {
   const [orders, setOrders] = useState(initialOrders)
   const [isPending, startTransition] = useTransition()
+  // Keyboard: ↑↓ / j k rows, Enter opens (lib/shortcuts/list.ts).
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Dispatch list' })
   const [activeId, setActiveId] = useState<number | null>(null)
 
   // Pickup confirmation modal state
@@ -141,19 +145,20 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
           <StatCard label="My Bundles" value={counts.myBundlesOut} color="text-orange-600 dark:text-orange-400" />
         </div>
 
-        <div className="space-y-3">
+        <div ref={listRef} className="space-y-3">
           {orders.length === 0 && (
             <div className="text-center py-12 text-muted-foreground text-sm">No orders to dispatch 🎉</div>
           )}
           {orders.map(order => (
             <div
               key={order.id}
+              data-list-row
               onClick={() => handleViewOrder(order)}
               className="w-full text-left rounded-xl border border-border bg-card p-4 hover:bg-muted/30 transition-colors cursor-pointer"
             >
               <div className="flex items-start justify-between gap-2 mb-3">
                 <div>
-                  <p className="font-medium text-sm">{order.shopkeeperName}</p>
+                  <button type="button" data-row-open onClick={e => { e.stopPropagation(); handleViewOrder(order) }} className="rounded text-left font-medium text-sm hover:underline">{order.shopkeeperName}</button>
                   {order.shopkeeperPhone && (
                     <span className="text-xs text-primary">{order.shopkeeperPhone}</span>
                   )}

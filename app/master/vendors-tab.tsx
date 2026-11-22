@@ -2,6 +2,7 @@
 
 import { ShopAccessDialog } from '@/components/master/shop-access-dialog'
 import { useState, useMemo, useTransition, useRef } from 'react'
+import { useListKeys } from '@/lib/shortcuts/list'
 import { useUrlFilters } from '@/lib/use-url-filters'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { saveVendor, importVendors } from '@/app/actions/vendors'
@@ -119,6 +120,9 @@ interface Props {
 }
 
 export function VendorsTab({ initialVendors, onListChange }: Props) {
+  // Keyboard: ↑↓ / j k rows, Enter edits, / filters, n new (lib/shortcuts/list.ts).
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Retailers list', newLabel: 'New retailer', onNew: () => openAdd() })
   const [vendors, setVendors] = useState<Vendor[]>(initialVendors)
   // Retailer shop: whose access is being set (owner, 21 Nov 2026)
   const [shopTarget, setShopTarget] = useState<Vendor | null>(null)
@@ -211,7 +215,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
   const inputCls = 'w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring'
 
   return (
-    <div>
+    <div ref={listRef}>
       {/* ── Hidden CSV file input ── */}
       <input
         ref={csvInputRef}
@@ -270,7 +274,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
       {/* ── Mobile: card list ── */}
       <div className="sm:hidden space-y-3">
         {filtered.map(v => (
-          <div key={v.id} className="rounded-2xl border border-border bg-card overflow-hidden">
+          <div key={v.id} data-list-row className="rounded-2xl border border-border bg-card overflow-hidden">
             {/* Card header */}
             <div className="flex items-start justify-between gap-2 px-4 pt-4 pb-3">
               <div className="min-w-0">
@@ -324,6 +328,8 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
                 {v.shopEnabled ? 'Shop: on' : 'Shop access'}
               </button>
               <button
+                type="button"
+                data-row-open
                 onClick={() => openEdit(v)}
                 className="flex-1 rounded-xl border border-border bg-background py-2.5 text-sm font-medium hover:bg-muted active:scale-95 transition-all"
               >
@@ -354,7 +360,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
             </thead>
             <tbody className="divide-y divide-border">
               {filtered.map(v => (
-                <tr key={v.id} className="hover:bg-muted/30 transition-colors">
+                <tr key={v.id} data-list-row className="hover:bg-muted/30 transition-colors">
                   <td className="pl-4 pr-2 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap">{v.id}</td>
                   <td className="px-2 py-3 max-w-[160px]">
                     <p className="font-medium text-foreground truncate text-sm" title={v.partyName}>{v.partyName}</p>
@@ -379,7 +385,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
                   <td className="pr-4 pl-2 py-3">
                     <div className="flex justify-end gap-1.5">
                       <button onClick={() => setShopTarget(v)} className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${v.shopEnabled ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-border hover:bg-muted'}`}>{v.shopEnabled ? 'Shop: on' : 'Shop'}</button>
-                      <button onClick={() => openEdit(v)} className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap">Edit</button>
+                      <button type="button" data-row-open onClick={() => openEdit(v)} className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap">Edit</button>
                     </div>
                   </td>
                 </tr>

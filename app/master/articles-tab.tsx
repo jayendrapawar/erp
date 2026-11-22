@@ -2,6 +2,7 @@
 
 import { useShowMore } from '@/components/show-more'
 import { useState, useMemo, useTransition, useRef, useEffect } from 'react'
+import { useListKeys } from '@/lib/shortcuts/list'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { saveArticle, uploadArticleList, deleteArticle, getArticleSizes, getArticles, getArticleMrps, getMissingArticles, addSizeToArticleFromScans, setMissingArticleReview, setCatalogReviewItemStatus } from '@/app/actions/articles'
 import type { CatalogReviewItem, ArticleUploadResult } from '@/app/actions/articles'
@@ -78,6 +79,9 @@ const REVIEW_KIND_LABEL: Record<string, string> = {
 }
 
 export function ArticlesTab({ initialArticles, initialMissingArticles, initialReviewItems = [], canReviewCatalog = false, onListChange }: Props) {
+  // Keyboard: ↑↓ / j k rows, Enter edits, / filters, n new (lib/shortcuts/list.ts).
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Articles list', newLabel: 'New article', onNew: () => openAdd() })
   const [articleList, setArticleList] = useState<Article[]>(initialArticles)
   const [reviewItems, setReviewItems] = useState(initialReviewItems)
   const [showClosedReviews, setShowClosedReviews] = useState(false)
@@ -327,7 +331,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
   const inputCls = 'w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring'
 
   return (
-    <div>
+    <div ref={listRef}>
       {/* ── Hidden CSV file input ── */}
       <input
         ref={uploadInputRef}
@@ -537,7 +541,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
       {/* ── Mobile: card list ── */}
       <div className="sm:hidden space-y-3">
         {shownArticles.map(a => (
-          <div key={a.id} className="rounded-2xl border border-border bg-card overflow-hidden">
+          <div key={a.id} data-list-row className="rounded-2xl border border-border bg-card overflow-hidden">
             <div className="flex items-start justify-between gap-2 px-4 pt-4 pb-3">
               <div className="min-w-0">
                 <p className="font-semibold text-base text-foreground truncate">{a.artName || '—'}<StatusBadge a={a} /></p>
@@ -582,6 +586,8 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                 Photos{photoCounts[a.id] ? ` (${photoCounts[a.id]})` : ''}
               </button>
               <button
+                type="button"
+                data-row-open
                 onClick={() => openEdit(a)}
                 className="flex-1 rounded-xl border border-border bg-background py-2.5 text-sm font-medium hover:bg-muted active:scale-95 transition-all"
               >
@@ -623,7 +629,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
             </thead>
             <tbody className="divide-y divide-border">
               {shownArticles.map(a => (
-                <tr key={a.id} className="hover:bg-muted/30 transition-colors">
+                <tr key={a.id} data-list-row className="hover:bg-muted/30 transition-colors">
                   <td className="pl-4 pr-2 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap">{a.id}</td>
                   <td className="px-2 py-3 max-w-[160px]">
                     <p className="font-medium text-foreground truncate text-sm" title={a.retiredReason ?? a.artName}>{a.artName || '—'}<StatusBadge a={a} /></p>
@@ -650,7 +656,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
                   <td className="pr-4 pl-2 py-3 w-[210px]">
                     <div className="flex items-center gap-1.5 justify-end">
                       <button onClick={() => setPhotoTarget(a)} className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${photoCounts[a.id] ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200 dark:hover:bg-emerald-500/25' : 'border-border hover:bg-muted'}`}>Photos{photoCounts[a.id] ? ` (${photoCounts[a.id]})` : ''}</button>
-                      <button onClick={() => openEdit(a)} className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap">Edit</button>
+                      <button type="button" data-row-open onClick={() => openEdit(a)} className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap">Edit</button>
                       <button onClick={() => setDeleteTarget(a)} className="rounded-md border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15 hover:bg-red-100 text-red-600 dark:text-red-400 px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap">Delete</button>
                     </div>
                   </td>

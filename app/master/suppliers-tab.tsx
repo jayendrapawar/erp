@@ -1,6 +1,7 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
+import { useMemo, useState, useTransition, useRef } from 'react'
+import { useListKeys } from '@/lib/shortcuts/list'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { saveSupplier, type Supplier, type SupplierInput } from '@/app/actions/suppliers'
 
@@ -41,6 +42,9 @@ const SUPPLIER_FILTERS: ColumnFilterDef<Supplier>[] = [
 
 /** Supplier master (companies we buy from). Saved to the database; changes are audited. */
 export function SuppliersTab({ initialSuppliers, readOnly = false, onListChange }: Props) {
+  // Keyboard: ↑↓ / j k rows, Enter edits, / filters, n new (lib/shortcuts/list.ts).
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Suppliers list', newLabel: 'New supplier', onNew: !readOnly ? () => openAdd() : undefined })
   const [suppliers, setSuppliers] = useState<Supplier[]>(initialSuppliers)
   const [filters, setFilters] = useState<FilterValues>({})
   const [modalMode, setModalMode] = useState<'add' | 'edit' | null>(null)
@@ -95,7 +99,7 @@ export function SuppliersTab({ initialSuppliers, readOnly = false, onListChange 
   )
 
   return (
-    <div>
+    <div ref={listRef}>
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <FiltersButton className="sm:hidden" defs={SUPPLIER_FILTERS} values={filters} onChange={setFilters} />
         <div className="hidden sm:block"><FilterSummary values={filters} onChange={setFilters} shown={filtered.length} total={suppliers.length} /></div>
@@ -114,7 +118,7 @@ export function SuppliersTab({ initialSuppliers, readOnly = false, onListChange 
 
       <div className="sm:hidden space-y-3">
         {filtered.map(s => (
-          <div key={s.id} className="rounded-xl border border-border bg-card p-4 space-y-2">
+          <div key={s.id} data-list-row className="rounded-xl border border-border bg-card p-4 space-y-2">
             <div className="flex items-start justify-between gap-2">
               <p className="font-semibold text-sm text-foreground">{s.name}</p>
               <StatusBadge status={s.status} />
@@ -128,7 +132,7 @@ export function SuppliersTab({ initialSuppliers, readOnly = false, onListChange 
             </div>
             {!readOnly && (
               <div className="flex gap-2 pt-2 border-t border-border">
-                <button onClick={() => openEdit(s)} className="flex-1 rounded-md border border-border px-2 py-1 text-xs font-medium hover:bg-muted transition-colors">Edit</button>
+                <button type="button" data-row-open onClick={() => openEdit(s)} className="flex-1 rounded-md border border-border px-2 py-1 text-xs font-medium hover:bg-muted transition-colors">Edit</button>
               </div>
             )}
           </div>
@@ -153,7 +157,7 @@ export function SuppliersTab({ initialSuppliers, readOnly = false, onListChange 
             </thead>
             <tbody className="divide-y divide-border">
               {filtered.map(s => (
-                <tr key={s.id} className="hover:bg-muted/30 transition-colors">
+                <tr key={s.id} data-list-row className="hover:bg-muted/30 transition-colors">
                   <td className="px-4 py-3 font-medium text-foreground">{s.name}</td>
                   <td className="px-4 py-3 text-muted-foreground">{s.contactPerson || '—'}</td>
                   <td className="px-4 py-3 text-muted-foreground">{s.phone || '—'}</td>
@@ -163,7 +167,7 @@ export function SuppliersTab({ initialSuppliers, readOnly = false, onListChange 
                   <td className="px-4 py-3"><StatusBadge status={s.status} /></td>
                   {!readOnly && (
                     <td className="px-4 py-3">
-                      <button onClick={() => openEdit(s)} className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors">Edit</button>
+                      <button type="button" data-row-open onClick={() => openEdit(s)} className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors">Edit</button>
                     </td>
                   )}
                 </tr>

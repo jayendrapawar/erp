@@ -14,7 +14,7 @@ export function useShowMore<T>(items: T[], step = 100, resetKey: unknown = null)
   const left = items.length - visible.length
   const more = left > 0 ? (
     <div className="flex justify-center py-4">
-      <button type="button" onClick={() => setCount((c) => c + step)}
+      <button type="button" data-show-more onClick={() => setCount((c) => c + step)}
         className="h-10 rounded-xl border border-border bg-card px-5 text-sm font-semibold hover:bg-muted">
         {`Show ${Math.min(step, left)} more (${left} not shown)`}
       </button>

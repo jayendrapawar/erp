@@ -5,6 +5,8 @@ import { PageHeader } from '@/app/orders/_components/shared'
 import { PageNav } from '@/components/page-nav'
 import { useHashTab } from '@/lib/use-hash-tab'
 import { useUrlFilters } from '@/lib/use-url-filters'
+import { useListKeys } from '@/lib/shortcuts/list'
+import { useTabKeys } from '@/lib/shortcuts/tabs'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { OverviewTab } from './overview-tab'
 import { FilterBar, FiltersButton, activeFilterCount, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
@@ -72,6 +74,7 @@ const INVENTORY_LABEL: Record<string, string> = { overview: 'Overview', stock: '
 export function InventoryPage({ initialSummary, initialStock, staff, canAdjust }: Props) {
   const [summary, setSummary] = useState(initialSummary)
   const [tab, setTab] = useHashTab(INVENTORY_TABS, 'overview')
+  useTabKeys(INVENTORY_TABS.map((t) => ({ value: t, label: INVENTORY_LABEL[t] })), setTab, { group: 'Inventory tabs' })
   const [openId, setOpenId] = useState<number | null>(null)
   const [stockPatch, setStockPatch] = useState<StockVariant | null>(null)
 
@@ -176,6 +179,8 @@ function StockTab({ initial, onOpen, patch }: { initial: { rows: StockVariant[];
   const [busy, start] = useTransition()
   // Opened from Ctrl+K "# " search (/inventory?f.code=…#stock): show the article even with no stock.
   useUrlFilters(['code', 'name'], (v) => { setFilters((f) => ({ ...f, ...v })); setShowEmpty(true) })
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Stock list' })
   const fq = useDebounced(JSON.stringify(filters))
   const query = (page: number) => {
     const v = JSON.parse(fq) as FilterValues
@@ -215,7 +220,7 @@ function StockTab({ initial, onOpen, patch }: { initial: { rows: StockVariant[];
   }
 
   return (
-    <div>
+    <div ref={listRef}>
       <FilterBar className="mb-2" defs={STOCK_FILTERS} values={filters} onChange={setFilters} />
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <FiltersButton className="sm:hidden" defs={STOCK_FILTERS} values={filters} onChange={setFilters} />
@@ -236,7 +241,7 @@ function StockTab({ initial, onOpen, patch }: { initial: { rows: StockVariant[];
 
       <div className={`rounded-xl border border-border divide-y divide-border overflow-hidden ${rows.length ? '' : 'hidden'} ${busy ? 'opacity-70' : ''}`}>
         {rows.map((v) => (
-          <button key={v.articleId} onClick={() => onOpen(v.articleId)} className="w-full text-left px-3 sm:px-4 py-3 hover:bg-muted/40 transition-colors flex gap-3">
+          <button key={v.articleId} data-list-row onClick={() => onOpen(v.articleId)} className="w-full text-left px-3 sm:px-4 py-3 hover:bg-muted/40 transition-colors flex gap-3">
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-foreground truncate">
                 {v.artName} <span className="font-normal text-muted-foreground">· {v.color}</span>
@@ -254,7 +259,7 @@ function StockTab({ initial, onOpen, patch }: { initial: { rows: StockVariant[];
         ))}
       </div>
       {rows.length < total && (
-        <button onClick={loadMore} disabled={busy} className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">
+        <button type="button" data-show-more onClick={loadMore} disabled={busy} className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">
           {busy ? 'Loading…' : `Show more (${num.format(total - rows.length)} left)`}
         </button>
       )}
@@ -285,11 +290,13 @@ function MovementRow({ m, onOpen, action }: { m: Movement; onOpen?: () => void; 
     </>
   )
   return onOpen
-    ? <button onClick={onOpen} className="w-full text-left flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted/40">{body}</button>
+    ? <button type="button" data-list-row onClick={onOpen} className="w-full text-left flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted/40">{body}</button>
     : <div className="flex items-start gap-2.5 px-3 py-2.5">{body}</div>
 }
 
 function MovementsTab({ staff, onOpen }: { staff: Props['staff']; onOpen: (id: number) => void }) {
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Movements list' })
   const [rows, setRows] = useState<Movement[]>([])
   const [hasMore, setHasMore] = useState(false)
   const [kind, setKind] = useState<MovementKind | 'all'>('all')
@@ -328,7 +335,7 @@ function MovementsTab({ staff, onOpen }: { staff: Props['staff']; onOpen: (id: n
   }
 
   return (
-    <div>
+    <div ref={listRef}>
       <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 mb-3">
         <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Article, code or colour…" aria-label="Search movements" className={`${inputCls} col-span-2 sm:flex-1 sm:min-w-[160px]`} />
         <select value={kind} onChange={(e) => setKind(e.target.value as MovementKind | 'all')} aria-label="Type" className={`${inputCls} text-xs`}>
@@ -358,7 +365,7 @@ function MovementsTab({ staff, onOpen }: { staff: Props['staff']; onOpen: (id: n
         {rows.map((m) => <MovementRow key={m.id} m={m} onOpen={() => onOpen(m.articleId)} />)}
       </div>
       {hasMore && (
-        <button onClick={loadMore} disabled={busy} className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">
+        <button type="button" data-show-more onClick={loadMore} disabled={busy} className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">
           {busy ? 'Loading…' : 'Show older'}
         </button>
       )}
@@ -560,7 +567,7 @@ function DispatchTab() {
         ))}
       </div>
       {hasMore && (
-        <button onClick={loadMore} disabled={busy} className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">
+        <button type="button" data-show-more onClick={loadMore} disabled={busy} className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">
           {busy ? 'Loading…' : 'Show older'}
         </button>
       )}

@@ -7,7 +7,9 @@ import { useHashTab } from '@/lib/use-hash-tab'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DIVISIONS, describeOnlyFor, formatSizes } from '@/lib/catalog/assortments'
 import { useQrScanner } from '@/components/scanner/use-qr-scanner'
-import { useScanForwarder } from '@/lib/shortcuts'
+import { useScanForwarder, useShortcut } from '@/lib/shortcuts'
+import { useListKeys } from '@/lib/shortcuts/list'
+import { useTabKeys } from '@/lib/shortcuts/tabs'
 import { playAlreadyScanned, playScanOk } from '@/lib/scan-sound'
 import { ManualCartonPanel } from './manual-carton-panel'
 import { ConfirmCartonCard } from './confirm-carton-card'
@@ -82,6 +84,7 @@ export function PurchasesPage({ initialSummary, initialBills, canUpload, mailbox
   const [summary, setSummary] = useState(initialSummary)
   const [bills, setBills] = useState(initialBills)
   const [tab, setTab] = useHashTab(PURCHASE_TABS, 'bills')
+  useTabKeys(PURCHASE_TABS.map((t) => ({ value: t, label: PURCHASE_LABEL[t] })), setTab, { group: 'Purchases tabs' })
   const [openBill, setOpenBill] = useState<number | null>(null)
 
   const refresh = useCallback(() => {
@@ -244,6 +247,10 @@ function BillsTab({ bills, canUpload, mailReady, onOpen, onUploaded }: { bills: 
   const all = applyColumnFilters(showAll ? bills : bills.filter((b) => b.status === 'expected' || b.status === 'partial'), BILL_FILTERS, filters)
   const setBillFilters = (v: FilterValues) => { setFilters(v); setShown(20) }
   const list = all.slice(0, shown)
+  // Keyboard: ↑↓ / j k bills, Enter opens, / filters; "Upload bill" in Ctrl K (lib/shortcuts).
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Bills list' })
+  useShortcut([], () => fileRef.current?.click(), { label: 'Upload bill PDFs', group: 'Bills list', action: true, enabled: canUpload, within: listRef })
 
   async function upload(files: FileList | null) {
     if (!files?.length) return
@@ -274,7 +281,7 @@ function BillsTab({ bills, canUpload, mailReady, onOpen, onUploaded }: { bills: 
   }
 
   return (
-    <div>
+    <div ref={listRef}>
       <div className="flex flex-wrap items-center gap-2 mb-3">
         {canUpload && mailReady && (
           <>
@@ -332,7 +339,7 @@ function BillsTab({ bills, canUpload, mailReady, onOpen, onUploaded }: { bills: 
       {list.length > 0 && <p className="mb-1.5 text-[11px] text-muted-foreground">{all.length} bill{all.length === 1 ? '' : 's'}</p>}
       <div className={`rounded-xl border border-border divide-y divide-border overflow-hidden ${list.length ? '' : 'hidden'}`}>
         {list.map((b) => (
-          <button key={b.id} onClick={() => onOpen(b.id)} className="w-full text-left px-3 sm:px-4 py-3 hover:bg-muted/40 flex flex-col sm:flex-row gap-2 sm:gap-3 sm:items-center">
+          <button key={b.id} type="button" data-list-row onClick={() => onOpen(b.id)} className="w-full text-left px-3 sm:px-4 py-3 hover:bg-muted/40 flex flex-col sm:flex-row gap-2 sm:gap-3 sm:items-center">
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-foreground flex flex-wrap items-center gap-x-1.5 gap-y-1">
                 <span>{b.refNo}</span>
@@ -353,7 +360,7 @@ function BillsTab({ bills, canUpload, mailReady, onOpen, onUploaded }: { bills: 
         ))}
       </div>
       {all.length > list.length && (
-        <button onClick={() => setShown((n) => n + 20)} className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted">
+        <button type="button" data-show-more onClick={() => setShown((n) => n + 20)} className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted">
           Show more ({all.length - list.length} left)
         </button>
       )}

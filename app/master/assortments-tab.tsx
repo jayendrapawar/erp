@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useRef, useState, useTransition } from 'react'
+import { useListKeys } from '@/lib/shortcuts/list'
 import { applyAssortmentUpload, previewAssortmentUpload, retireAssortment, saveAssortment, type UploadPreview } from '@/app/actions/assortments'
 import type { Assortment } from '@/lib/catalog/assortment-store'
 import { ASSORTMENT_SEGMENTS, DIVISIONS, SEGMENTS, SIZE_COLUMNS, codeSizes, describeOnlyFor, formatSizes, validateAssortment } from '@/lib/catalog/assortments'
@@ -61,6 +62,9 @@ const STATUS_LABEL = { new: 'New', changed: 'New version', same: 'No change', er
 
 /** Master → Assortments: pairs per size inside one carton, per division. Versioned and audited. */
 export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
+  // Keyboard: ↑↓ / j k rows, Enter edits, / filters, n new (lib/shortcuts/list.ts).
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Assortments list', newLabel: 'New assortment', onNew: canEdit ? () => openAdd() : undefined })
   const [list, setList] = useState<Assortment[]>(initialAssortments)
   const [division, setDivision] = useState<string>('all')
   const [filters, setFilters] = useState<FilterValues>({})
@@ -150,7 +154,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
   const exportHref = `/api/assortments/export${division !== 'all' ? `?division=${encodeURIComponent(division)}` : ''}`
 
   return (
-    <div>
+    <div ref={listRef}>
       {/* Division chips */}
       <div className="flex flex-wrap gap-1.5 mb-3">
         {['all', ...divisions].map(d => (
@@ -195,7 +199,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
       {/* Phone: cards */}
       <div className="sm:hidden space-y-2">
         {filtered.map(a => (
-          <div key={a.id} className="rounded-xl border border-border bg-card p-3">
+          <div key={a.id} data-list-row className="rounded-xl border border-border bg-card p-3">
             <div className="flex items-baseline justify-between gap-2">
               <p className="font-semibold text-sm text-foreground">{a.code} <span className="font-normal text-muted-foreground">· {a.packing} pairs</span></p>
               <span className="text-[11px] text-muted-foreground">{a.division} · {a.segment}</span>
@@ -205,7 +209,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
             {a.onlyFor && <p className="mt-1 text-xs font-mono text-amber-700 dark:text-amber-400" data-no-translate>{`Only for ${describeOnlyFor(a.onlyFor)}`}</p>}
             {canEdit && (
               <div className="flex gap-2 pt-2 mt-2 border-t border-border">
-                <button onClick={() => openEdit(a)} className="flex-1 rounded-md border border-border px-2 py-1 text-xs font-medium hover:bg-muted">Edit</button>
+                <button type="button" data-row-open onClick={() => openEdit(a)} className="flex-1 rounded-md border border-border px-2 py-1 text-xs font-medium hover:bg-muted">Edit</button>
                 <button onClick={() => { setRetiring(a); setRetireReason('') }} className="flex-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-muted">Remove</button>
               </div>
             )}
@@ -228,7 +232,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
               </thead>
               <tbody className="divide-y divide-border">
                 {filtered.map(a => (
-                  <tr key={a.id} className="hover:bg-muted/30">
+                  <tr key={a.id} data-list-row className="hover:bg-muted/30">
                     <td className="px-3 py-2 text-muted-foreground">{a.division}</td>
                     <td className="px-3 py-2 text-muted-foreground">{a.segment}</td>
                     <td className="px-3 py-2 tabular-nums">{a.packing}</td>
@@ -239,7 +243,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
                     <td className="px-3 py-2 text-xs max-w-[200px]" data-no-translate>{a.onlyFor ? <span className="font-mono text-amber-700 dark:text-amber-400">{describeOnlyFor(a.onlyFor)}</span> : <span className="text-muted-foreground">any article</span>}</td>
                     {canEdit && (
                       <td className="px-3 py-2 whitespace-nowrap">
-                        <button onClick={() => openEdit(a)} className="rounded-md border border-border px-2 py-0.5 text-xs font-medium hover:bg-muted">Edit</button>
+                        <button type="button" data-row-open onClick={() => openEdit(a)} className="rounded-md border border-border px-2 py-0.5 text-xs font-medium hover:bg-muted">Edit</button>
                         <button onClick={() => { setRetiring(a); setRetireReason('') }} className="ml-1 rounded-md border border-border px-2 py-0.5 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-muted">Remove</button>
                       </td>
                     )}

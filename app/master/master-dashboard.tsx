@@ -21,6 +21,8 @@ import { ROLE_LABELS, ROLES as ALL_ROLES } from '@/lib/permissions'
 import type { OrderSet } from './sets-tab'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { PageNav } from '@/components/page-nav'
+import { useListKeys } from '@/lib/shortcuts/list'
+import { useTabKeys } from '@/lib/shortcuts/tabs'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 
 type UserRow = { id: string; name: string | null; email: string; role: string | null; createdAt: Date }
@@ -97,6 +99,26 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
     setIsOpen(!isOpen)
   }
 
+  // Keyboard: the menu is in a portal at the end of the page, so focus moves into it when it opens;
+  // ↑↓ move between roles, Space ticks, Esc / Tab close it and return to the button.
+  useEffect(() => {
+    if (!isOpen) return
+    const t = setTimeout(() => menuRef.current?.querySelector<HTMLInputElement>('input')?.focus(), 0)
+    return () => clearTimeout(t)
+  }, [isOpen])
+  function onMenuKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    const boxes = [...(menuRef.current?.querySelectorAll<HTMLInputElement>('input') ?? [])]
+    const at = boxes.indexOf(document.activeElement as HTMLInputElement)
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      boxes[(Math.max(0, at) + (e.key === 'ArrowDown' ? 1 : -1) + boxes.length) % boxes.length]?.focus()
+    } else if (e.key === 'Escape' || e.key === 'Tab') {
+      e.preventDefault()
+      setIsOpen(false)
+      buttonRef.current?.focus()
+    }
+  }
+
   function handleToggleRole(role: string) {
     let newRoles: string[]
     if (role === 'admin') {
@@ -141,6 +163,11 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
         type="button"
         disabled={disabled}
         onClick={handleButtonClick}
+        onKeyDown={e => { if (e.key === 'ArrowDown' && !isOpen) { e.preventDefault(); handleButtonClick() } }}
+        aria-haspopup="true"
+        aria-expanded={isOpen}
+        aria-label={`Roles: ${displayText}`}
+        data-row-open
         className="inline-flex justify-between items-center w-full sm:w-48 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted/50 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
       >
         <span className="truncate">{displayText}</span>
@@ -153,6 +180,9 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
         <div
           ref={menuRef}
           style={menuStyle}
+          role="group"
+          aria-label="Roles"
+          onKeyDown={onMenuKey}
           className="overflow-y-auto rounded-md shadow-lg bg-popover border border-border z-50 p-2 space-y-1"
         >
           {[...ALL_ROLES, 'user'].map(r => {
@@ -230,6 +260,10 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
     window.history.replaceState(null, '', `#${v}`)
     window.dispatchEvent(new HashChangeEvent('hashchange'))
   }
+  // Keyboard: Alt+1…7 switch tabs; ↑↓ / j k on the users list (lib/shortcuts).
+  useTabKeys(tabIds.map(t => ({ value: t, label: MASTER_TAB_LABEL[t] ?? t })), changeTab, { group: 'Master tabs' })
+  const usersListRef = useRef<HTMLDivElement>(null)
+  useListKeys(usersListRef, { label: 'Users list' })
   // Admin tab count — sets tab shown only for admin
   const isAdmin = !isAccountant
 
@@ -276,6 +310,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
           {/* ── Users tab — hidden for accountant ── */}
           {!isAccountant && (
           <TabsContent value="users">
+            <div ref={usersListRef}>
             <FiltersButton className="mb-4 sm:hidden" defs={USER_FILTERS} values={userFilters} onChange={setUserFilters} />
             <div className="mb-2 hidden sm:block"><FilterSummary values={userFilters} onChange={setUserFilters} shown={filteredUsers.length} total={users.length} /></div>
 
@@ -286,7 +321,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
             {/* ── Mobile: card list ── */}
             <div className="sm:hidden space-y-3">
               {filteredUsers.map(u => (
-                <div key={u.id} className="rounded-xl border border-border bg-card p-4 space-y-3">
+                <div key={u.id} data-list-row className="rounded-xl border border-border bg-card p-4 space-y-3">
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
@@ -329,7 +364,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
                   </thead>
                   <tbody className="divide-y divide-border">
                     {filteredUsers.map(u => (
-                      <tr key={u.id} className="hover:bg-muted/30 transition-colors">
+                      <tr key={u.id} data-list-row className="hover:bg-muted/30 transition-colors">
                         <td className="px-4 py-3 font-medium">
                           {u.name ?? '—'}
                           {u.id === currentUserId && (
@@ -352,6 +387,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
                   </tbody>
                 </table>
               </div>
+            </div>
             </div>
           </TabsContent>
           )}
