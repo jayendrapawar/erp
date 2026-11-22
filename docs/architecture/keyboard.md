@@ -41,7 +41,7 @@ registry below, so it is always current.
 
 ### Lists and tables
 
-Orders overview, biller Invoices and Receipts, dispatcher list, Inventory stock and movements, Master
+Orders overview, salesman orders, picker queue, biller Invoices and Receipts, dispatcher list, Inventory stock and movements, Master
 users / retailers / suppliers / articles / assortments / sets, Purchases bills.
 
 | Keys | Does |
@@ -51,13 +51,13 @@ users / retailers / suppliers / articles / assortments / sets, Purchases bills.
 | `Enter` | Open the row (Master: edit; Users: role menu) |
 | `Space` / `x` | Tick the row (Receipts: for mail) |
 | `/` | Search / filter box of the list; `↓` from it goes to the first row |
-| `n` / `Alt N` | New … (retailer, supplier, article, assortment, set) |
+| `n` / `Alt N` | New … (order, retailer, supplier, article, assortment, set) |
 
 ### Tabs
 
 | Keys | Does |
 |---|---|
-| `Alt 1…9` | Tab 1…9: Inventory, Master, Purchases |
+| `Alt 1…9` | Tab 1…9: Orders hub (admin, or your order roles), Inventory, Master, Purchases |
 | `Alt Shift 1…3` | Biller tabs (Invoices, Direct Billing, Receipts) — they sit inside the Orders hub |
 | `← → Home End` | On a focused tab bar (role="tablist") |
 
@@ -76,7 +76,7 @@ users / retailers / suppliers / articles / assortments / sets, Purchases bills.
 
 | Screen | Keys |
 |---|---|
-| New Order (salesman) | Enter steps vendor → article → colour → sizes; 1–9 colour; ←→ quantity; Shift+Enter add and stay; Esc skip article; `Ctrl Enter` create the order (the full list is in "?") |
+| New Order (salesman) | Enter steps vendor → article → colour → sizes; 1–9 colour; ←→ quantity; Shift+Enter add and stay; Esc skip article; `Ctrl Enter` creates the order at once (no confirmation, as before). Tab also walks every quantity chip and box in the size matrix (Enter / Space press a chip; the highlighted size follows) and every line in the order (Enter edits it). "New" while New Order is open puts the cursor in the vendor search |
 | Ctrl K `> ` actions | Create the order, Direct bill, Upload bill PDFs, New …, theme, language, menu width |
 | Picker list (orders) | Keyboard changes wait for Enter (or leaving the list); Esc puts the old picker back. A mouse pick saves at once |
 | Master role menu | Enter / ↓ opens, ↑↓ move, Space ticks, Esc / Tab close |
@@ -121,7 +121,7 @@ scanner was **not** available: scans were simulated by typing the code at ~4 ms 
 | Job | Steps | Result |
 |---|---|---|
 | Sign in | Tab to the account, arrows, Tab, password, Enter (local test sign-in; the Google button is a normal button, not tested here) | ✅ |
-| Take an order (salesman) | `g o` → Tab to **New** → Enter → vendor (type, Enter) → article (type, Enter) → colour (Enter) → sizes (type, Enter) → Shift+Enter → Tab to Create order or Ctrl+Enter | ✅ flow works. ⚠ In the Orders redesign (not yet committed) Enter on **New** leaves the cursor on the tab (Tab to the vendor box), and Ctrl+Enter now creates the order without a confirmation |
+| Take an order (salesman) | `g o` → Tab to **New** → Enter → vendor (type, Enter) → article (type, Enter) → colour (Enter) → sizes (type, Enter) → Shift+Enter → Tab to Create order or Ctrl+Enter | ✅ (Ctrl+Enter creates the order at once; the test stopped before it) |
 | Assign a picker (admin) | `g o` → `/` type order no. → ↓ → Tab to the picker list → ↓ pick → Enter | ✅ (fixed: arrows no longer assign every picker on the way) |
 | Scan and bill (biller) | `g b` → Alt+Shift+2 → (cursor in Scan box) → Shift+Tab retailer, type, Enter → scan → Tab to Generate bill → Enter | ✅ scans land in the Scan box even with focus on a button; no shortcut fired. Generate bill not pressed in the test |
 | Print and mail a bill | Receipts (Alt+Shift+3) → j/k → x tick → Tab to mail → Enter; Enter on a row → preview → Tab to Print | ✅ tick; ⚠ mail and preview not re-tested end to end (no receipt left on dev at the time) |
@@ -129,11 +129,18 @@ scanner was **not** available: scans were simulated by typing the code at ~4 ms 
 | Correct stock | `g i` → Alt+2 → `/` Tab (code filter) → ↓ → Enter → Tab to a size → Enter → + Add / − Remove → Pairs → Reason → Ctrl+Enter | ✅ reachable; save not pressed in the test |
 | Add a retailer | `g m` → Alt+2 → `n` → name → Ctrl+Enter ("Phone is required": cursor goes to Phone) → phone → Ctrl+Enter | ✅ saved |
 
+## Every button reachable (Tab walk, 22 Nov 2026)
+
+A browser script Tabs through each page and each dialog and lists visible, enabled controls that focus
+never reaches (only Tab is pressed, nothing is changed). Result: **none**, for admin (24 pages: Home,
+every Orders, Inventory, Purchases and Master tab, Reports, Scanner), salesman, picker, biller (all three
+tabs), dispatcher and warehouse, and inside 19 dialogs (retailer, supplier, article, assortment, set,
+shop access, photos, order details, article stock, purchase bill, bill preview, mail, by hand, drafts,
+Ctrl K, ?, New Order). Focus never left an open dialog. The only pointer-only spot left is a click on a
+size row of the New Order matrix, which only highlights that row; focusing any chip in it does the same.
+
 ## Still needs a mouse / not done
 
-- **Orders redesign files** (another session, uncommitted on 22 Nov): salesman order list and picker
-  queue have no list keys yet; New Order dialogs and the picker's dialogs are not on `<DialogKeys>`;
-  the Orders hub tab bars (admin hub, multi-role hub `SegTabs`) have no Alt+1…9 / ←→ yet.
 - Retailer shop (`/shop`, retailers' phones) is not part of this work.
 - Biller order panel: "Delete Direct Bill" deletes on one tap with no confirm (unchanged).
 - Biller scan-and-verify full-screen modal: keyboard-reachable, but its camera needs the screen.
