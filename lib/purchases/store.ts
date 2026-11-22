@@ -18,6 +18,9 @@ import { normalizeArticleValue } from '@/lib/article-utils'
 import { mainLocationId } from '@/lib/inventory/ledger'
 import { addDays, type ParsedBill } from './relaxo-bill'
 import { addArticleToAssortment } from '@/lib/catalog/assortment-store'
+import { expandSizeRange } from '@/lib/catalog/sizes'
+import { coverRankSql, lineChoices, proposeLineAssortments, type AssortmentChoice } from './assortment-match'
+import { NeedsAssortment, settleLineAssortment, type AssortmentAnswer } from './assortment-entry'
 
 export const DAYS_TO_ARRIVE = 5
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -30,8 +33,8 @@ const TODAY_IST = sql`(now() AT TIME ZONE 'Asia/Kolkata')::date`
 export type SaveBillOutcome = { status: 'saved'; id: number; refNo: string; lines: number; assortmentsFound: number } | { status: 'duplicate'; id: number; refNo: string }
 
 /**
- * Save a parsed bill and its lines. Duplicate = same reference or same file. Each line gets its
- * carton assortment when exactly one active assortment fits (division, pairs per carton, size range).
+ * Save a parsed bill and its lines. Duplicate = same reference or same file. Each line gets the
+ * carton assortment the rule proposes (assortment-match.ts); every received carton is still confirmed.
  */
 export async function saveBill(db: Db, actor: Actor, bill: ParsedBill, file: { name: string; sha256: string; source?: 'upload' | 'mail' }, division: string): Promise<SaveBillOutcome> {
   return db.transaction(async (tx) => {
@@ -50,7 +53,7 @@ export async function saveBill(db: Db, actor: Actor, bill: ParsedBill, file: { n
       packLetter: l.packLetter, description: l.description, cartons: l.cartons, pairsPerCarton: l.pairsPerCarton, pairs: l.pairs,
       mrp: String(l.mrp), rate: String(l.rate), amount: String(l.amount),
     })))
-    const found = await resolveAssortments(tx, b.id)
+    const found = await proposeLineAssortments(tx, b.id)
     // HSN for the sale bill (migration 0016): fill it on articles that have none yet. 1 statement.
     await tx.execute(sql`
       UPDATE articles a SET hsn = l.hsn
@@ -61,25 +64,6 @@ export async function saveBill(db: Db, actor: Actor, bill: ParsedBill, file: { n
     await audit(tx, { actor, action: 'purchase_bill.saved', entityType: 'purchase_bill', entityId: b.id, after: { refNo: bill.refNo, lines: bill.lines.length, cartons: bill.totalCartons, pairs: bill.totalPairs, division, file: file.name } })
     return { status: 'saved', id: b.id, refNo: bill.refNo, lines: bill.lines.length, assortmentsFound: found } as const
   })
-}
-
-/** Give lines without an assortment the single active one that fits. Returns how many were set. */
-async function resolveAssortments(tx: DbOrTx, billId: number): Promise<number> {
-  const r = await tx.execute(sql`
-    UPDATE purchase_bill_lines l SET "assortmentId" = x.id
-    FROM (
-      SELECT l2.id AS "lineId", min(a.id) AS id, count(*) AS n
-      FROM purchase_bill_lines l2
-      JOIN purchase_bills b ON b.id = l2."billId"
-      JOIN carton_assortments a ON a.active AND a.division = b.division AND a.packing = l2."pairsPerCarton"
-        AND a.code = l2."sizeFrom" || lpad(l2."sizeTo", 2, '0')
-        -- "Only for" assortments are chosen automatically only for the articles they list.
-        AND (a."onlyFor" = '' OR l2."articleCode" = ANY(string_to_array(a."onlyFor", ',')))
-      WHERE l2."billId" = ${billId} AND l2."assortmentId" IS NULL AND l2."sizeFrom" <> l2."sizeTo"
-      GROUP BY l2.id
-    ) x
-    WHERE l.id = x."lineId" AND x.n = 1`)
-  return r.rowCount ?? 0
 }
 
 export interface BillRow {
@@ -145,11 +129,8 @@ export async function purchaseSummary(db: DbOrTx): Promise<PurchaseSummary> {
   }
 }
 
-export interface AssortmentOption {
-  id: number; segment: string; version: number; sizes: AssortmentSize[]
-  /** Article codes it is only for ('' = any); covers = it already applies to this line's article. */
-  onlyFor: string; covers: boolean
-}
+/** Article codes / families it is only for ('' = any); covers = it already applies to this line's article. */
+export type AssortmentOption = AssortmentChoice
 
 export interface BillLineDetail {
   id: number
@@ -168,8 +149,12 @@ export interface BillLineDetail {
   postedCartons: number
   articleName: string | null
   assortment: AssortmentOption | null
-  /** Active assortments that fit when none is chosen (division, pairs per carton, size range). */
+  /** Active assortments that fit when none is chosen (division, pairs per carton, size range), any segment. */
   options: AssortmentOption[]
+  /** Of the options, the one the rule proposes (null = choose). */
+  suggestedId: number | null
+  /** Segment of the article in the master. */
+  articleSegment: string | null
 }
 
 export interface ReceiptRow {
@@ -192,34 +177,39 @@ export interface ReceiptRow {
 
 export interface BillDetail { bill: BillRow & { soNo: string | null; poNo: string | null; fileName: string | null; uploadedByName: string }; lines: BillLineDetail[]; receipts: ReceiptRow[] }
 
-/** One bill with its lines, progress, assortment choices and received cartons. Three queries. */
+/** One bill with its lines, progress, assortment choices and received cartons. Four queries (last three in parallel). */
 export async function billDetail(db: DbOrTx, billId: number): Promise<BillDetail | null> {
   const [row] = (await listBillsById(db, billId))
   if (!row) return null
-  const lines = await db.execute<Record<string, unknown>>(sql`
-    SELECT l.id, l."lineNo", l."articleCode", l."colourCode", l."sizeFrom", l."sizeTo", l."packLetter", l.description,
-           l.cartons, l."pairsPerCarton", l.pairs, l.mrp,
-           (SELECT count(*) FROM carton_receipts c WHERE c."billLineId" = l.id AND c.status = 'active')::int AS received,
-           (SELECT count(*) FROM carton_receipts c WHERE c."billLineId" = l.id AND c.status = 'active' AND c."postedAt" IS NOT NULL)::int AS posted,
-           (SELECT a."artName" FROM articles a WHERE ${NORM(sql`a."artCode"`)} = l."articleCode" AND ${NORM(sql`a."colorCode"`)} = l."colourCode" AND a.active LIMIT 1) AS "articleName",
-           (SELECT json_build_object('id', a.id, 'segment', a.segment, 'version', a.version, 'sizes', a.sizes, 'onlyFor', a."onlyFor", 'covers', true) FROM carton_assortments a WHERE a.id = l."assortmentId") AS assortment,
-           (SELECT coalesce(json_agg(json_build_object('id', a.id, 'segment', a.segment, 'version', a.version, 'sizes', a.sizes, 'onlyFor', a."onlyFor",
-                                                       'covers', (a."onlyFor" = '' OR l."articleCode" = ANY(string_to_array(a."onlyFor", ',')))) ORDER BY a.segment, a."onlyFor"), '[]'::json)
-              FROM carton_assortments a
-              WHERE l."assortmentId" IS NULL AND a.active AND a.division = b.division AND a.packing = l."pairsPerCarton"
-                AND a.code = l."sizeFrom" || lpad(l."sizeTo", 2, '0')) AS options
-    FROM purchase_bill_lines l JOIN purchase_bills b ON b.id = l."billId"
-    WHERE l."billId" = ${billId} ORDER BY l."lineNo"`)
+  const [lines, choices, receipts] = await Promise.all([
+    db.execute<Record<string, unknown>>(sql`
+      SELECT l.id, l."lineNo", l."articleCode", l."colourCode", l."sizeFrom", l."sizeTo", l."packLetter", l.description,
+             l.cartons, l."pairsPerCarton", l.pairs, l.mrp,
+             (SELECT count(*) FROM carton_receipts c WHERE c."billLineId" = l.id AND c.status = 'active')::int AS received,
+             (SELECT count(*) FROM carton_receipts c WHERE c."billLineId" = l.id AND c.status = 'active' AND c."postedAt" IS NOT NULL)::int AS posted,
+             (SELECT a."artName" FROM articles a WHERE ${NORM(sql`a."artCode"`)} = l."articleCode" AND ${NORM(sql`a."colorCode"`)} = l."colourCode" AND a.active LIMIT 1) AS "articleName",
+             (SELECT json_build_object('id', a.id, 'segment', a.segment, 'version', a.version, 'sizes', a.sizes, 'onlyFor', a."onlyFor", 'covers', true) FROM carton_assortments a WHERE a.id = l."assortmentId") AS assortment
+      FROM purchase_bill_lines l
+      WHERE l."billId" = ${billId} ORDER BY l."lineNo"`),
+    // Options and the proposal for every multi-size line (one query).
+    lineChoices(db, { billId }),
+    listReceipts(db, { billId, limit: 300 }),
+  ])
   return {
     bill: row,
-    lines: lines.rows.map((x) => ({
-      id: Number(x.id), lineNo: Number(x.lineNo), articleCode: String(x.articleCode), colourCode: String(x.colourCode),
-      sizeFrom: String(x.sizeFrom), sizeTo: String(x.sizeTo), packLetter: String(x.packLetter), description: String(x.description ?? ''),
-      cartons: Number(x.cartons), pairsPerCarton: Number(x.pairsPerCarton), pairs: Number(x.pairs), mrp: Number(x.mrp),
-      receivedCartons: Number(x.received), postedCartons: Number(x.posted), articleName: (x.articleName as string) ?? null,
-      assortment: (x.assortment as AssortmentOption | null) ?? null, options: (x.options as AssortmentOption[]) ?? [],
-    })),
-    receipts: (await listReceipts(db, { billId, limit: 300 })),
+    lines: lines.rows.map((x) => {
+      const ch = choices.get(Number(x.id))
+      const assortment = (x.assortment as AssortmentOption | null) ?? null
+      return {
+        id: Number(x.id), lineNo: Number(x.lineNo), articleCode: String(x.articleCode), colourCode: String(x.colourCode),
+        sizeFrom: String(x.sizeFrom), sizeTo: String(x.sizeTo), packLetter: String(x.packLetter), description: String(x.description ?? ''),
+        cartons: Number(x.cartons), pairsPerCarton: Number(x.pairsPerCarton), pairs: Number(x.pairs), mrp: Number(x.mrp),
+        receivedCartons: Number(x.received), postedCartons: Number(x.posted), articleName: (x.articleName as string) ?? null,
+        assortment, options: assortment ? [] : ch?.options ?? [], suggestedId: assortment ? null : ch?.proposal?.id ?? null,
+        articleSegment: ch?.articleSegment ?? null,
+      }
+    }),
+    receipts,
   }
 }
 
@@ -302,7 +292,7 @@ export async function setBillDivision(db: Db, actor: Actor, billId: number, divi
     if (!r.length) throw new Error('Bill not found.')
     // Re-fit assortments for cartons received from now on (received cartons keep what they used).
     await tx.execute(sql`UPDATE purchase_bill_lines SET "assortmentId" = NULL WHERE "billId" = ${billId}`)
-    await resolveAssortments(tx, billId)
+    await proposeLineAssortments(tx, billId)
     await audit(tx, { actor, action: 'purchase_bill.division', entityType: 'purchase_bill', entityId: billId, after: { division: d } })
   })
 }
@@ -311,7 +301,7 @@ export async function setBillDivision(db: Db, actor: Actor, billId: number, divi
 export async function setLineAssortment(db: Db, actor: Actor, lineId: number, assortmentId: number, addArticle = false): Promise<void> {
   return db.transaction(async (tx) => {
     const ok = await tx.execute<{ billId: number; articleCode: string; covers: boolean }>(sql`
-      SELECT l."billId", l."articleCode", (a."onlyFor" = '' OR l."articleCode" = ANY(string_to_array(a."onlyFor", ','))) AS covers
+      SELECT l."billId", l."articleCode", ${coverRankSql(sql`l."articleCode"`, sql`a."onlyFor"`)} >= 0 AS covers
       FROM purchase_bill_lines l JOIN purchase_bills b ON b.id = l."billId" JOIN carton_assortments a ON a.id = ${assortmentId}
       WHERE l.id = ${lineId} AND a.active AND a.division = b.division AND a.packing = l."pairsPerCarton"
         AND a.code = l."sizeFrom" || lpad(l."sizeTo", 2, '0')`)
@@ -340,19 +330,37 @@ export async function cancelBill(db: Db, actor: Actor, billId: number, reason: s
 
 // ── Receiving cartons ────────────────────────────────────────────────────────
 
+/** A matched multi-size carton waits for the receiver to confirm (or enter) its assortment. Nothing is saved yet. */
+export interface ConfirmCarton {
+  status: 'confirm'; label: string; billId: number; refNo: string; lineNo: number; lineReceived: number; lineCartons: number
+  articleCode: string; pairsPerCarton: number
+  /** Sizes of the carton's range (11–1 wraps for children). */
+  sizes: string[]
+  articleSegment: string | null
+  /** The proposed assortment (null = none fits or the best ones differ: choose or enter). */
+  proposal: AssortmentOption | null
+  /** Every assortment with this division, pairs per carton and size code. */
+  options: AssortmentOption[]
+  warnings: string[]
+}
+
 export type ReceiveOutcome =
   | { status: 'received'; receiptId: number; match: 'matched'; refNo: string; billId: number; lineNo: number; lineReceived: number; lineCartons: number; posted: boolean; pendingReason: string | null; postedPairs: number; label: string; warnings: string[] }
   | { status: 'received'; receiptId: number; match: 'unexpected'; label: string; reason: string; warnings: string[] }
+  | ConfirmCarton
   | { status: 'duplicate'; label: string; message: string }
   | { status: 'rejected'; message: string }
 
 /**
  * Scan one outer carton at receiving. Matches it to the oldest open bill line with the same
- * article, colour, size range and pack letter that still expects cartons (the chosen bill
- * first), records it, and posts its contents to stock when the assortment and articles are known.
- * One transaction; a retried clientEventId returns the original result.
+ * article, colour, size range and pack letter that still expects cartons (the chosen bill first).
+ * Owner, 22 Nov 2026: a multi-size carton is first returned as 'confirm' with the proposed
+ * assortment (nothing saved); the same call again with `answer` (the confirmed, chosen or typed
+ * assortment) records it and posts its contents to stock when the articles are known.
+ * Single-size and unexpected cartons are recorded at once. One transaction per call (the confirm
+ * step only reads); a retried clientEventId returns the original result.
  */
-export async function receiveCarton(db: Db, actor: Actor, input: { rawInput: string; clientEventId: string; billId?: number | null }): Promise<ReceiveOutcome> {
+export async function receiveCarton(db: Db, actor: Actor, input: { rawInput: string; clientEventId: string; billId?: number | null; answer?: AssortmentAnswer | null }): Promise<ReceiveOutcome> {
   if (!UUID_RE.test(input.clientEventId)) throw new Error('Invalid request.')
   const raw = String(input.rawInput ?? '').trim()
   const p = parseQr(raw)
@@ -380,8 +388,8 @@ export async function receiveCarton(db: Db, actor: Actor, input: { rawInput: str
       return { status: 'duplicate', label, message: `Already received${h.refNo ? ` on bill ${h.refNo}` : ''} by ${h.userName || 'someone'} at ${new Date(h.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}.` } as const
     }
     // Oldest open line that still expects a carton like this one; lock it so two receivers cannot over-receive.
-    const cand = await tx.execute<{ id: number; billId: number; refNo: string; mrp: string; cartons: number; received: number }>(sql`
-      SELECT l.id, l."billId", b."refNo", l.mrp, l.cartons,
+    const cand = await tx.execute<{ id: number; billId: number; refNo: string; mrp: string; cartons: number; received: number; lineNo: number; division: string; pairsPerCarton: number; assortmentId: number | null }>(sql`
+      SELECT l.id, l."billId", b."refNo", l.mrp, l.cartons, l."lineNo", b.division, l."pairsPerCarton", l."assortmentId",
              (SELECT count(*) FROM carton_receipts c WHERE c."billLineId" = l.id AND c.status = 'active')::int AS received
       FROM purchase_bill_lines l JOIN purchase_bills b ON b.id = l."billId"
       WHERE b.status IN ('expected', 'partial') AND l."articleCode" = ${art} AND l."colourCode" = ${col}
@@ -395,6 +403,29 @@ export async function receiveCarton(db: Db, actor: Actor, input: { rawInput: str
     if (pack && pack !== 'A') warnings.push(`Pack letter "${pack}" (not A) — possibly factory seconds; check the carton.`)
     if (line && mrp != null && Number(line.mrp) !== mrp) warnings.push(`Label MRP ₹${mrp} differs from the bill's ₹${Number(line.mrp)}.`)
     if (line && input.billId && Number(line.billId) !== input.billId) warnings.push(`Not on the chosen bill — matched to bill ${line.refNo}.`)
+    // Multi-size carton: the receiver confirms (or chooses / enters) its assortment first.
+    if (line && from !== to) {
+      if (!input.answer) {
+        const ch = (await lineChoices(tx, { lineIds: [Number(line.id)] })).get(Number(line.id))
+        const range = expandSizeRange(from, to)
+        const ask: ConfirmCarton = {
+          status: 'confirm', label, billId: Number(line.billId), refNo: line.refNo, lineNo: Number(line.lineNo),
+          lineReceived: Number(line.received), lineCartons: Number(line.cartons), articleCode: art, pairsPerCarton: Number(line.pairsPerCarton),
+          sizes: range.ok ? range.sizes : [from, to], articleSegment: ch?.articleSegment ?? null,
+          proposal: ch?.proposal ?? null, options: ch?.options ?? [], warnings,
+        }
+        return ask
+      }
+      try {
+        await settleLineAssortment(tx, actor, {
+          id: Number(line.id), refNo: line.refNo, division: line.division ?? '', articleCode: art, pairsPerCarton: Number(line.pairsPerCarton),
+          sizeFrom: from, sizeTo: to, assortmentId: line.assortmentId != null ? Number(line.assortmentId) : null,
+        }, input.answer, 'carton receiving')
+      } catch (e) {
+        if (e instanceof NeedsAssortment) return { status: 'rejected', message: e.message } as const
+        throw e
+      }
+    }
     const ins = await tx.execute<{ id: number }>(sql`
       INSERT INTO carton_receipts ("clientEventId", "rawInput", "dedupeKey", "articleCode", "colourCode", "sizeFrom", "sizeTo", "packLetter", mrp, match, "billId", "billLineId", "userId", "userName")
       VALUES (${input.clientEventId}::uuid, ${raw}, ${key}, ${art}, ${col}, ${from}, ${to}, ${pack}, ${mrp}, ${line ? 'matched' : 'unexpected'},

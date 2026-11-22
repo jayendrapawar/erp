@@ -1,6 +1,6 @@
 # Carton assortments
 
-Status: built on development (migration 0005, 18 Nov 2026). 32 Flite EVA assortments loaded.
+Status: built on development (migration 0005, 18 Nov 2026). 32 Flite EVA assortments loaded; 22 Nov 2026 Relaxo's Bahamas, Sparx and Flite PU sheets (167 more, development only) — see the last section.
 Production: in the release runbook, step 8.
 
 ## What it is
@@ -72,3 +72,39 @@ would become another new version, visible in the audit trail).
 `app/actions/assortments.ts`, `app/api/assortments/export/route.ts`, `app/master/assortments-tab.tsx`,
 `scripts/catalog/import-assortments.ts` (EVA conversion and command-line load),
 tests `tests/catalog/assortments.test.ts`, `tests/db/assortments.test.ts`.
+
+## Relaxo's four assortment files and "which one fits" (22 Nov 2026)
+
+Owner sent Relaxo's sheets for Bahamas/Hawaii, Flite EVA, Sparx (BOM) and Flite PU. Read against every
+proforma invoice 2023–2026, the carton on an invoice line links to one assortment by: division +
+pairs per carton + size range + the article's **segment** (Gents/Ladies/Kids from the invoice's
+G/L/B/C word) + the article's **code family** where the sheet is per family (PU: Belly-PUB,
+Ladies-PUL …; Sparx: flip-flops "SF", School Mate "SSM", sandals "SS").
+
+What the app now stores (no schema change):
+
+- **Segment "Any"** for assortments only (`ANY_SEGMENT`): Sparx blocks without Gents/Ladies
+  ("Shoes/sandals (floaters) 12", "Flip-flops SF G/L 24", "Shoes 24"). An article never has "Any".
+- **Code families in "Only for"**: an entry ending in `*` covers every code starting with it
+  (`PUB*`, `SF*`, `SSM*`, `SS*`). Exact codes still work (Hawaii lists).
+- **Most specific wins** (`rankAssortments` in `lib/catalog/assortments.ts`; the same rule in SQL in
+  `lib/purchases/assortment-match.ts`; the retailer shop uses it too): listed code > family > any
+  article, then the article's own segment > "Any"; another segment never fits. Best ones with
+  different pairs → nothing proposed, the receiver chooses.
+- **Owner's answers (22 Nov 2026)**: SF Gents 24 pairs 6–9 = SFG GENTS 6×6 7×7 8×7 9×4 (the flip-flop
+  block's 6×4 7×8 8×8 9×4 is left out); PFL ladies use Ladies-PUL; Sparx ladies sandals 12 pairs 4–5
+  = SANDAL LADIES 4×4 5×8; child sandals 24 pairs 11–1 = 1×8 11×4 12×4 13×8 (School Mate's 1×6 … only
+  for SSM codes); child shoes SD0 24 pairs 11–1 on hold (confirmed per carton). Carton types with no
+  assortment in the files are left unlinked: the receiver types them when the carton arrives.
+
+Upload file: `docs/catalog/relaxo/relaxo-assortments.xlsx` — 167 assortments (Bahamas 42, Flite PU 57,
+Sparx 68; Flite EVA already loaded, unchanged), sheet "Left out" lists what was not loaded and why.
+Loaded on development 22 Nov 2026 (`scripts/catalog/import-assortments.ts --file …`). Production:
+not yet — needs the code release first (older code would not understand "Any" and families).
+
+Article master on development, same day (Master → Articles upload format, add-only): article codes +
+colour codes from the invoices not in the master yet and bought since 2021 (1,136), colour codes of
+128 "code pending" rows, and blank segment / division filled on 1,637 rows (segment from the
+invoice word; division by the owner's first-letter rule, Hawaii codes → Bahamas). Colours whose code
+was not printed (2021–23 invoices) and rows without an article name or colour name were not added:
+they are listed for the owner.

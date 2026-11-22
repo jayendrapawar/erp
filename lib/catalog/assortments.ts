@@ -14,6 +14,12 @@ import type { AssortmentSize } from '../db/schema'
 export const DIVISIONS = ['Sparx', 'Flite EVA', 'Flite PU', 'Bahamas'] as const
 // Same segments as the article list (Gents, Ladies, Kids); Baby comes from the Flite EVA assortment sheet.
 export const SEGMENTS = ['Gents', 'Ladies', 'Kids', 'Baby'] as const
+/**
+ * Assortments may also be for "Any" segment (owner, 22 Nov 2026): Relaxo's Sparx sheet has blocks
+ * without Gents/Ladies (e.g. "Shoes/sandals (floaters) 12"). An article segment is never "Any".
+ */
+export const ANY_SEGMENT = 'Any'
+export const ASSORTMENT_SEGMENTS = [...SEGMENTS, ANY_SEGMENT] as const
 export const SIZE_COLUMNS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'] as const
 export const SHEET_NAME = 'Assortments'
 export const HEADERS = ['Division', 'Segment', 'Pairs per carton', 'Assortment code', ...SIZE_COLUMNS, 'Total', 'Note', 'Only for articles'] as const
@@ -25,13 +31,67 @@ export interface AssortmentInput {
   code: string
   sizes: AssortmentSize[]
   note?: string
-  /** Article codes this assortment is only for ("FIP002G" or "HC003G,TR002G"); '' = any article. */
+  /**
+   * Article codes this assortment is only for ("FIP002G" or "HC003G,TR002G"); '' = any article.
+   * An entry ending in "*" is a code family: "PUB*" = every article code starting with PUB
+   * (Relaxo's PU sheet names its blocks by family: Belly-PUB, Ladies-PUL …).
+   */
   onlyFor?: string
 }
 
 /** Article codes as stored: upper case, unique, sorted, comma-separated ('' = any article). */
 export function normalizeOnlyFor(raw: unknown): string {
   return [...new Set(String(raw ?? '').toUpperCase().split(/[\s,;/]+/).map(x => x.trim()).filter(Boolean))].sort().join(',')
+}
+
+const ONLY_FOR_CODE = /^[A-Z0-9]{3,14}$/
+const ONLY_FOR_FAMILY = /^[A-Z][A-Z0-9]{1,7}\*$/
+
+/**
+ * How closely an assortment's "only for" list covers an article: 2 = the code is listed,
+ * 1 = its family is listed ("PUB*"), 0 = the assortment is for any article, -1 = not covered.
+ */
+export function coverRank(onlyFor: string | null | undefined, articleCode: string): number {
+  if (!onlyFor) return 0
+  const code = articleCode.trim().toUpperCase()
+  const list = onlyFor.split(',')
+  if (list.includes(code)) return 2
+  return list.some(x => x.endsWith('*') && code.startsWith(x.slice(0, -1))) ? 1 : -1
+}
+
+/**
+ * How an assortment's segment fits an article's: 1 = same segment, 0 = "Any" (or the article has
+ * no segment yet, so every segment is possible), -1 = a different segment.
+ */
+export function segmentRank(assortmentSegment: string, articleSegment: string | null | undefined): number {
+  if (!articleSegment) return 0
+  if (assortmentSegment === articleSegment) return 1
+  return assortmentSegment === ANY_SEGMENT ? 0 : -1
+}
+
+export interface Rankable { segment: string; onlyFor?: string | null; sizes: AssortmentSize[] }
+
+/**
+ * Assortments that fit one carton (same division, pairs per carton and size code), best first.
+ * The most specific wins: listed article code > code family > any article; then the article's own
+ * segment > "Any". `best` = the top group; `pick` = the one to propose, or null when the top group
+ * holds different contents (the user must choose) or nothing fits (the user must enter it).
+ */
+export function rankAssortments<T extends Rankable>(options: T[], article: { code: string; segment: string | null }): { eligible: T[]; best: T[]; pick: T | null } {
+  const scored = options
+    .map(o => ({ o, c: coverRank(o.onlyFor, article.code), s: segmentRank(o.segment, article.segment) }))
+    .filter(x => x.c >= 0 && x.s >= 0)
+    .sort((a, b) => b.c - a.c || b.s - a.s)
+  const eligible = scored.map(x => x.o)
+  if (!scored.length) return { eligible, best: [], pick: null }
+  const best = scored.filter(x => x.c === scored[0].c && x.s === scored[0].s).map(x => x.o)
+  const pick = best.every(o => sameSizes(o.sizes, best[0].sizes)) ? best[0] : null
+  return { eligible, best, pick }
+}
+
+/** "HC003G, PUB… (family)" for screens. */
+export function describeOnlyFor(onlyFor: string | null | undefined): string {
+  return (onlyFor ?? '').split(',').filter(Boolean).map(x => (x.endsWith('*') ? `${x.slice(0, -1)}… (family)` : x)).join(', ')
 }
 
 /** Article codes written in a note, e.g. "Hawaii only: HC003G, TR002G" or "only for FIP002G" ('' when none). */
@@ -42,9 +102,9 @@ export function onlyForFromNote(note: unknown): string {
   return codes.join(',')
 }
 
-/** Does an assortment apply to this article code? ('' onlyFor = every article). */
+/** Does an assortment apply to this article code? ('' onlyFor = every article; "PUB*" = the PUB family). */
 export function coversArticle(onlyFor: string | null | undefined, articleCode: string): boolean {
-  return !onlyFor || onlyFor.split(',').includes(articleCode.trim().toUpperCase())
+  return coverRank(onlyFor, articleCode) >= 0
 }
 
 export interface Validated {
@@ -93,11 +153,11 @@ export function validateAssortment(raw: AssortmentInput, divisions: readonly str
   const divisionRaw = norm(raw.division)
   const segmentRaw = norm(raw.segment)
   const division = pick(divisions, divisionRaw)
-  const segment = pick(SEGMENTS, segmentRaw)
+  const segment = pick(ASSORTMENT_SEGMENTS, segmentRaw)
   if (!divisionRaw) errors.push('Division is missing.')
   else if (!division) errors.push(`Division "${divisionRaw}" is not one of: ${divisions.join(', ')}.`)
   if (!segmentRaw) errors.push('Segment is missing.')
-  else if (!segment) errors.push(`Segment "${segmentRaw}" is not one of: ${SEGMENTS.join(', ')}.`)
+  else if (!segment) errors.push(`Segment "${segmentRaw}" is not one of: ${ASSORTMENT_SEGMENTS.join(', ')}.`)
 
   const packing = Number(raw.packing)
   if (!Number.isInteger(packing) || packing < 1 || packing > 1000) errors.push('Pairs per carton must be a whole number from 1 to 1000.')
@@ -130,8 +190,8 @@ export function validateAssortment(raw: AssortmentInput, divisions: readonly str
     warnings.push(`Code ${code} does not read as a size range, so the sizes cannot be cross-checked.`)
   }
   const onlyFor = normalizeOnlyFor(raw.onlyFor)
-  const badCode = onlyFor.split(',').filter(Boolean).find(c => !/^[A-Z0-9]{3,14}$/.test(c))
-  if (badCode) errors.push(`"${badCode}" in Only for articles is not an article code.`)
+  const badCode = onlyFor.split(',').filter(Boolean).find(c => !ONLY_FOR_CODE.test(c) && !ONLY_FOR_FAMILY.test(c))
+  if (badCode) errors.push(`"${badCode}" in Only for articles is not an article code or a code family like PUB*.`)
 
   return {
     value: { division: division ?? divisionRaw, segment: segment ?? segmentRaw, packing, code, sizes, note: norm(raw.note), onlyFor },

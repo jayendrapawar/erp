@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { HEADERS, codeSizes, parseAssortmentSheet, planAssortmentUpload, validateAssortment, type AssortmentInput } from '../../lib/catalog/assortments'
+import { HEADERS, codeSizes, coverRank, coversArticle, describeOnlyFor, parseAssortmentSheet, planAssortmentUpload, rankAssortments, segmentRank, validateAssortment, type AssortmentInput } from '../../lib/catalog/assortments'
 
 const sizes = (o: Record<string, number>) => Object.entries(o).map(([size, pairs]) => ({ size, pairs }))
 const base = (over: Partial<AssortmentInput> = {}): AssortmentInput =>
@@ -68,5 +68,51 @@ describe('carton assortment rules', () => {
   test('missing columns are reported', () => {
     const r = parseAssortmentSheet([{ rowNumber: 1, values: ['Division', 'Segment', '6', '7'] }])
     assert.match(r.errors.join(), /Pairs per carton.*missing/)
+  })
+})
+
+// Owner, 22 Nov 2026: Relaxo's four assortment files loaded with "Any" segment rows and code families.
+describe('which assortment fits an article (most specific wins)', () => {
+  const pul = { id: 1, segment: 'Ladies', onlyFor: '', sizes: sizes({ 4: 7, 5: 9, 6: 9, 7: 5 }) }
+  const pub = { id: 2, segment: 'Ladies', onlyFor: 'PUB*', sizes: sizes({ 4: 6, 5: 9, 6: 9, 7: 6 }) }
+  const anyRow = { id: 3, segment: 'Any', onlyFor: '', sizes: sizes({ 4: 6, 5: 6 }) }
+  const sandalLadies = { id: 4, segment: 'Ladies', onlyFor: '', sizes: sizes({ 4: 4, 5: 8 }) }
+
+  test('"only for" can name a code family; a listed code beats the family, the family beats any article', () => {
+    assert.deepEqual([coverRank('', 'PUL070L'), coverRank('PUB*', 'PUB010L'), coverRank('PUB*,PUL070L', 'PUL070L'), coverRank('PUB*', 'PUL070L')], [0, 1, 2, -1])
+    assert.equal(coversArticle('HC003G,TR002G', 'TR002G'), true)
+    assert.equal(coversArticle('SF*', 'SS0101G'), false)
+    assert.equal(describeOnlyFor('HC003G,PUB*'), 'HC003G, PUB… (family)')
+  })
+
+  test('the article\'s own segment beats "Any"; another segment never fits; no segment = any segment', () => {
+    assert.deepEqual([segmentRank('Ladies', 'Ladies'), segmentRank('Any', 'Ladies'), segmentRank('Gents', 'Ladies'), segmentRank('Gents', null)], [1, 0, -1, 0])
+  })
+
+  test('PU Belly (PUB*) gets its own; PFL and PUL get the Ladies one (owner: "use them as PUL ladies")', () => {
+    assert.equal(rankAssortments([pul, pub], { code: 'PUB010L', segment: 'Ladies' }).pick?.id, 2)
+    assert.equal(rankAssortments([pul, pub], { code: 'PFL002L', segment: 'Ladies' }).pick?.id, 1)
+    assert.equal(rankAssortments([pul, pub], { code: 'PUL070L', segment: 'Ladies' }).pick?.id, 1)
+  })
+
+  test('Sparx ladies 12:405 → the Ladies row over the "Any" block (owner: option 2); kids keep the Any row', () => {
+    assert.equal(rankAssortments([anyRow, sandalLadies], { code: 'SS0101L', segment: 'Ladies' }).pick?.id, 4)
+    assert.equal(rankAssortments([anyRow, sandalLadies], { code: 'SX0500B', segment: 'Kids' }).pick?.id, 3)
+  })
+
+  test('best rows with different pairs → no proposal (the receiver chooses); nothing eligible → enter it', () => {
+    const r = rankAssortments([anyRow, sandalLadies], { code: 'SX0500U', segment: null })
+    assert.equal(r.pick, null)
+    assert.equal(r.best.length, 2)
+    assert.deepEqual(rankAssortments([pul], { code: 'PUG090G', segment: 'Gents' }), { eligible: [], best: [], pick: null })
+    // Same pairs in both best rows → either is fine, the first is proposed.
+    assert.equal(rankAssortments([anyRow, { ...anyRow, id: 9 }], { code: 'SX0500U', segment: null }).pick?.id, 3)
+  })
+
+  test('the upload accepts "Any" and code families, and rejects other words', () => {
+    assert.deepEqual(validateAssortment(base({ segment: 'any', onlyFor: 'pub*, HC003G' })).errors, [])
+    assert.equal(validateAssortment(base({ segment: 'any', onlyFor: 'pub*, HC003G' })).value.onlyFor, 'HC003G,PUB*')
+    assert.match(validateAssortment(base({ onlyFor: 'P*' })).errors.join(), /code family/)
+    assert.match(validateAssortment(base({ segment: 'Boys' })).errors.join(), /Gents, Ladies, Kids, Baby, Any/)
   })
 })

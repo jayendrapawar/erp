@@ -5,10 +5,12 @@ import { PageHeader } from '@/app/orders/_components/shared'
 import { PageNav } from '@/components/page-nav'
 import { useHashTab } from '@/lib/use-hash-tab'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { DIVISIONS, formatSizes } from '@/lib/catalog/assortments'
+import { DIVISIONS, describeOnlyFor, formatSizes } from '@/lib/catalog/assortments'
 import { useQrScanner } from '@/components/scanner/use-qr-scanner'
 import { playAlreadyScanned, playScanOk } from '@/lib/scan-sound'
 import { ManualCartonPanel } from './manual-carton-panel'
+import { ConfirmCartonCard } from './confirm-carton-card'
+import type { AssortmentAnswer } from '@/lib/purchases/assortment-entry'
 import { FilterBar, FiltersButton, activeFilterCount, applyColumnFilters, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 
 const BILL_STATUS_LABEL: Record<string, string> = { expected: 'Expected', partial: 'Part received', received: 'Received', cancelled: 'Cancelled' }
@@ -32,7 +34,7 @@ import {
   setBillDivisionAction, setBillMailStartAction, setLineAssortmentAction, voidCartonAction,
   type MailStartState,
 } from '@/app/actions/purchases'
-import type { BillDetail, BillRow, ExpectedStockRow, PurchaseSummary, ReceiptRow, ReceiveOutcome } from '@/lib/purchases/store'
+import type { BillDetail, BillRow, ConfirmCarton, ExpectedStockRow, PurchaseSummary, ReceiptRow, ReceiveOutcome } from '@/lib/purchases/store'
 import type { UploadFileResult } from '@/app/api/purchases/upload/route'
 import type { MailCheckResult } from '@/lib/purchases/mail'
 
@@ -433,32 +435,30 @@ function BillDialog({ billId, canManage, onClose, onChanged }: { billId: number;
                       {l.sizeFrom === l.sizeTo ? (
                         <p>Single-size carton: {l.pairsPerCarton} pairs of size {l.sizeTo}{l.receivedCartons ? ` · ${l.postedCartons} of ${l.receivedCartons} received carton(s) added stock` : ''}</p>
                       ) : l.assortment ? (
-                        <p>Assortment: {l.assortment.segment} v{l.assortment.version} · <span className="font-mono">{formatSizes(l.assortment.sizes)}</span>{l.receivedCartons ? ` · ${l.postedCartons} of ${l.receivedCartons} received carton(s) added stock` : ''}</p>
+                        <p>Proposed assortment: {l.assortment.segment} v{l.assortment.version} · <span className="font-mono">{formatSizes(l.assortment.sizes)}</span> (each carton is confirmed at receiving){l.receivedCartons ? ` · ${l.postedCartons} of ${l.receivedCartons} received carton(s) added stock` : ''}</p>
                       ) : l.options.length ? (
                         <p className="flex flex-wrap items-center gap-1.5">
                           <span className="text-amber-700 dark:text-amber-400">
                             {l.options.some((o) => o.covers)
-                              ? 'Choose the carton assortment (for cartons received from now on):'
-                              : `Only an assortment for other articles has ${l.pairsPerCarton} pairs · code ${l.sizeFrom}${l.sizeTo.padStart(2, '0')}. Use it for ${l.articleCode} too, or enter a new assortment:`}
+                              ? 'Choose the carton assortment (or confirm it per carton at receiving):'
+                              : `Only an assortment for other articles has ${l.pairsPerCarton} pairs · code ${l.sizeFrom}${l.sizeTo.padStart(2, '0')}. Use it for ${l.articleCode} too, or enter the pairs per size at receiving:`}
                           </span>
                           {l.options.map((o) => (
                             <button key={o.id} disabled={!canManage || busy}
                               onClick={() => {
                                 // "Only for" other articles: ask before using it for this article as well.
-                                if (!o.covers && !window.confirm(`This assortment is only for ${o.onlyFor.split(',').join(', ')}.\n\nUse the same assortment for ${l.articleCode} too?\n\nOK = use it for ${l.articleCode} too · Cancel = keep it separate (enter a new assortment in Master → Assortments)`)) return
-                                run(async () => { await setLineAssortmentAction(l.id, o.id, !o.covers); return !o.covers ? `Assortment now also used for ${l.articleCode}. Cartons received from now on add stock.` : 'Assortment saved. Cartons received from now on add stock.' })
+                                if (!o.covers && !window.confirm(`This assortment is only for ${describeOnlyFor(o.onlyFor)}.\n\nUse the same assortment for ${l.articleCode} too?\n\nOK = use it for ${l.articleCode} too · Cancel = keep it separate (enter the pairs per size when the carton arrives)`)) return
+                                run(async () => { await setLineAssortmentAction(l.id, o.id, !o.covers); return !o.covers ? `Assortment now also used for ${l.articleCode}. It is proposed for each carton at receiving.` : 'Assortment saved. It is proposed for each carton at receiving.' })
                               }}
-                              className={`rounded-md border px-1.5 py-0.5 hover:bg-muted disabled:opacity-60 ${o.covers ? 'border-border' : 'border-amber-400 border-dashed'}`}>
+                              className={`rounded-md border px-1.5 py-0.5 hover:bg-muted disabled:opacity-60 ${o.id === l.suggestedId ? 'border-green-600' : o.covers ? 'border-border' : 'border-amber-400 border-dashed'}`}>
                               {o.segment}: <span className="font-mono">{formatSizes(o.sizes)}</span>
-                              {o.onlyFor && <span className="ml-1 text-[10px] text-muted-foreground" data-no-translate>{`(only for ${o.onlyFor.split(',').join(', ')})`}</span>}
+                              {o.id === l.suggestedId && <span className="ml-1 text-[10px] font-semibold text-green-700 dark:text-green-400">suggested</span>}
+                              {o.onlyFor && <span className="ml-1 text-[10px] text-muted-foreground" data-no-translate>{`(only for ${describeOnlyFor(o.onlyFor)})`}</span>}
                             </button>
                           ))}
-                          {!l.options.some((o) => o.covers) && (
-                            <a href="/master" className="rounded-md border border-border px-1.5 py-0.5 text-xs underline hover:bg-muted">Enter a new assortment</a>
-                          )}
                         </p>
                       ) : (
-                        <p className="text-amber-700 dark:text-amber-400">No carton assortment for {b.division || 'this division'} · {l.pairsPerCarton} pairs · code {l.sizeFrom}{l.sizeTo.padStart(2, '0')} — cartons are checked against the bill and stock comes from scanning their boxes. Add the assortment in Master → Assortments to add stock from the carton itself.</p>
+                        <p className="text-amber-700 dark:text-amber-400">No carton assortment for {b.division || 'this division'} · {l.pairsPerCarton} pairs · code {l.sizeFrom}{l.sizeTo.padStart(2, '0')} — when a carton arrives, the receiver enters its pairs per size (saved to Master → Assortments).</p>
                       )}
                     </div>
                   </div>
@@ -523,13 +523,19 @@ function ReceiptRows({ rows, canManage, busy, voiding, setVoiding, reason, setRe
 
 // ── Receive ────────────────────────────────────────────────────────────
 
-interface LogItem { id: string; raw: string; at: number; pending: boolean; out?: ReceiveOutcome; error?: string }
+interface LogItem { id: string; raw: string; at: number; pending: boolean; out?: ReceiveOutcome; error?: string; skipped?: boolean }
+/** A scanned carton waiting for its assortment to be confirmed (owner, 22 Nov 2026). */
+interface Ask { id: string; raw: string; ask: ConfirmCarton }
 
 function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpenBill: (id: number) => void }) {
   const [openBills, setOpenBills] = useState<BillRow[]>([])
   const [billId, setBillId] = useState<number | ''>('')
   const [log, setLog] = useState<LogItem[]>([])
   const [manualOpen, setManualOpen] = useState(false)
+  // Multi-size cartons wait here, first scanned first, until the receiver confirms their assortment.
+  const [asks, setAsks] = useState<Ask[]>([])
+  const [askBusy, setAskBusy] = useState(false)
+  const [askError, setAskError] = useState('')
   // While manual entry waits for a pair box, scanned codes go to it instead of carton receiving.
   const boxHandlerRef = useRef<((raw: string) => void) | null>(null)
   const registerBoxHandler = useCallback((fn: ((raw: string) => void) | null) => { boxHandlerRef.current = fn }, [])
@@ -537,20 +543,50 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
   useEffect(() => { billRef.current = billId }, [billId])
   useEffect(() => { getOpenBills().then(setOpenBills).catch(() => {}) }, [])
 
+  const settle = useCallback((id: string, out: ReceiveOutcome) => {
+    setLog((l) => l.map((x) => (x.id === id ? { ...x, pending: false, out } : x)))
+    const good = out.status === 'received' && out.match === 'matched' && out.warnings.length === 0
+    if (good) playScanOk(); else playAlreadyScanned()
+    try { navigator.vibrate?.(out.status === 'received' && out.match === 'matched' ? 60 : [60, 60, 60]) } catch { /* ignore */ }
+    if (out.status === 'received') onReceived()
+  }, [onReceived])
+
   const submit = useCallback((raw: string) => {
     if (boxHandlerRef.current) { boxHandlerRef.current(raw); return }
     const id = uuid()
     setLog((l) => [{ id, raw, at: Date.now(), pending: true }, ...l].slice(0, 100))
     receiveCartonAction({ rawInput: raw, clientEventId: id, billId: billRef.current || null })
       .then((out) => {
-        setLog((l) => l.map((x) => (x.id === id ? { ...x, pending: false, out } : x)))
-        const good = out.status === 'received' && out.match === 'matched' && out.warnings.length === 0
-        if (good) playScanOk(); else playAlreadyScanned()
-        try { navigator.vibrate?.(out.status === 'received' && out.match === 'matched' ? 60 : [60, 60, 60]) } catch { /* ignore */ }
-        if (out.status === 'received') onReceived()
+        if (out.status === 'confirm') {
+          setLog((l) => l.map((x) => (x.id === id ? { ...x, pending: false, out } : x)))
+          setAsks((a) => [...a, { id, raw, ask: out }])
+          playScanOk()
+          return
+        }
+        settle(id, out)
       })
       .catch((e) => setLog((l) => l.map((x) => (x.id === id ? { ...x, pending: false, error: errText(e, 'Not saved — scan again.') } : x))))
-  }, [onReceived])
+  }, [settle])
+
+  const current = asks[0] ?? null
+  async function answer(a: AssortmentAnswer) {
+    if (!current) return
+    setAskBusy(true); setAskError('')
+    try {
+      const out = await receiveCartonAction({ rawInput: current.raw, clientEventId: current.id, billId: billRef.current || null, answer: a })
+      if (out.status === 'confirm') { setAsks((q) => [{ ...q[0], ask: out }, ...q.slice(1)]); setAskError('The bill changed meanwhile — check again.'); return }
+      settle(current.id, out)
+      setAsks((q) => q.slice(1))
+      if (!window.matchMedia('(pointer: coarse)').matches) focusScan()
+    } catch (e) {
+      setAskError(errText(e, 'Not saved — try again.'))
+    } finally { setAskBusy(false) }
+  }
+  function skip() {
+    if (!current) return
+    setLog((l) => l.map((x) => (x.id === current.id ? { ...x, skipped: true } : x)))
+    setAsks((q) => q.slice(1)); setAskError('')
+  }
 
   // Camera only here: the Scan box below takes USB / Bluetooth scanners.
   const { videoRef, active, error, start, stop } = useQrScanner(submit, { hardware: false })
@@ -571,7 +607,8 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null
-      if (target?.matches('input, textarea, select, [contenteditable="true"]')) return
+      // Radio buttons (the confirm card's choices) do not take typing: a scan then still reaches the Scan box.
+      if (target?.matches('input:not([type="radio"]):not([type="checkbox"]), textarea, select, [contenteditable="true"]')) return
       if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1) return
       if (document.querySelector('[role="dialog"]')) return
       const input = scanRef.current
@@ -639,6 +676,8 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
           onResult={addManualResult} onClose={() => setManualOpen(false)} />
       )}
 
+      {current && <ConfirmCartonCard key={current.id} ask={current.ask} waiting={asks.length - 1} busy={askBusy} error={askError} onAnswer={answer} onSkip={skip} />}
+
       {last && <ResultBanner item={last} onOpenBill={onOpenBill} />}
 
       {log.length > 1 && (
@@ -654,7 +693,12 @@ function describe(x: LogItem): { tone: 'ok' | 'warn' | 'err' | 'wait'; title: st
   if (x.pending) return { tone: 'wait', title: 'Saving…', detail: x.raw }
   if (x.error) return { tone: 'err', title: 'Not saved', detail: x.error }
   const o = x.out!
-  if (o.status === 'rejected') return { tone: 'err', title: 'Not a carton', detail: o.message }
+  if (o.status === 'confirm') {
+    return x.skipped
+      ? { tone: 'warn', title: `Not received · ${o.label}`, detail: 'Left at the assortment check. Scan it again to receive it.' }
+      : { tone: 'wait', title: `Check pairs per size · ${o.label}`, detail: `Bill ${o.refNo} line ${o.lineNo} — confirm the assortment to receive it.` }
+  }
+  if (o.status === 'rejected') return { tone: 'err', title: 'Not received', detail: o.message }
   if (o.status === 'duplicate') return { tone: 'warn', title: `Already received · ${o.label}`, detail: o.message }
   if (o.match === 'unexpected') return { tone: 'err', title: `Unexpected carton · ${o.label}`, detail: o.reason }
   return {

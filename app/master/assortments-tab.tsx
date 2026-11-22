@@ -3,13 +3,13 @@
 import { useMemo, useRef, useState, useTransition } from 'react'
 import { applyAssortmentUpload, previewAssortmentUpload, retireAssortment, saveAssortment, type UploadPreview } from '@/app/actions/assortments'
 import type { Assortment } from '@/lib/catalog/assortment-store'
-import { DIVISIONS, SEGMENTS, SIZE_COLUMNS, codeSizes, formatSizes, validateAssortment } from '@/lib/catalog/assortments'
+import { ASSORTMENT_SEGMENTS, DIVISIONS, SEGMENTS, SIZE_COLUMNS, codeSizes, describeOnlyFor, formatSizes, validateAssortment } from '@/lib/catalog/assortments'
 import { UploadGuide } from '@/components/upload-guide'
 import { activeFilterCount, applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 
 const ASSORTMENT_FILTERS: ColumnFilterDef<Assortment>[] = [
   { key: 'division', label: 'Division', kind: 'select', options: DIVISIONS, get: a => a.division },
-  { key: 'segment', label: 'Segment', kind: 'select', options: SEGMENTS, get: a => a.segment },
+  { key: 'segment', label: 'Segment', kind: 'select', options: ASSORTMENT_SEGMENTS, get: a => a.segment },
   { key: 'packing', label: 'Pairs', kind: 'text', get: a => String(a.packing) },
   { key: 'code', label: 'Code', kind: 'text', get: a => a.code },
   { key: 'sizes', label: 'Pairs per size', kind: 'text', placeholder: 'e.g. 6×4', get: a => formatSizes(a.sizes) },
@@ -202,7 +202,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
             </div>
             <p className="mt-1 font-mono text-xs text-foreground">{formatSizes(a.sizes)}</p>
             {a.note && <p className="mt-1 text-xs text-muted-foreground">{a.note}</p>}
-            {a.onlyFor && <p className="mt-1 text-xs font-mono text-amber-700 dark:text-amber-400" data-no-translate>{`Only for ${a.onlyFor.split(',').join(', ')}`}</p>}
+            {a.onlyFor && <p className="mt-1 text-xs font-mono text-amber-700 dark:text-amber-400" data-no-translate>{`Only for ${describeOnlyFor(a.onlyFor)}`}</p>}
             {canEdit && (
               <div className="flex gap-2 pt-2 mt-2 border-t border-border">
                 <button onClick={() => openEdit(a)} className="flex-1 rounded-md border border-border px-2 py-1 text-xs font-medium hover:bg-muted">Edit</button>
@@ -236,7 +236,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
                     <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{formatSizes(a.sizes)}</td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">v{a.version}</td>
                     <td className="px-3 py-2 text-xs text-muted-foreground max-w-[180px] truncate" title={a.note}>{a.note || '—'}</td>
-                    <td className="px-3 py-2 text-xs max-w-[200px]" data-no-translate>{a.onlyFor ? <span className="font-mono text-amber-700 dark:text-amber-400">{a.onlyFor.split(',').join(', ')}</span> : <span className="text-muted-foreground">any article</span>}</td>
+                    <td className="px-3 py-2 text-xs max-w-[200px]" data-no-translate>{a.onlyFor ? <span className="font-mono text-amber-700 dark:text-amber-400">{describeOnlyFor(a.onlyFor)}</span> : <span className="text-muted-foreground">any article</span>}</td>
                     {canEdit && (
                       <td className="px-3 py-2 whitespace-nowrap">
                         <button onClick={() => openEdit(a)} className="rounded-md border border-border px-2 py-0.5 text-xs font-medium hover:bg-muted">Edit</button>
@@ -272,7 +272,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
             <div>
               <label htmlFor="as-segment" className={labelCls}>Segment</label>
               <select id="as-segment" disabled={!!form.id} value={form.segment} onChange={e => setForm({ ...form, segment: e.target.value })} className={inputCls}>
-                {SEGMENTS.map(s => <option key={s} value={s}>{s}</option>)}
+                {ASSORTMENT_SEGMENTS.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
             {form.division === NEW_DIVISION && (
@@ -318,7 +318,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
           </div>
           <div>
             <label htmlFor="as-onlyfor" className={labelCls}>Only for articles (optional)</label>
-            <input id="as-onlyfor" value={form.onlyFor} onChange={e => setForm({ ...form, onlyFor: e.target.value })} placeholder="e.g. HC003G, TR002G — blank = any article" className={`${inputCls} font-mono`} />
+            <input id="as-onlyfor" value={form.onlyFor} onChange={e => setForm({ ...form, onlyFor: e.target.value })} placeholder="e.g. HC003G, TR002G or PUB* (a code family) — blank = any article" className={`${inputCls} font-mono`} />
             <p className="mt-1 text-[11px] text-muted-foreground">Used automatically only for these article codes. For another article with the same pairs, the app asks whether to use it too or enter a new one.</p>
           </div>
           {(check.errors.length > 0 || check.warnings.length > 0) && (form.packing || form.code) && (

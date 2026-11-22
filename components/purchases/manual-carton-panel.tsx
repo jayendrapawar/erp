@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { manualCartonOptionsAction, receiveManualCartonAction } from '@/app/actions/purchases'
-import { SEGMENTS, formatSizes } from '@/lib/catalog/assortments'
+import { SEGMENTS, describeOnlyFor, formatSizes } from '@/lib/catalog/assortments'
 import type { ManualBox, ManualLine } from '@/lib/purchases/manual-carton'
 import type { ReceiveOutcome } from '@/lib/purchases/store'
 
@@ -68,21 +68,16 @@ export function ManualCartonPanel({ registerBoxHandler, cameraActive, onStartCam
 
   const line = lines.find((l) => l.lineId === lineId) ?? null
 
-  // Contents: the line's own assortment, the only one that fits, or the one for the article's segment.
+  // Contents: preselect the proposed assortment (the line's own, else the best by the rule); the
+  // receiver confirms it by pressing Receive, or picks another, or types the pairs per size.
   useEffect(() => {
-    if (!line) { setChoice(null); return }
-    if (line.assortment || line.single) { setChoice(null); return }
-    // Chosen automatically only among assortments that cover this article ("only for" others must be confirmed).
-    const covering = line.options.filter((o) => o.covers !== false)
-    if (covering.length === 1) { setChoice(covering[0].id); return }
-    const bySeg = covering.filter((o) => o.segment === box?.segment)
-    if (bySeg.length === 1) { setChoice(bySeg[0].id); return }
-    setChoice(line.options.length === 0 ? 'new' : null)
+    if (!line || line.single) { setChoice(null); return }
+    setChoice(line.proposalId ?? (line.options.length === 0 ? 'new' : null))
     setPairs({})
-  }, [line, box?.segment])
+  }, [line])
 
   const total = useMemo(() => Object.values(pairs).reduce((n, v) => n + (Number(v) || 0), 0), [pairs])
-  const needsContents = Boolean(line && !line.assortment && !line.single)
+  const needsContents = Boolean(line && !line.single)
   const canReceive = Boolean(line && !busy && (!needsContents
     || (typeof choice === 'number')
     || (choice === 'new' && segment && total === line.pairsPerCarton)))
@@ -101,7 +96,7 @@ export function ManualCartonPanel({ registerBoxHandler, cameraActive, onStartCam
       if (out.status === 'needs_assortment') { setChoice('new'); setError(out.message); return }
       onResult(box.raw, out)
       if (out.status === 'received') onClose()
-      else setError(out.message)
+      else setError('message' in out ? out.message : 'Not saved — try again.')
     } catch (e) {
       setError(errText(e, 'Not saved — try again.'))
     } finally { setBusy(false) }
@@ -164,18 +159,18 @@ export function ManualCartonPanel({ registerBoxHandler, cameraActive, onStartCam
               <p className="text-sm font-medium">3. Pairs in each size</p>
               {line.single ? (
                 <p className="text-xs">{`Single-size carton: all ${line.pairsPerCarton} pairs are size ${line.sizeFrom}.`}</p>
-              ) : line.assortment ? (
-                <p className="text-xs">{`From the bill: ${line.assortment.segment} · ${formatSizes(line.assortment.sizes)}`}</p>
               ) : (
                 <div className="space-y-1.5">
+                  {line.options.length > 0 && <p className="text-xs text-muted-foreground">Check the suggested pairs per size against the carton, or choose another.</p>}
                   {line.options.map((o) => (
                     <label key={o.id} className="flex items-center gap-2 text-xs">
                       <input type="radio" name="manual-assortment" checked={choice === o.id} onChange={() => setChoice(o.id)} />
                       <span>
-                        {`${o.segment} · ${formatSizes(o.sizes)}`}
+                        <span className="font-mono">{formatSizes(o.sizes)}</span>{` · ${o.segment}`}
+                        {o.id === line.proposalId && <span className="ml-1.5 rounded bg-green-100 px-1 py-px text-[10px] font-semibold text-green-800 dark:bg-green-900/40 dark:text-green-300">Suggested</span>}
                         {o.onlyFor && (
                           <span className={`block text-[11px] ${o.covers === false ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`} data-no-translate>
-                            {o.covers === false ? `Only for ${o.onlyFor.split(',').join(', ')} — choose to use it for ${box?.articleCode} too` : `Only for ${o.onlyFor.split(',').join(', ')}`}
+                            {o.covers === false ? `Only for ${describeOnlyFor(o.onlyFor)} — choose to use it for ${box?.articleCode} too` : `Only for ${describeOnlyFor(o.onlyFor)}`}
                           </span>
                         )}
                       </span>

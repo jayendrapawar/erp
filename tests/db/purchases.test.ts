@@ -32,6 +32,14 @@ describe('purchases: expected stock, carton receiving (integration)', { skip: !h
   const sku: Record<string, number> = {}
   const bal = async (size: string, provenance: string) => Number((await h.db.execute<{ q: number }>(sql`SELECT coalesce(sum(quantity),0)::int q FROM stock_balances WHERE "skuId" = ${sku[size]} AND provenance = ${provenance}`)).rows[0].q)
   const receive = (raw: string, billFilter?: number) => receiveCarton(h.db, wh, { rawInput: raw, clientEventId: randomUUID(), billId: billFilter ?? null })
+  // Owner, 22 Nov 2026: a multi-size carton first asks to confirm its assortment; then the same call
+  // with the answer receives it. `answer` defaults to "confirm the proposal".
+  const receiveConfirmed = async (raw: string, answer?: Parameters<typeof receiveCarton>[2]['answer']) => {
+    const clientEventId = randomUUID()
+    const ask = await receiveCarton(h.db, wh, { rawInput: raw, clientEventId })
+    if (ask.status !== 'confirm') return ask
+    return receiveCarton(h.db, wh, { rawInput: raw, clientEventId, answer: answer ?? { assortmentId: ask.proposal?.id ?? null } })
+  }
   const mismatches = async () => Number((await h.db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM stock_balance_mismatches`)).rows[0].n)
 
   before(async () => {
@@ -61,7 +69,15 @@ describe('purchases: expected stock, carton receiving (integration)', { skip: !h
   })
 
   test('receiving: matched carton → +assortment pairs as carton stock; duplicate, box label and unknown cartons handled', async () => {
-    const r1 = await receive(carton('PUG105G', 'BRBR', '0610', '1000000001'))
+    // First scan only asks: the proposed assortment, nothing saved yet.
+    const id1 = randomUUID()
+    const ask = await receiveCarton(h.db, wh, { rawInput: carton('PUG105G', 'BRBR', '0610', '1000000001'), clientEventId: id1 })
+    assert.ok(ask.status === 'confirm' && ask.proposal && ask.options.length === 1 && ask.pairsPerCarton === 30, JSON.stringify(ask))
+    assert.deepEqual(ask.status === 'confirm' && ask.sizes, ['6', '7', '8', '9', '10'])
+    assert.equal(await bal('6', 'carton'), 0)
+    const empty = await receiveCarton(h.db, wh, { rawInput: carton('PUG105G', 'BRBR', '0610', '1000000001'), clientEventId: id1, answer: {} })
+    assert.ok(empty.status === 'rejected' && /pairs in each size/.test(empty.message))
+    const r1 = await receiveCarton(h.db, wh, { rawInput: carton('PUG105G', 'BRBR', '0610', '1000000001'), clientEventId: id1, answer: { assortmentId: ask.status === 'confirm' ? ask.proposal!.id : 0 } })
     assert.equal(r1.status, 'received')
     assert.ok(r1.status === 'received' && r1.match === 'matched' && r1.posted && r1.postedPairs === 30 && r1.lineReceived === 1)
     assert.deepEqual(await Promise.all(['6', '7', '10'].map((s) => bal(s, 'carton'))), [6, 6, 6])
@@ -69,13 +85,19 @@ describe('purchases: expected stock, carton receiving (integration)', { skip: !h
     assert.equal((await receive(BOX_7)).status, 'rejected')
     const unknown = await receive(carton('PUG105G', 'TNTN', '0610', '1000000002'))
     assert.ok(unknown.status === 'received' && unknown.match === 'unexpected')
-    // Line 2: article not in the master and no assortment → recorded, not in stock.
-    const r2 = await receive(carton('PUG999G', 'BKBK', '0608', '1000000003', '299.50'))
-    assert.ok(r2.status === 'received' && r2.match === 'matched' && !r2.posted && /assortment/.test(r2.pendingReason ?? ''))
+    // Line 2: no assortment in the master → the receiver types it (saved to the master); the article
+    // is not in the master, so the carton is checked only (stock comes from its boxes).
+    const raw2 = carton('PUG999G', 'BKBK', '0608', '1000000003', '299.50')
+    const ask2 = await receive(raw2)
+    assert.ok(ask2.status === 'confirm' && ask2.proposal === null && ask2.options.length === 0)
+    const r2 = await receiveConfirmed(raw2, { newAssortment: { segment: 'Gents', sizes: [{ size: '6', pairs: 8 }, { size: '7', pairs: 8 }, { size: '8', pairs: 8 }] } })
+    assert.ok(r2.status === 'received' && r2.match === 'matched' && !r2.posted && /master/.test(r2.pendingReason ?? ''), JSON.stringify(r2))
+    const saved = await h.db.execute<{ n: number }>(sql`SELECT count(*)::int n FROM carton_assortments WHERE active AND division = 'Flite PU' AND packing = 24 AND code = '608' AND "onlyFor" = ''`)
+    assert.equal(saved.rows[0].n, 1)
     const sum = await purchaseSummary(h.db)
     assert.deepEqual([sum.unexpectedCartons, sum.cartonsCheckedOnly, sum.cartonsExpected], [1, 1, 1])
     // Line 1 second carton, then a third one is more than the bill lists → unexpected.
-    assert.ok((await receive(carton('PUG105G', 'BRBR', '0610', '1000000004'))).status === 'received')
+    assert.ok((await receiveConfirmed(carton('PUG105G', 'BRBR', '0610', '1000000004'))).status === 'received')
     const over = await receive(carton('PUG105G', 'BRBR', '0610', '1000000005'))
     assert.ok(over.status === 'received' && over.match === 'unexpected')
     const d = await billDetail(h.db, billId)
@@ -118,8 +140,8 @@ describe('purchases: expected stock, carton receiving (integration)', { skip: !h
 
   test('choosing an assortment later never posts cartons already received (their boxes may be scanned); undoing a carton reverses its stock', async () => {
     const lineId = Number((await h.db.execute<{ id: number }>(sql`SELECT id FROM purchase_bill_lines WHERE "billId" = ${billId} AND "lineNo" = 2`)).rows[0].id)
-    const asg = await h.db.execute<{ id: number }>(sql`INSERT INTO carton_assortments (division, segment, packing, code, sizes) VALUES
-      ('Flite PU', 'Gents', 24, '608', '[{"size":"6","pairs":8},{"size":"7","pairs":8},{"size":"8","pairs":8}]') RETURNING id`)
+    // The assortment the receiver typed for line 2's carton (test above).
+    const asg = await h.db.execute<{ id: number }>(sql`SELECT id FROM carton_assortments WHERE active AND division = 'Flite PU' AND packing = 24 AND code = '608'`)
     await assert.rejects(setLineAssortment(h.db, admin, lineId, 999999), /does not fit/)
     await setLineAssortment(h.db, admin, lineId, Number(asg.rows[0].id))
     const r2 = (await h.db.execute<{ postedAt: string | null }>(sql`SELECT "postedAt" FROM carton_receipts WHERE "billLineId" = ${lineId}`)).rows

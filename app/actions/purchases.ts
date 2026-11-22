@@ -6,10 +6,11 @@ import { requirePermission } from '@/lib/authz'
 import * as store from '@/lib/purchases/store'
 import { manualCartonOptions, receiveManualCarton, type ManualOptions, type ManualReceiveInput, type ManualReceiveOutcome } from '@/lib/purchases/manual-carton'
 import { SETTING_BILL_MAIL_START, getSetting, setSetting } from '@/lib/settings'
+import type { AssortmentAnswer } from '@/lib/purchases/assortment-entry'
 
 export interface MailStartState { day: string | null; updatedByName: string; updatedAt: string | null }
 
-// Purchases screen. Reads: one query each (bill detail: three). Writes: one transaction each.
+// Purchases screen. Reads: one query each (bill detail: four). Writes: one transaction each.
 
 const actorOf = (u: { id: string; name: string }) => ({ id: u.id, name: u.name })
 
@@ -39,7 +40,11 @@ export async function getOpenBills(): Promise<store.BillRow[]> {
   return store.listBills(db, { open: true, limit: 100 })
 }
 
-export async function receiveCartonAction(input: { rawInput: string; clientEventId: string; billId?: number | null }): Promise<store.ReceiveOutcome> {
+/**
+ * Receive a scanned carton. First call (no answer): a multi-size carton comes back as 'confirm'
+ * with its proposed assortment (reads only). Second call with the answer: saved and posted.
+ */
+export async function receiveCartonAction(input: { rawInput: string; clientEventId: string; billId?: number | null; answer?: AssortmentAnswer | null }): Promise<store.ReceiveOutcome> {
   const u = await requirePermission('purchases.receive')
   const out = await store.receiveCarton(db, actorOf(u), input)
   return out

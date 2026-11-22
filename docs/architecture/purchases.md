@@ -18,10 +18,12 @@ stock at once (as 'carton' stock); bills not received 5 days after the bill date
 - **Division** is not printed on the bill: suggested from the article codes by majority, with the
   owner's rule (19 Nov 2026, "mostly"): S… → Sparx, P… → Flite PU, F… → Flite EVA, anything else
   (BH, CU Cushion, HL Hi-Lite …) → Bahamas (`lib/qr-config.ts`). Changeable on the bill.
-- **Carton assortment per line**: the single active assortment with the bill's division, the
-  line's pairs per carton and size range (code 0810 → `810`) is chosen automatically; if several
-  fit (Gents / Ladies …) the bill shows them to choose; if none, it says to add one in
-  Master → Assortments. The segment is never guessed from the code.
+- **Carton assortment per line** (rule of 22 Nov 2026, `lib/purchases/assortment-match.ts`): of the
+  active assortments with the bill's division, the line's pairs per carton and size range (code
+  0810 → `810`), the most specific is **proposed**: its "only for" names the article code > names
+  its family (`PUB*`) > any article; then the article's own segment (from the article master) >
+  "Any". A different segment never fits. When the best ones differ, nothing is proposed (the bill
+  and the receiver choose). Every carton is still confirmed at receiving (below).
 
 ## Bills by mail (Check mail)
 
@@ -54,13 +56,19 @@ Purchases → Receive: camera, USB/Bluetooth scanner or typed code. Each outer c
 with the same article, colour, range and pack letter that still expects cartons (a chosen bill
 first). One active receipt per carton label.
 
-- Matched + its contents are known + every size is in the article master → contents enter stock
-  at once: +pairs per size, provenance **carton**, movement `receipt`. Contents are known when the
-  line has a carton assortment, or the line is a **single-size carton** (bill code `00`+size, e.g.
-  `SF0192G-GFSL0007` = 24 pairs of size 7; the carton label reads `0007` too).
-- Otherwise the carton is **checked against the bill only**; its stock comes from scanning the boxes
-  inside with the warehouse scanner. It is never added later (its boxes may already have been
-  scanned — that would count the pairs twice). Choosing an assortment affects cartons received after.
+- **Confirm the assortment of every carton (owner, 22 Nov 2026).** A matched multi-size carton is
+  first shown with its proposed pairs per size (nothing saved yet). The receiver presses **Confirm
+  and receive**, or picks another assortment that fits, or — when none fits or none is right — types
+  the pairs per size (must add up to the invoice's pairs per carton). A typed one is saved to
+  Master → Assortments (only for this article when others with these pairs exist) and proposed for
+  the next carton. "Not now" leaves the carton unreceived. Cartons scanned meanwhile wait in turn.
+  Single-size cartons, unexpected and duplicate ones are recorded at once as before.
+- Matched + confirmed + every size is in the article master → contents enter stock at once: +pairs
+  per size, provenance **carton**, movement `receipt`. A **single-size carton** needs no assortment
+  (bill code `00`+size, e.g. `SF0192G-GFSL0007` = 24 pairs of size 7; the label reads `0007` too).
+- Article or size not in the master → the carton is **checked against the bill only**; its stock
+  comes from scanning the boxes inside with the warehouse scanner. It is never added later (its boxes
+  may already have been scanned — that would count the pairs twice).
 - Not on any open bill, or more cartons than the bill lists → **Unexpected** (no stock change).
 - Label MRP different from the bill → received, with a warning.
 - Undo a carton (admin, supervisor, accountant): its stock is reversed; refused if boxes from it
@@ -95,8 +103,9 @@ arrive per article + colour + range), **Unexpected**.
 |---|---|---|
 | Open Purchases | 2 in parallel | figures + bills |
 | Upload a bill | in-memory PDF read + 1 transaction (~6 statements) | ~1–3 s per PDF on development |
-| Bill detail | 3 | lines carry progress, assortment and options |
-| Receive a carton | 1 transaction, ~14 statements whatever the carton size | ~1–2 s from a laptop to Neon; much less from Vercel |
+| Bill detail | 4 (3 in parallel) | lines carry progress, assortment, options and the proposal |
+| Scan a carton (confirm step) | 1 transaction, ~5 reads, no writes | multi-size cartons; ~0.2–0.4 s from Vercel |
+| Receive a carton | 1 transaction, ~14 statements (+~6 when a typed assortment is saved) | ~1–2 s from a laptop to Neon; much less from Vercel |
 | Expected stock / receipts | 1 each | |
 | Undo a carton | 1 transaction, ~7 statements | |
 
@@ -120,11 +129,11 @@ Purchases → Receive → **Manual entry** (`lib/purchases/manual-carton.ts`, `c
    (only ranges that contain the box's size; chosen automatically when only one fits).
    **Pairs per carton always come from the invoice line** — never typed. Not on an open invoice →
    cannot be entered by hand (upload the invoice, or scan the boxes with the warehouse scanner).
-3. Contents by size: the line's assortment; else the only active assortment that fits (division +
-   pairs per carton + range), or the one matching the article's segment; else the receiver types
-   pairs per size (must add up to the invoice's pairs per carton) and chooses the segment — saved
-   to **Master → Assortments** (source manual, audited) and set on every open line it now fits;
-   the article gets that segment if it had none.
+3. Contents by size: the proposed assortment is preselected (same rule as scanning) and confirmed
+   with **Receive carton**; the receiver may pick another that fits, or type pairs per size (must add
+   up to the invoice's pairs per carton) and choose the segment — saved to **Master → Assortments**
+   (source manual, audited; only for this article when others with these pairs exist) and proposed
+   on the open lines it now fits; the article gets that segment if it had none.
 
 The carton is then received exactly like a scanned one (same stock posting, same undo). The pair
 box's label is the receipt key (`manual:box:…`), so one box cannot receive two cartons. 2 reads

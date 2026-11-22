@@ -85,4 +85,30 @@ describe('"only for" carton assortments (integration)', { skip: !harnessEnabled(
     const both = (await listActiveAssortments(h.db)).filter(a => a.packing === 30 && a.code === '610')
     assert.deepEqual(both.map(a => a.onlyFor).sort(), ['FIP002G', 'NEW001G'])
   })
+
+  // Owner, 22 Nov 2026: code families ("PUB*") and "Any" segment rows; the most specific wins (same
+  // rule as rankAssortments in lib/catalog/assortments.ts, here done in SQL at bill import).
+  test('bill import proposes by family and segment: PUB* over PUL for Belly, Ladies over Any', async () => {
+    await h.db.execute(sql`INSERT INTO articles ("artName","artCode",color,"colorCode",segment) VALUES
+      ('PUB-10','PUB010L','Black','BKBK','Ladies'), ('PFL-2','PFL002L','Black','BKBK','Ladies'), ('SS-101','SS0101L','Black','BKBK','Ladies'), ('SX-500','SX0500U','Black','BKBK',NULL)`)
+    const sz = (o: Record<string, number>) => JSON.stringify(Object.entries(o).map(([size, pairs]) => ({ size, pairs })))
+    await h.db.execute(sql`INSERT INTO carton_assortments (division, segment, packing, code, sizes, "onlyFor") VALUES
+      ('Flite PU', 'Ladies', 30, '407', ${sz({ 4: 7, 5: 9, 6: 9, 7: 5 })}::jsonb, ''),
+      ('Flite PU', 'Ladies', 30, '407', ${sz({ 4: 6, 5: 9, 6: 9, 7: 6 })}::jsonb, 'PUB*'),
+      ('Sparx', 'Any', 12, '405', ${sz({ 4: 6, 5: 6 })}::jsonb, ''),
+      ('Sparx', 'Ladies', 12, '405', ${sz({ 4: 4, 5: 8 })}::jsonb, '')`)
+    const l = (lineNo: number, art: string, from: string, to: string, pairs: number) => ({ ...line(lineNo, art, pairs), sizeFrom: from, sizeTo: to, cartons: 1, pairs })
+    const pu: ParsedBill = { ...bill, refNo: '0520777779/1062', invoiceNo: 'RV0000000011', totalCartons: 2, totalPairs: 60, lines: [l(1, 'PUB010L', '4', '7', 30), l(2, 'PFL002L', '4', '7', 30)] }
+    const sp: ParsedBill = { ...bill, refNo: '0520777780/1062', invoiceNo: 'RV0000000012', totalCartons: 2, totalPairs: 24, lines: [l(1, 'SS0101L', '4', '5', 12), l(2, 'SX0500U', '4', '5', 12)] }
+    const a = await saveBill(h.db, admin, pu, { name: 'pu.pdf', sha256: 'f'.repeat(64) }, 'Flite PU')
+    const b = await saveBill(h.db, admin, sp, { name: 'sp.pdf', sha256: '9'.repeat(64) }, 'Sparx')
+    assert.ok(a.status === 'saved' && b.status === 'saved' && a.assortmentsFound === 2 && b.assortmentsFound === 1)
+    if (a.status !== 'saved' || b.status !== 'saved') return
+    const [pub, pfl] = (await billDetail(h.db, a.id))!.lines
+    assert.deepEqual([pub.assortment?.onlyFor, pfl.assortment?.onlyFor], ['PUB*', ''])
+    const [ss, sx] = (await billDetail(h.db, b.id))!.lines
+    assert.equal(ss.assortment?.segment, 'Ladies')
+    // No segment and two different best rows: nothing proposed, both offered.
+    assert.deepEqual([sx.assortment, sx.suggestedId, sx.options.length], [null, null, 2])
+  })
 })

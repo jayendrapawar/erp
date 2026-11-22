@@ -7,7 +7,9 @@
 //     receiver types pairs per size (must add up to the invoice's pairs per carton) and it is saved
 //     to Master → Assortments for the next carton (division + segment + pairs/carton + size range);
 //   • the box's label is the receipt's key, so the same box cannot receive two cartons.
-// Database work: options = 2 reads in parallel; receive = 1 transaction (~12–16 statements).
+// Database work: options = 2 reads in parallel + 1 for the assortment choices; receive = 1
+// transaction (~10–16 statements). Assortment choice follows assortment-match.ts; the receiver
+// confirms it by pressing Receive (owner, 22 Nov 2026).
 
 import { sql } from 'drizzle-orm'
 import type { AssortmentSize } from '@/lib/db/schema'
@@ -16,13 +18,12 @@ import { audit } from '@/lib/audit'
 import { parseQr } from '@/lib/qr/parser'
 import { normalizeArticleValue } from '@/lib/article-utils'
 import { expandSizeRange } from '@/lib/catalog/sizes'
-import { validateAssortment } from '@/lib/catalog/assortments'
-import { addArticleToAssortment } from '@/lib/catalog/assortment-store'
+import { lineChoices } from './assortment-match'
+import { NeedsAssortment, settleLineAssortment } from './assortment-entry'
 import { outcomeFor, postReceivedCartons, refreshBillStatus, type ReceiveOutcome } from './store'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const NORM = (col: unknown) => sql`upper(regexp_replace(btrim(${col}), '\\s+', ' ', 'g'))`
-const rangeCode = (from: string, to: string) => `${from}${to.padStart(2, '0')}`
 
 export interface ManualBox {
   raw: string
@@ -65,6 +66,8 @@ export interface ManualLine {
   assortment: ManualAssortment | null
   /** Active assortments in the master that fit (division + pairs per carton + range), any segment. */
   options: ManualAssortment[]
+  /** The one to propose (the line's own, else the best by the rule); null = choose or enter. */
+  proposalId: number | null
 }
 
 export type ManualOptions = { ok: false; message: string } | { ok: true; box: ManualBox; lines: ManualLine[] }
@@ -92,14 +95,10 @@ export async function manualCartonOptions(db: DbOrTx, rawBox: string): Promise<M
   if (!r.ok) return r
   const { articleCode: art, colourCode: col } = r.box
   const [lines, info] = await Promise.all([
-    db.execute<{ id: number; billId: number; refNo: string; billDate: string; division: string; sizeFrom: string; sizeTo: string; packLetter: string; pairsPerCarton: number; mrp: string; cartons: number; received: number; assortmentId: number | null; aSegment: string | null; aSizes: AssortmentSize[] | null; options: ManualAssortment[] }>(sql`
+    db.execute<{ id: number; billId: number; refNo: string; billDate: string; division: string; sizeFrom: string; sizeTo: string; packLetter: string; pairsPerCarton: number; mrp: string; cartons: number; received: number; assortmentId: number | null; aSegment: string | null; aSizes: AssortmentSize[] | null }>(sql`
       SELECT l.id, l."billId", b."refNo", b."billDate"::text AS "billDate", b.division, l."sizeFrom", l."sizeTo", l."packLetter", l."pairsPerCarton", l.mrp, l.cartons,
              (SELECT count(*) FROM carton_receipts c WHERE c."billLineId" = l.id AND c.status = 'active')::int AS received,
-             l."assortmentId", a.segment AS "aSegment", a.sizes AS "aSizes",
-             (SELECT coalesce(json_agg(json_build_object('id', x.id, 'segment', x.segment, 'sizes', x.sizes, 'onlyFor', x."onlyFor",
-                                         'covers', (x."onlyFor" = '' OR l."articleCode" = ANY(string_to_array(x."onlyFor", ',')))) ORDER BY x.segment, x."onlyFor"), '[]'::json)
-                FROM carton_assortments x
-               WHERE x.active AND x.division = b.division AND x.packing = l."pairsPerCarton" AND x.code = l."sizeFrom" || lpad(l."sizeTo", 2, '0')) AS options
+             l."assortmentId", a.segment AS "aSegment", a.sizes AS "aSizes"
         FROM purchase_bill_lines l JOIN purchase_bills b ON b.id = l."billId"
         LEFT JOIN carton_assortments a ON a.id = l."assortmentId"
        WHERE b.status IN ('expected', 'partial') AND l."articleCode" = ${art} AND l."colourCode" = ${col}
@@ -112,19 +111,22 @@ export async function manualCartonOptions(db: DbOrTx, rawBox: string): Promise<M
                       (SELECT v.segment FROM articles v WHERE ${NORM(sql`v."artCode"`)} = ${art} AND v.segment IS NOT NULL ORDER BY v.id LIMIT 1)) AS segment`),
   ])
   const box: ManualBox = { ...r.box, articleName: info.rows[0]?.artName ?? null, segment: info.rows[0]?.segment ?? null }
+  const choices = await lineChoices(db, { lineIds: lines.rows.filter((l) => l.sizeFrom !== l.sizeTo).map((l) => Number(l.id)) })
   return {
     ok: true,
     box,
     lines: lines.rows.map((l) => {
       const range = expandSizeRange(l.sizeFrom, l.sizeTo)
       const sizes = range.ok ? range.sizes : [l.sizeFrom]
+      const ch = choices.get(Number(l.id))
       return {
         lineId: Number(l.id), billId: Number(l.billId), refNo: l.refNo, billDate: l.billDate, division: l.division,
         sizeFrom: l.sizeFrom, sizeTo: l.sizeTo, sizes, packLetter: l.packLetter, pairsPerCarton: Number(l.pairsPerCarton),
         mrp: Number(l.mrp), cartons: Number(l.cartons), received: Number(l.received), fitsBox: sizes.includes(box.size),
         single: l.sizeFrom === l.sizeTo,
         assortment: l.assortmentId != null && l.aSizes ? { id: Number(l.assortmentId), segment: l.aSegment ?? '', sizes: l.aSizes } : null,
-        options: (l.options ?? []).map((o) => ({ id: Number(o.id), segment: o.segment, sizes: o.sizes, onlyFor: o.onlyFor ?? '', covers: o.covers !== false })),
+        options: (ch?.options ?? []).map((o) => ({ id: o.id, segment: o.segment, sizes: o.sizes, onlyFor: o.onlyFor, covers: o.covers })),
+        proposalId: ch?.proposal?.id ?? null,
       }
     }),
   }
@@ -177,59 +179,20 @@ export async function receiveManualCarton(db: Db, actor: Actor, input: ManualRec
     const sizes = range.ok ? range.sizes : [line.sizeFrom]
     if (!sizes.includes(box.size)) throw new Error(`The box is size ${box.size}, which is not in this carton's range ${line.sizeFrom}–${line.sizeTo}. Choose the right range.`)
 
-    // Carton contents: the line's assortment, or one chosen / typed now.
-    const code = rangeCode(line.sizeFrom, line.sizeTo)
-    const single = line.sizeFrom === line.sizeTo
-    let assortmentId = line.assortmentId != null ? Number(line.assortmentId) : null
-    if (assortmentId == null && !single) {
-      if (input.assortmentId) {
-        const ok = await tx.execute<{ covers: boolean }>(sql`SELECT (carton_assortments."onlyFor" = '' OR ${line.articleCode} = ANY(string_to_array(carton_assortments."onlyFor", ','))) AS covers FROM carton_assortments WHERE id = ${input.assortmentId} AND active AND division = ${line.division} AND packing = ${line.pairsPerCarton} AND code = ${code}`)
-        if (!ok.rows.length) throw new Error('That assortment does not fit this carton (division, pairs per carton and size range must match).')
-        if (!ok.rows[0].covers) {
-          if (!input.addArticle) throw new Error(`That assortment is only for other articles. Confirm using it for ${line.articleCode} too, or enter a new assortment.`)
-          await addArticleToAssortment(tx, actor, input.assortmentId, line.articleCode)
-        }
-        assortmentId = input.assortmentId
-      } else if (input.newAssortment) {
-        if (!line.division) throw new Error(`Bill ${line.refNo} has no division. Set it on the bill first (Purchases → Bills).`)
-        const scoped = await tx.execute(sql`SELECT 1 FROM carton_assortments WHERE active AND division = ${line.division} AND packing = ${line.pairsPerCarton} AND code = ${code} AND "onlyFor" <> '' LIMIT 1`)
-        const v = validateAssortment({ division: line.division, segment: input.newAssortment.segment, packing: Number(line.pairsPerCarton), code, sizes: input.newAssortment.sizes,
-          note: `Entered at manual carton receiving (bill ${line.refNo})`,
-          // Same pairs as an "only for" assortment of other articles: this new one is only for this article.
-          onlyFor: scoped.rows.length ? line.articleCode : '' })
-        if (v.errors.length) throw new Error(v.errors.join(' '))
-        if (v.value.sizes.some((s) => !sizes.includes(s.size))) throw new Error(`Only sizes ${sizes.join(', ')} belong to this carton.`)
-        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('carton_assortments'))`)
-        const same = await tx.execute<{ id: number }>(sql`
-          SELECT id FROM carton_assortments WHERE active AND division = ${v.value.division} AND segment = ${v.value.segment} AND packing = ${v.value.packing} AND code = ${v.value.code} AND "onlyFor" = ${v.value.onlyFor ?? ''}`)
-        if (same.rows[0]) assortmentId = Number(same.rows[0].id)
-        else {
-          const ins = await tx.execute<{ id: number }>(sql`
-            INSERT INTO carton_assortments (division, segment, packing, code, sizes, note, "onlyFor", source, "createdBy", version)
-            VALUES (${v.value.division}, ${v.value.segment}, ${v.value.packing}, ${v.value.code}, ${JSON.stringify(v.value.sizes)}::jsonb, ${v.value.note ?? ''}, ${v.value.onlyFor ?? ''}, 'manual', ${actor.id},
-                    (SELECT coalesce(max(version), 0) + 1 FROM carton_assortments WHERE division = ${v.value.division} AND segment = ${v.value.segment} AND packing = ${v.value.packing} AND code = ${v.value.code} AND "onlyFor" = ${v.value.onlyFor ?? ''}))
-            RETURNING id`)
-          assortmentId = Number(ins.rows[0].id)
-          await audit(tx, { actor, action: 'assortment.created', entityType: 'carton_assortment', entityId: assortmentId, after: { ...v.value, from: 'manual carton entry' } })
-        }
-        // Other open invoice lines of the same kind (no assortment yet, exactly one fits now) get it too.
-        await tx.execute(sql`
-          UPDATE purchase_bill_lines l SET "assortmentId" = x.id
-            FROM (SELECT l2.id AS "lineId", min(a.id) AS id, count(*) AS n
-                    FROM purchase_bill_lines l2 JOIN purchase_bills b ON b.id = l2."billId"
-                    JOIN carton_assortments a ON a.active AND a.division = b.division AND a.packing = l2."pairsPerCarton" AND a.code = l2."sizeFrom" || lpad(l2."sizeTo", 2, '0')
-                      AND (a."onlyFor" = '' OR l2."articleCode" = ANY(string_to_array(a."onlyFor", ',')))
-                   WHERE b.status IN ('expected', 'partial') AND l2."assortmentId" IS NULL AND l2."sizeFrom" <> l2."sizeTo"
-                     AND b.division = ${v.value.division} AND l2."pairsPerCarton" = ${v.value.packing} AND l2."sizeFrom" || lpad(l2."sizeTo", 2, '0') = ${v.value.code}
-                   GROUP BY l2.id) x
-           WHERE l.id = x."lineId" AND x.n = 1`)
-        // The article gets this segment if it has none yet.
-        await tx.execute(sql`UPDATE articles SET segment = ${v.value.segment} WHERE ${NORM(sql`"artCode"`)} = ${box.articleCode} AND segment IS NULL`)
-      } else {
-        return { status: 'needs_assortment', message: 'Enter the pairs in each size of this carton (the master has no assortment for it yet).' } as const
+    // Carton contents: the assortment the receiver confirmed (chosen or typed), else the line's own.
+    if (line.sizeFrom !== line.sizeTo) {
+      const answer = input.assortmentId || input.newAssortment
+        ? { assortmentId: input.assortmentId ?? null, addArticle: input.addArticle, newAssortment: input.newAssortment ?? null }
+        : { assortmentId: line.assortmentId != null ? Number(line.assortmentId) : null }
+      try {
+        await settleLineAssortment(tx, actor, {
+          id: Number(line.id), refNo: line.refNo, division: line.division ?? '', articleCode: line.articleCode, pairsPerCarton: Number(line.pairsPerCarton),
+          sizeFrom: line.sizeFrom, sizeTo: line.sizeTo, assortmentId: line.assortmentId != null ? Number(line.assortmentId) : null,
+        }, answer, 'manual carton entry')
+      } catch (e) {
+        if (e instanceof NeedsAssortment) return { status: 'needs_assortment', message: 'Enter the pairs in each size of this carton (the master has no assortment for it yet).' } as const
+        throw e
       }
-      await tx.execute(sql`UPDATE purchase_bill_lines SET "assortmentId" = ${assortmentId} WHERE id = ${line.id} AND "assortmentId" IS NULL`)
-      await audit(tx, { actor, action: 'purchase_bill.line_assortment', entityType: 'purchase_bill_line', entityId: Number(line.id), after: { assortmentId, from: 'manual carton entry' } })
     }
 
     const warnings: string[] = ['Entered by hand (carton label not scanned).']

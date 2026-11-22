@@ -9,7 +9,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ChevronLeft, LogOut, Minus, Package, Plus, Search, ShoppingBag, X } from 'lucide-react'
 import { placeShopOrder, shopSignOut } from '@/app/actions/shop'
-import { coversArticle } from '@/lib/catalog/assortments'
+import { rankAssortments } from '@/lib/catalog/assortments'
 import type { ShopCarton, ShopCatalogue, ShopItem, ShopSet } from '@/lib/shop/catalogue'
 
 type Cart = Record<string, number> // "itemId|size" → pairs
@@ -29,11 +29,17 @@ function saveCart(retailerId: string, cart: Cart) {
 function setsFor(item: ShopItem, sets: ShopSet[]) {
   return sets.filter((s) => { const k = Object.keys(s.quantities).filter((z) => s.quantities[z] > 0); return k.length > 0 && k.every((z) => item.sizes.includes(z)) })
 }
-/** Carton assortments for this article: same division + segment, "only for" allows it, sizes exist. */
+/**
+ * Carton assortments for this article: same division, sizes exist, and per pairs + size code the
+ * best by the receiving rule (own segment over "Any", listed code over family over any article).
+ */
 function cartonsFor(item: ShopItem, cartons: ShopCarton[]) {
   if (!item.division || !item.segment) return []
-  const d = item.division.toLowerCase(), g = item.segment.toLowerCase()
-  return cartons.filter((c) => c.division.toLowerCase() === d && c.segment.toLowerCase() === g && coversArticle(c.onlyFor, item.code) && c.sizes.every((z) => item.sizes.includes(z.size)))
+  const d = item.division.toLowerCase()
+  const fit = cartons.filter((c) => c.division.toLowerCase() === d && c.sizes.every((z) => item.sizes.includes(z.size)))
+  const groups = new Map<string, ShopCarton[]>()
+  for (const c of fit) groups.set(`${c.pairs}|${c.code}`, [...(groups.get(`${c.pairs}|${c.code}`) ?? []), c])
+  return [...groups.values()].flatMap((g) => rankAssortments(g, { code: item.code, segment: item.segment }).best)
 }
 
 export function ShopApp({ catalogue, retailerId, retailerName }: { catalogue: ShopCatalogue; retailerId: string; retailerName: string }) {
