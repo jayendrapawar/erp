@@ -15,6 +15,7 @@ import type { ProcurementRow } from '@/app/actions/orders'
 import type { CatalogueData } from '@/app/actions/catalogue'
 import type { BillingVendor } from '@/components/billing-scanner-page'
 import type { OrderSet } from '@/app/actions/sets'
+import { tablistKeyDown, useTabKeys } from '@/lib/shortcuts/tabs'
 
 // ── Prop types (mirroring what each dashboard expects) ────────────────────────
 
@@ -139,13 +140,15 @@ function GridTabBar({
     <>
       {/* Mobile: segmented pill style arranged in grid / 2 rows */}
       <div className="sm:hidden mb-5">
-        <div className={`grid ${mobileGrid} w-full items-center justify-center rounded-lg bg-muted p-[3px] gap-1 text-muted-foreground`}>
+        <div className={`grid ${mobileGrid} w-full items-center justify-center rounded-lg bg-muted p-[3px] gap-1 text-muted-foreground`} role="tablist" aria-label="Orders" onKeyDown={tablistKeyDown}>
           {tabs.map(tab => {
             const isActive = tab.value === active
             return (
               <button
                 key={tab.value}
                 type="button"
+                role="tab"
+                aria-selected={isActive}
                 onClick={() => onChange(tab.value)}
                 className={`inline-flex items-center justify-center whitespace-nowrap rounded-md border border-transparent px-2 py-2 text-xs font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   isActive
@@ -165,6 +168,9 @@ function GridTabBar({
         <div
           className="grid w-full items-center justify-center rounded-lg bg-muted p-[3px] text-muted-foreground"
           style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
+          role="tablist"
+          aria-label="Orders"
+          onKeyDown={tablistKeyDown}
         >
           {tabs.map(tab => {
             const isActive = active === tab.value
@@ -172,6 +178,8 @@ function GridTabBar({
               <button
                 key={tab.value}
                 type="button"
+                role="tab"
+                aria-selected={isActive}
                 onClick={() => onChange(tab.value)}
                 className={`inline-flex items-center justify-center whitespace-nowrap rounded-md border border-transparent px-2 py-1.5 text-sm font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   isActive
@@ -278,6 +286,8 @@ export function AdminHub({
     setActiveTab(tab)
     window.location.hash = tab
   }
+  // Keyboard: Alt+1…9 switch tabs (the biller's own tabs inside use Alt+Shift).
+  useTabKeys(TABS, handleTabChange, { group: 'Orders tabs' })
 
   // Opening a tab loads it (skeleton the first time) or refreshes it in the background. Overview
   // comes with the page, so it is refetched only when opened again later.

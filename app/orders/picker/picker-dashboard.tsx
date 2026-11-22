@@ -1,5 +1,6 @@
 'use client'
-import { useState, useTransition, useMemo, useEffect } from 'react'
+import { useState, useTransition, useMemo, useEffect, useRef } from 'react'
+import { useListKeys } from '@/lib/shortcuts/list'
 import { StatusPill, fmt, StatButton, SegTabs } from '../_components/shared'
 import { PageNav } from '@/components/page-nav'
 import {
@@ -47,6 +48,9 @@ function ProgressBar({ done, total, tone = 'blue' }: { done: number; total: numb
 
 export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded, onPickerChange }: Props) {
   const [queue, setQueue] = useState<QueueItem[]>(initialQueue)
+  // Keyboard: ↑↓ / j k orders, Enter opens (lib/shortcuts/list.ts).
+  const queueListRef = useRef<HTMLDivElement>(null)
+  useListKeys(queueListRef, { label: 'Picker queue' })
   const [selectedOrder, setSelectedOrder] = useState<{ order: Order; items: OrderItem[]; readOnly: boolean } | null>(null)
   const [isPending, startTransition] = useTransition()
   const [loadingId, setLoadingId] = useState<number | null>(null)
@@ -666,7 +670,7 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
         )}
 
         {/* Order list */}
-        <div className="space-y-2">
+        <div ref={queueListRef} className="space-y-2">
           {displayList.length === 0 && (
             <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-8 h-8 opacity-40">
@@ -696,12 +700,14 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
             return (
               <div
                 key={order.id}
+                data-list-row
                 className={`rounded-xl border bg-card transition-all ${mine ? 'border-blue-200 dark:border-blue-900' : 'border-border'} ${isLoading ? 'opacity-60' : ''}`}
               >
                 <div className="flex items-stretch">
                   {/* The order itself opens it; the action button sits beside it (no button inside a button). */}
                   <button
                     type="button"
+                    data-row-open
                     onClick={() => !isLoading && openOrder(order.id)}
                     disabled={isLoading}
                     className="min-w-0 flex-1 px-3.5 py-3 text-left rounded-l-xl hover:bg-muted/30 active:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"

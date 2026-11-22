@@ -1,6 +1,7 @@
 // Shared utilities for the orders UI (used by client components only)
 
-import { useEffect } from 'react'
+import { tablistKeyDown } from '@/lib/shortcuts/tabs'
+import { DialogKeys } from '@/components/dialog-keys'
 
 export type BadgeColor = 'gray' | 'blue' | 'yellow' | 'green' | 'red' | 'purple' | 'orange'
 
@@ -124,13 +125,10 @@ export function StatButton({ label, value, color, active, onClick, hint }: {
  * a phone. Esc or a tap outside closes it.
  */
 export function SidePanel({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Esc, focus inside, Tab wraps, focus back to the opener: <DialogKeys>.
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/50" onClick={onClose}>
+      <DialogKeys onClose={onClose} />
       <section role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()}
         className="flex h-full w-full max-w-md flex-col border-l border-border bg-card shadow-2xl">
         <div className="flex items-center gap-3 border-b border-border px-4 py-3 sm:px-5 sm:py-4">
@@ -150,7 +148,7 @@ export function SegTabs<T extends string>({ tabs, active, onChange, label }: {
   tabs: SegTab<T>[]; active: T; onChange: (v: T) => void; label: string
 }) {
   return (
-    <div role="tablist" aria-label={label} className="grid gap-1 rounded-xl border border-border bg-muted/40 p-1"
+    <div role="tablist" aria-label={label} onKeyDown={tablistKeyDown} className="grid gap-1 rounded-xl border border-border bg-muted/40 p-1"
       style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}>
       {tabs.map(t => {
         const on = t.value === active

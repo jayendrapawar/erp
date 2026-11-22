@@ -10,6 +10,7 @@ import { DispatcherDashboard } from '../dispatcher/dispatcher-dashboard'
 import type { CatalogueData } from '@/app/actions/catalogue'
 import type { BillingVendor } from '@/components/billing-scanner-page'
 import type { OrderSet } from '@/app/actions/sets'
+import { tablistKeyDown, useTabKeys } from '@/lib/shortcuts/tabs'
 
 interface Props {
   roles: string[]
@@ -41,13 +42,15 @@ function GridTabBar({ tabs, active, onChange }: { tabs: Tab[]; active: string; o
     <>
       {/* Mobile: segmented pill style arranged in grid / 2 rows */}
       <div className="sm:hidden mb-4">
-        <div className={`grid ${mobileGrid} w-full items-center justify-center rounded-lg bg-muted p-[3px] gap-1 text-muted-foreground`}>
+        <div className={`grid ${mobileGrid} w-full items-center justify-center rounded-lg bg-muted p-[3px] gap-1 text-muted-foreground`} role="tablist" aria-label="Orders" onKeyDown={tablistKeyDown}>
           {tabs.map(tab => {
             const isActive = tab.value === active
             return (
               <button
                 key={tab.value}
                 type="button"
+                role="tab"
+                aria-selected={isActive}
                 onClick={() => onChange(tab.value)}
                 className={`inline-flex items-center justify-center whitespace-nowrap rounded-md border border-transparent px-2 py-2 text-xs font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   isActive
@@ -66,6 +69,9 @@ function GridTabBar({ tabs, active, onChange }: { tabs: Tab[]; active: string; o
         <div
           className="grid w-full items-center justify-center rounded-lg bg-muted p-[3px] text-muted-foreground"
           style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
+          role="tablist"
+          aria-label="Orders"
+          onKeyDown={tablistKeyDown}
         >
           {tabs.map(tab => {
             const isActive = active === tab.value
@@ -73,6 +79,8 @@ function GridTabBar({ tabs, active, onChange }: { tabs: Tab[]; active: string; o
               <button
                 key={tab.value}
                 type="button"
+                role="tab"
+                aria-selected={isActive}
                 onClick={() => onChange(tab.value)}
                 className={`inline-flex items-center justify-center whitespace-nowrap rounded-md border border-transparent px-2 py-1.5 text-sm font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   isActive
@@ -136,6 +144,8 @@ export function MultiRoleOrdersHub({
     setActiveTab(tab)
     window.location.hash = tab
   }
+  // Keyboard: Alt+1…9 switch tabs (the biller's own tabs inside use Alt+Shift).
+  useTabKeys(TABS, handleTabChange, { group: 'Orders tabs' })
 
   return (
     <div className="min-h-screen bg-background">

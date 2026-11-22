@@ -11,8 +11,10 @@ import { fuzzyFilter } from '@/lib/fuzzy'
 import type { ArticleDetail, CatalogueData } from '@/app/actions/catalogue'
 import { useCatalogueCache } from '@/lib/use-catalogue-cache'
 import { useShortcut, useShortcutHelp, type ShortcutHelp } from '@/lib/shortcuts'
+import { useListKeys } from '@/lib/shortcuts/list'
 import { openKeyboardHelp } from '@/components/keyboard-help'
 import type { OrderSet } from '@/app/actions/sets'
+import { DialogKeys } from '@/components/dialog-keys'
 import {
   deleteDraft, draftArticles, draftHasContent, draftPairs, draftStorageKey, readDrafts, saveDraft,
   type OrderDraft, type OrderLine, type SizeEntry,
@@ -317,6 +319,9 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
               return (
                 <tr
                   key={line.id}
+                  tabIndex={0}
+                  aria-label={`${isEditing ? 'Stop editing' : 'Edit'} ${group.artNumber} ${line.colorName}`}
+                  onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); if (isEditing) onDeselect(); else onEdit(line) } }}
                   onClick={() => isEditing ? onDeselect() : onEdit(line)}
                   className={`border-b border-border/40 transition-colors cursor-pointer ${
                     isEditing ? 'bg-amber-50/40 dark:bg-amber-900/10' : 'hover:bg-primary/5'
@@ -450,6 +455,8 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
 
   function handleKey(e: React.KeyboardEvent<HTMLDivElement>) {
     const inInput = (e.target as HTMLElement).tagName === 'INPUT'
+    // A focused chip: Enter / Space press it (the box's Enter = next size; Shift+Enter still adds).
+    if ((e.target as HTMLElement).tagName === 'BUTTON' && !e.shiftKey && (e.key === 'Enter' || e.key === ' ')) return
     const digit = /^(Digit|Numpad)([0-9])$/.exec(e.code)?.[2]
     if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
       e.preventDefault()
@@ -503,7 +510,7 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
   const gridCols = 'minmax(2rem,auto) repeat(5, minmax(0,2.5rem)) minmax(0,3.5rem) 2.5rem'
 
   return (
-    <div ref={boxRef} tabIndex={-1} onKeyDown={handleKey} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setKbd(false) }}
+    <div ref={boxRef} tabIndex={0} onKeyDown={handleKey} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setKbd(false) }}
       className="space-y-1 rounded-lg outline-none" aria-label="Size matrix">
       {/* Header row */}
       <div className="grid items-center gap-y-0 gap-x-1" style={{ gridTemplateColumns: gridCols }}>
@@ -548,7 +555,7 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
                 <button
                   key={q}
                   type="button"
-                  tabIndex={-1}
+                  onFocus={() => { setKbd(true); setRow(i) }}
                   aria-label={`Set ${sz.sizeLabel}${multi ? ` ${sz.artCode}` : ''} to ${q}`}
                   aria-pressed={isActive}
                   onClick={() => handleQuickClick(k, q)}
@@ -561,12 +568,11 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
             <input
               type="number"
               min={0}
-              tabIndex={-1}
               aria-label={`Manual quantity for size ${sz.sizeLabel}${multi ? ` ${sz.artCode}` : ''}`}
               value={isManual ? (current === 0 ? '' : current) : (current > 5 ? current : '')}
               placeholder="0"
               onChange={e => handleManualChange(k, e.target.value)}
-              onFocus={() => setManualActive(prev => ({ ...prev, [k]: true }))}
+              onFocus={() => { setManualActive(prev => ({ ...prev, [k]: true })); setKbd(true); setRow(i) }}
               className={`h-8 w-full rounded-lg border text-xs text-center font-medium bg-background focus:outline-none focus:ring-2 focus:ring-ring transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                 (isManual && current > 0) || current > 5
                   ? 'border-green-400 text-green-700 dark:text-green-400 dark:border-green-600'
@@ -605,15 +611,17 @@ function ConfirmDialog({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <DialogKeys onClose={onCancel} />
       <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-2xl space-y-4">
         <h2 className="text-base font-semibold text-foreground">{title}</h2>
         <div className="text-sm text-muted-foreground">{message}</div>
         <div className="flex gap-3 pt-1">
-          <button type="button" onClick={onCancel}
+          {/* Every use loses work (replace quantities, start over, discard, cancel order): Cancel has the focus first. */}
+          <button type="button" onClick={onCancel} data-autofocus
             className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors">
             Cancel
           </button>
-          <button type="button" onClick={onConfirm}
+          <button type="button" onClick={onConfirm} data-primary data-destructive
             className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
             {confirmLabel}
           </button>
@@ -762,6 +770,9 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
   const catalogue = useCatalogueCache(serverCatalogue)
 
   const [view, setView] = useState<View>('new')
+  // Keyboard: ↑↓ / j k orders, Enter opens, / search, n New order (lib/shortcuts/list.ts).
+  const ordersListRef = useRef<HTMLDivElement>(null)
+  useListKeys(ordersListRef, { label: 'Orders list', newLabel: 'New order', onNew: () => goTo('new') })
 
   // ── Auto-refresh (All Orders stays live) ──
   const [lastRefreshed, setLastRefreshed] = useState<Date>(() => new Date())
@@ -1314,6 +1325,8 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
   function goTo(next: View, filter?: StatusFilter) {
     if (filter) setFilterStatus(filter)
     if (next === view && next !== 'new') return
+    // Keyboard: "New" while New Order is already open puts the cursor back in the form.
+    if (next === 'new' && view === 'new' && hasKeyboard()) { setTimeout(() => (selectedSk ? artSearchRef.current : skSearchRef.current)?.focus(), 0); return }
     if (view === 'new' && next !== 'new') {
       if (editingOrderId == null && draftIdRef.current) {
         leftDraftRef.current = draftIdRef.current
@@ -1865,7 +1878,7 @@ ${bills}
         {view === 'list' && (
           <div className="space-y-2.5">
             {orderActionError && (
-              <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
+              <p role="alert" className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
             )}
 
             {/* Search + sort on one line */}
@@ -1874,7 +1887,7 @@ ${bills}
                 <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
-                <input type="search" value={search} onChange={e => setSearch(e.target.value)} aria-label="Search orders"
+                <input type="search" data-list-search value={search} onChange={e => setSearch(e.target.value)} aria-label="Search orders"
                   placeholder="Shop or order number"
                   className="h-10 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
@@ -1935,13 +1948,14 @@ ${bills}
                 )}
               </div>
             )}
-            <div className="space-y-2">
+            <div ref={ordersListRef} className="space-y-2">
               {shownOrders.map(order => {
                 const tag = orderTag(order)
                 return (
                   <button
                     key={order.id}
                     type="button"
+                    data-list-row
                     onClick={() => handleViewOrder(order)}
                     className="w-full text-left rounded-xl border border-border bg-card px-3.5 py-3 hover:bg-muted/30 active:bg-muted/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
@@ -2034,7 +2048,7 @@ ${bills}
                 <p className="px-4 py-6 text-sm text-muted-foreground text-center">Loading items…</p>
               )}
               {detailError && (
-                <p className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>
+                <p role="alert" className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>
               )}
               {!detailLoading && !detailError && detailItems.length === 0 && (
                 <p className="px-4 py-6 text-sm text-muted-foreground text-center">No items found.</p>
@@ -2214,7 +2228,7 @@ ${bills}
               )
             })()}
             {orderActionError && (
-              <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
+              <p role="alert" className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
             )}
           </div>
         )}
@@ -2467,7 +2481,7 @@ ${bills}
 
                         {/* Error for this section */}
                         {error && (
-                          <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>
+                          <p role="alert" className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>
                         )}
 
                         {/* Add to Order + Next Article — full-width on mobile, auto-width on wider */}
@@ -2813,6 +2827,7 @@ ${bills}
             className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
             onClick={e => { if (e.target === e.currentTarget) setPrintConfigOpen(false) }}
           >
+            <DialogKeys onClose={() => setPrintConfigOpen(false)} />
             <div className="w-full sm:max-w-sm bg-card rounded-t-2xl sm:rounded-2xl border border-border shadow-2xl overflow-hidden">
 
               {/* Modal header */}
@@ -2941,6 +2956,7 @@ ${bills}
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
           onClick={e => { if (e.target === e.currentTarget) setPickerAssignOpen(false) }}
         >
+          <DialogKeys onClose={() => setPickerAssignOpen(false)} />
           <div className="w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl bg-background shadow-2xl max-h-[90vh] flex flex-col">
 
             {/* Drag handle */}
@@ -3030,6 +3046,7 @@ ${bills}
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm"
           onClick={() => setSetPickerOpen(false)}
         >
+          <DialogKeys onClose={() => setSetPickerOpen(false)} />
           <div
             className="w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl bg-background shadow-2xl"
             onClick={e => e.stopPropagation()}
