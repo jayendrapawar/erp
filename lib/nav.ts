@@ -84,3 +84,28 @@ export function sidebarSections(roles: readonly Role[]): SideSection[] {
   ]
   return sections.filter((s) => s.links.length > 0)
 }
+
+// ── Go-to chords (keyboard, docs/architecture/keyboard.md) ───────────────────
+// "g" then a letter. Only pages in the user's own menu (sidebarSections), so roles decide.
+
+export interface GoToTarget { letter: string; label: string; href: string }
+
+export function goToTargets(sections: SideSection[], roles: readonly Role[]): GoToTarget[] {
+  const links = sections.flatMap((s) => s.links)
+  const top = (path: string) => links.find((l) => l.href === path)?.href
+  const orders = links.find((l) => l.icon === 'orders')
+  // Billing: the Biller tab of the orders hub; a biller whose only order role is billing has no tabs.
+  const billing = orders?.children?.find((c) => c.href.endsWith('#biller'))?.href
+    ?? (orders && roles.includes('biller') ? orders.href : undefined)
+  const all: Array<[string, string, string | undefined]> = [
+    ['h', 'Home', top('/home')],
+    ['o', 'Orders', orders?.href],
+    ['i', 'Inventory', top('/inventory')],
+    ['s', 'Scanner', top('/scanner')],
+    ['b', 'Billing', billing],
+    ['p', 'Purchases', top('/purchases')],
+    ['m', 'Master', top('/master')],
+    ['r', 'Reports', top('/reports')],
+  ]
+  return all.filter((x): x is [string, string, string] => !!x[2]).map(([letter, label, href]) => ({ letter, label, href }))
+}
