@@ -40,7 +40,7 @@ function GridTabBar({ tabs, active, onChange }: { tabs: Tab[]; active: string; o
   return (
     <>
       {/* Mobile: segmented pill style arranged in grid / 2 rows */}
-      <div className="sm:hidden mb-5">
+      <div className="sm:hidden mb-4">
         <div className={`grid ${mobileGrid} w-full items-center justify-center rounded-lg bg-muted p-[3px] gap-1 text-muted-foreground`}>
           {tabs.map(tab => {
             const isActive = tab.value === active
@@ -139,12 +139,14 @@ export function MultiRoleOrdersHub({
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-4xl mx-auto px-4 py-6">
+      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
         {/* Page header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-foreground">Orders<span className="hidden md:inline">{TABS.length > 1 ? ` · ${TABS.find(t => t.value === activeTab)?.label ?? ''}` : ''}</span></h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Switch between your roles: orders, picking, billing, dispatch</p>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-bold tracking-tight text-foreground">Orders<span className="hidden md:inline">{TABS.length > 1 ? ` · ${TABS.find(t => t.value === activeTab)?.label ?? ''}` : ''}</span></h1>
+            {TABS.length > 1 && (
+              <p className="hidden sm:block text-sm text-muted-foreground mt-0.5">Switch between your roles: orders, picking, billing, dispatch</p>
+            )}
           </div>
           <PageNav />
         </div>
@@ -152,11 +154,11 @@ export function MultiRoleOrdersHub({
         {/* Retailer shop orders waiting for staff: salesmen confirm them. */}
         {hasSalesman && <ShopOrdersPanel />}
 
-        {/* Tab bar on phones only (and when the sidebar has no sections to show). */}
-        <div className={TABS.length > 1 ? 'md:hidden' : ''}><GridTabBar tabs={TABS} active={activeTab} onChange={handleTabChange} /></div>
+        {/* Role tabs on phones only, and only with more than one role (one tab would be a dead button). */}
+        {TABS.length > 1 && <div className="md:hidden"><GridTabBar tabs={TABS} active={activeTab} onChange={handleTabChange} /></div>}
 
         {hasSalesman && activeTab === 'salesman' && (
-          <SalesmanDashboard orders={salesmanOrders} userName={userName} embedded catalogue={catalogue} sets={sets} pickers={pickers} />
+          <SalesmanDashboard orders={salesmanOrders} userName={userName} userId={currentPickerId} embedded catalogue={catalogue} sets={sets} pickers={pickers} />
         )}
 
         {hasPicker && activeTab === 'picker' && (

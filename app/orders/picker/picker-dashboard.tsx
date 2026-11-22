@@ -1,6 +1,6 @@
 'use client'
 import { useState, useTransition, useMemo, useEffect } from 'react'
-import { StatusPill, fmt } from '../_components/shared'
+import { StatusPill, fmt, StatButton, SegTabs } from '../_components/shared'
 import { PageNav } from '@/components/page-nav'
 import {
   getOrderWithItems,
@@ -9,6 +9,10 @@ import {
   unassignOrder,
 } from '@/app/actions/orders'
 import type { Order, OrderItem, OrderItemStatus } from '@/lib/db/schema'
+import {
+  buildProgress, clearPackProgress, packStorageKey, readPackStore, restorableTouched, savePackProgress,
+  type PackProgress,
+} from '@/lib/orders/pack-progress'
 
 interface QueueItem {
   id: number
@@ -31,6 +35,16 @@ interface Props {
 
 type SubTab = 'all' | 'mine'
 
+/** Thin progress bar: `done` of `total`. */
+function ProgressBar({ done, total, tone = 'blue' }: { done: number; total: number; tone?: 'blue' | 'green' }) {
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
+  return (
+    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={done}>
+      <div className={`h-full rounded-full transition-[width] duration-300 ${tone === 'green' || pct === 100 ? 'bg-green-500' : 'bg-blue-500'}`} style={{ width: `${pct}%` }} />
+    </div>
+  )
+}
+
 export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded, onPickerChange }: Props) {
   const [queue, setQueue] = useState<QueueItem[]>(initialQueue)
   const [selectedOrder, setSelectedOrder] = useState<{ order: Order; items: OrderItem[]; readOnly: boolean } | null>(null)
@@ -38,8 +52,10 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
   const [loadingId, setLoadingId] = useState<number | null>(null)
   const [claimingId, setClaimingId] = useState<number | null>(null)
   const [unassigningId, setUnassigningId] = useState<number | null>(null)
-  const [subTab, setSubTab] = useState<SubTab>('all')
+  // Opens on the picker's own orders when there are some (work in hand first), else on the available ones.
+  const [subTab, setSubTab] = useState<SubTab>(() => (initialQueue.some(o => o.pickerId === currentPickerId) ? 'mine' : 'all'))
   const [claimError, setClaimError] = useState<string | null>(null)
+  const [packError, setPackError] = useState<string | null>(null)
   // touched: itemId → confirmed qty
   const [touched, setTouched] = useState<Record<number, number>>({})
   // pending: itemId → staged (selected but not yet confirmed) qty
@@ -47,24 +63,38 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
   // customDraft: staged value in the "other" input before the user confirms
   const [customDraft, setCustomDraft] = useState<Record<number, string>>({})
 
+  // ── Packing progress kept on this phone (lib/orders/pack-progress.ts) ───────
+  const packKey = packStorageKey(currentPickerId)
+  const [packStore, setPackStore] = useState<Record<string, PackProgress>>({})
+  useEffect(() => { setPackStore(readPackStore(packKey)) }, [packKey])
+  // The order whose touched/pending were seeded; saving waits for it so a half-set state is never stored.
+  const [seededId, setSeededId] = useState<number | null>(null)
+  const [restoredCount, setRestoredCount] = useState(0)
+
   // ── Split lists ──────────────────────────────────────────────────────────────
   const availableOrders = useMemo(() => queue.filter(o => !o.pickerId && o.status === 'pending'), [queue])
   const myOrders        = useMemo(() => queue.filter(o => o.pickerId === currentPickerId), [queue, currentPickerId])
 
+  /** Pairs of an order already checked: saved progress on this phone, else what the server knows. */
+  const checkedPairs = (o: QueueItem) => Math.min(o.totalPairs, packStore[o.id]?.doneOrderedPairs ?? o.packedPairs)
+
   const counts = {
-    mine:          myOrders.length,
-    myPending:     myOrders.reduce((s, o) => s + Math.max(0, o.totalPairs - o.packedPairs), 0),
-    myPackedPairs: myOrders.reduce((s, o) => s + o.packedPairs, 0),
+    available: availableOrders.length,
+    mine:      myOrders.length,
+    toPack:    myOrders.reduce((s, o) => s + Math.max(0, o.totalPairs - checkedPairs(o)), 0),
   }
 
   // ── Open order detail ────────────────────────────────────────────────────────
   function openOrder(orderId: number) {
     setLoadingId(orderId)
+    setPackError(null)
     const readOnly = subTab === 'all'
     startTransition(async () => {
       try {
         const data = await getOrderWithItems(orderId)
         setSelectedOrder({ ...data, readOnly })
+      } catch (err) {
+        setClaimError(err instanceof Error ? err.message : 'Could not open the order')
       } finally {
         setLoadingId(null)
       }
@@ -97,6 +127,8 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
   // ── Pack order — flush all local touched state to DB in one call ─────────────
   function handleMarkPacked() {
     if (!selectedOrder) return
+    const orderId = selectedOrder.order.id
+    setPackError(null)
     startTransition(async () => {
       const items = selectedOrder.items.map(item => {
         const qty = touched[item.id] ?? 0
@@ -110,21 +142,32 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
             : 'pending') as 'packed' | 'out_of_stock' | 'pending',
         }
       })
-      await bulkSaveAndPackOrder(selectedOrder.order.id, items)
-      setQueue(prev => prev.filter(o => o.id !== selectedOrder.order.id))
+      try {
+        await bulkSaveAndPackOrder(orderId, items)
+      } catch (err) {
+        // Progress stays saved on the phone; the picker can try again.
+        setPackError(err instanceof Error ? err.message : 'Could not save. Please try again.')
+        return
+      }
+      setPackStore(clearPackProgress(packKey, orderId))
+      setQueue(prev => prev.filter(o => o.id !== orderId))
       setSelectedOrder(null)
     })
   }
 
-  // Pre-seed touched/pending/customDraft whenever selectedOrder changes
+  // Pre-seed touched/pending/customDraft whenever selectedOrder changes; bring back saved progress.
   useEffect(() => {
-    if (!selectedOrder) { setTouched({}); setPending({}); setCustomDraft({}); return }
+    if (!selectedOrder) { setTouched({}); setPending({}); setCustomDraft({}); setSeededId(null); setRestoredCount(0); return }
+    const { order, items, readOnly } = selectedOrder
+    const saved = readOnly ? {} : restorableTouched(readPackStore(packKey)[order.id], order, items)
     const touchedSeed: Record<number, number> = {}
     const pendingSeed: Record<number, number> = {}
     const draftSeed: Record<number, string> = {}
-    for (const item of selectedOrder.items) {
+    for (const item of items) {
       if (item.status === 'packed' || item.status === 'out_of_stock') {
         touchedSeed[item.id] = item.quantityPacked
+      } else if (item.id in saved) {
+        touchedSeed[item.id] = saved[item.id]
       } else if (item.quantityOrdered <= 5) {
         // fits on a chip — pre-select it
         pendingSeed[item.id] = item.quantityOrdered
@@ -136,7 +179,19 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
     setTouched(touchedSeed)
     setPending(pendingSeed)
     setCustomDraft(draftSeed)
+    setRestoredCount(Object.keys(saved).length)
+    setSeededId(order.id)
   }, [selectedOrder?.order.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Save confirmed quantities on every change (packing view only, once seeded).
+  useEffect(() => {
+    if (!selectedOrder || selectedOrder.readOnly || seededId !== selectedOrder.order.id) return
+    const { order, items } = selectedOrder
+    const confirmedHere = items.some(i => i.status !== 'packed' && i.status !== 'out_of_stock' && i.id in touched)
+    setPackStore(confirmedHere
+      ? savePackProgress(packKey, order.id, buildProgress(order, items, touched))
+      : clearPackProgress(packKey, order.id))
+  }, [touched, seededId])
 
   const allItemsDone = selectedOrder
     ? selectedOrder.items.every(i => i.status === 'out_of_stock' || i.id in touched)
@@ -185,42 +240,57 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
 
   // ── Order detail view ────────────────────────────────────────────────────────
   if (selectedOrder) {
+    const totalPairs = selectedOrder.items.reduce((s, i) => s + i.quantityOrdered, 0)
     return (
       <div className="min-h-screen bg-background">
         {/* Sticky top bar */}
-        <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b border-border px-4 py-3">
-          <div className="max-w-2xl mx-auto flex items-center gap-3">
-            <button
-              onClick={() => setSelectedOrder(null)}
-              className="shrink-0 flex items-center justify-center w-8 h-8 rounded-lg border border-border bg-card hover:bg-muted transition-colors"
-              aria-label="Back"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><polyline points="15 18 9 12 15 6"/></svg>
-            </button>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-foreground truncate">{selectedOrder.order.shopkeeperName}</p>
-              <p className="text-[11px] text-muted-foreground font-mono">{selectedOrder.order.orderNumber}</p>
+        <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b border-border px-3 sm:px-4 py-2.5">
+          <div className="max-w-2xl mx-auto">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setSelectedOrder(null)}
+                className="shrink-0 flex items-center justify-center w-10 h-10 rounded-xl border border-border bg-card hover:bg-muted transition-colors"
+                aria-label="Back"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><polyline points="15 18 9 12 15 6"/></svg>
+              </button>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-foreground truncate">{selectedOrder.order.shopkeeperName}</p>
+                <p className="text-[11px] text-muted-foreground">
+                  <span className="font-mono" data-no-translate>{selectedOrder.order.orderNumber}</span>
+                  {` · ${totalPairs} pairs`}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <StatusPill status={selectedOrder.order.status} />
+              </div>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <StatusPill status={selectedOrder.order.status} />
-              {!selectedOrder.readOnly && (
-                <span className="text-[11px] font-medium tabular-nums text-muted-foreground">
-                  {doneCount}/{totalCount}
-                </span>
-              )}
-            </div>
+            {!selectedOrder.readOnly && (
+              <div className="mt-2 flex items-center gap-2">
+                <ProgressBar done={doneCount} total={totalCount} />
+                <span className="shrink-0 text-[11px] font-semibold tabular-nums text-muted-foreground">{`${doneCount}/${totalCount} sizes`}</span>
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="max-w-2xl mx-auto px-4 py-4 pb-28">
+        <div className="max-w-2xl mx-auto px-3 sm:px-4 py-3 sm:py-4 pb-44 md:pb-28">
+
+          {!selectedOrder.readOnly && restoredCount > 0 && (
+            <p role="status" className="mb-3 flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
+              <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582M20 20v-5h-.581M4.582 9A8 8 0 0120 15M19.418 15A8 8 0 014 9" /></svg>
+              {`Your earlier packing was kept: ${restoredCount} sizes already confirmed`}
+            </p>
+          )}
 
           {/* ── READ-ONLY consolidated table (All orders tab) ── */}
           {selectedOrder.readOnly ? (
-            <div className="rounded-xl border border-border bg-card overflow-hidden">
+            <div className="rounded-xl border border-border bg-card overflow-x-auto">
               <table className="w-full text-sm border-collapse">
                 <thead className="bg-muted/20 border-b border-border">
                   <tr>
-                    <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground w-24">Article</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground w-24">Article</th>
                     <th className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground w-28">Color</th>
                     <th className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground">Size / Qty</th>
                   </tr>
@@ -231,12 +301,12 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                       <tr key={`${artNumber}-${color}`} className="border-b border-border hover:bg-muted/20">
                         {ci === 0 && (
                           <td
-                            className="px-4 py-2.5 font-semibold text-xs align-top border-r border-border"
+                            className="px-3 py-2.5 font-semibold text-xs align-top border-r border-border"
                             rowSpan={colorGroups.length}
                           >
                             {artNumber}
                             <span className="block font-normal text-muted-foreground tabular-nums">
-                              {colorGroups.flatMap(cg => cg.items).reduce((s, i) => s + i.quantityOrdered, 0)} pairs
+                              {`${colorGroups.flatMap(cg => cg.items).reduce((s, i) => s + i.quantityOrdered, 0)} pairs`}
                             </span>
                           </td>
                         )}
@@ -258,10 +328,8 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                 </tbody>
                 <tfoot className="border-t-2 border-border bg-muted/20">
                   <tr>
-                    <td colSpan={2} className="px-4 py-2.5 text-xs font-medium text-muted-foreground text-right">Total pairs</td>
-                    <td className="px-3 py-2.5 text-xs font-bold">
-                      {selectedOrder.items.reduce((s, i) => s + i.quantityOrdered, 0)}
-                    </td>
+                    <td colSpan={2} className="px-3 py-2.5 text-xs font-medium text-muted-foreground text-right">Total pairs</td>
+                    <td className="px-3 py-2.5 text-xs font-bold">{totalPairs}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -307,46 +375,19 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                 <div
                   key={artNumber}
                   className={`rounded-xl border bg-card transition-colors ${
-                    allDone ? 'border-green-200 dark:border-green-800' : 'border-border'
+                    allDone ? 'border-green-300 dark:border-green-800' : 'border-border'
                   }`}
                 >
                   {/* Article header row */}
-                  <div className="flex items-center px-3.5 pt-3 pb-2 gap-2">
+                  <div className="flex items-center gap-2 px-3 pt-3 pb-2">
                     <div className={`shrink-0 w-2 h-2 rounded-full ${allDone ? 'bg-green-500' : 'bg-border'}`} />
-                    <p className="text-sm font-bold font-mono text-foreground">
+                    <p className="min-w-0 flex-1 truncate text-sm font-bold font-mono text-foreground">
                       {artNumber}
                       <span className="ml-1.5 text-xs font-normal text-muted-foreground tabular-nums">
-                        ({allItems.reduce((s, i) => s + i.quantityOrdered, 0)} pairs)
+                        {`(${allItems.reduce((s, i) => s + i.quantityOrdered, 0)} pairs)`}
                       </span>
                     </p>
-                  </div>
-
-                  {/* Color tabs + Confirm on the same row */}
-                  <div className="flex items-center gap-2 px-3.5 pb-2">
-                    <div className="flex gap-1 overflow-x-auto flex-1 min-w-0">
-                      {colorGroups.map(cg => {
-                        const cgTotal   = cg.items.reduce((s, i) => s + i.quantityOrdered, 0)
-                        const cgAllDone = cg.items.every(i => i.status === 'out_of_stock' || i.id in touched)
-                        const isActive  = cg.color === activeColor
-                        return (
-                          <button
-                            key={cg.color}
-                            type="button"
-                            onClick={() => setActiveColorTab(prev => ({ ...prev, [artNumber]: cg.color }))}
-                            className={`shrink-0 rounded-lg border px-3 py-1 text-xs font-semibold transition-colors ${
-                              isActive
-                                ? 'bg-foreground text-background border-foreground'
-                                : cgAllDone
-                                  ? 'border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/20'
-                                  : 'border-border text-muted-foreground bg-background hover:border-foreground hover:text-foreground'
-                            }`}
-                          >
-                            {cg.color} <span className="opacity-60 font-normal">({cgTotal})</span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                    {/* Confirm (pending) or Edit (all done) — right of color tabs */}
+                    {/* Confirm (pending) or Edit (all done) */}
                     {allDone ? (
                       <button
                         type="button"
@@ -371,7 +412,7 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                             return n
                           })
                         }}
-                        className="shrink-0 h-7 rounded-lg bg-amber-500 hover:bg-amber-600 text-white px-3 text-xs font-semibold transition-colors shadow-sm"
+                        className="shrink-0 h-9 rounded-lg bg-amber-500 hover:bg-amber-600 text-white px-4 text-xs font-semibold transition-colors shadow-sm"
                       >
                         Edit
                       </button>
@@ -380,12 +421,40 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                         type="button"
                         onClick={confirmArticle}
                         disabled={isPending || !artHasSelection}
-                        className="shrink-0 h-7 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3 text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+                        className="shrink-0 h-9 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-4 text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
                       >
                         {isPending ? '…' : 'Confirm'}
                       </button>
                     )}
                   </div>
+
+                  {/* Color tabs — scroll sideways when there are many */}
+                  {colorGroups.length > 0 && (
+                    <div className="flex gap-1.5 overflow-x-auto px-3 pb-2.5 [scrollbar-width:none]">
+                      {colorGroups.map(cg => {
+                        const cgTotal   = cg.items.reduce((s, i) => s + i.quantityOrdered, 0)
+                        const cgAllDone = cg.items.every(i => i.status === 'out_of_stock' || i.id in touched)
+                        const isActive  = cg.color === activeColor
+                        return (
+                          <button
+                            key={cg.color}
+                            type="button"
+                            aria-pressed={isActive}
+                            onClick={() => setActiveColorTab(prev => ({ ...prev, [artNumber]: cg.color }))}
+                            className={`shrink-0 h-8 rounded-lg border px-3 text-xs font-semibold transition-colors ${
+                              isActive
+                                ? 'bg-foreground text-background border-foreground'
+                                : cgAllDone
+                                  ? 'border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/20'
+                                  : 'border-border text-muted-foreground bg-background hover:border-foreground hover:text-foreground'
+                            }`}
+                          >
+                            {cgAllDone && !isActive ? '✓ ' : ''}{cg.color} <span className="opacity-60 font-normal">({cgTotal})</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
 
                   {/* Active color — list all size rows */}
                   <div className="border-t border-border divide-y divide-border">
@@ -413,14 +482,13 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                         setCustomDraft(prev => { const n = { ...prev }; delete n[item.id]; return n })
                       }
 
-                      const hasSelection = staged !== undefined || (customDraft[item.id] !== undefined && customDraft[item.id] !== '')
-
                       return (
-                        <div key={item.id} className="px-3.5 pt-2.5 pb-3">
+                        <div key={item.id} className="px-3 pt-2.5 pb-3">
                           {/* Size / ordered row */}
                           <div className="flex items-center justify-between mb-2">
-                            <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                              {item.sizeNumber ? `Size: ${item.sizeNumber}${item.artCode ? ` · ${item.artCode}` : ''}` : activeColorGroup.color}
+                            <span className="text-xs font-semibold text-foreground">
+                              {item.sizeNumber ? `Size ${item.sizeNumber}` : activeColorGroup.color}
+                              {item.artCode ? <span className="ml-1 text-[10px] font-normal text-muted-foreground" data-no-translate>{item.artCode}</span> : null}
                             </span>
                             <span className="text-xs text-muted-foreground">
                               Ordered: <span className="font-semibold text-foreground tabular-nums">{item.quantityOrdered}</span>
@@ -437,17 +505,19 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                             ) : (
                               <div className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400">
                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5"><polyline points="20 6 9 17 4 12"/></svg>
-                                {confirmed} packed
+                                {`${confirmed} packed`}
                               </div>
                             )
                           ) : (
-                            <div className="flex items-center gap-1 overflow-x-auto">
-                              <span className="shrink-0 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mr-0.5">Qty</span>
+                            // 0 · 1–5 · other: seven equal thumb-sized boxes across the card
+                            <div className="grid grid-cols-7 gap-1.5">
                               <button
                                 type="button"
+                                aria-label="0 (out of stock)"
+                                aria-pressed={selected === 0}
                                 onClick={() => stageQty(0)}
                                 disabled={isPending}
-                                className={`shrink-0 w-7 h-7 rounded-md border text-xs font-semibold transition-colors disabled:opacity-40 ${
+                                className={`h-10 rounded-lg border text-sm font-semibold transition-colors disabled:opacity-40 ${
                                   selected === 0
                                     ? 'border-red-400 bg-red-400 text-white shadow-sm'
                                     : 'border-red-200 dark:border-red-800 bg-background text-red-500 hover:border-red-400 hover:bg-red-50 dark:hover:bg-red-950/20'
@@ -459,9 +529,10 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                                 <button
                                   key={n}
                                   type="button"
+                                  aria-pressed={selected === n}
                                   onClick={() => stageQty(n)}
                                   disabled={isPending}
-                                  className={`shrink-0 w-7 h-7 rounded-md border text-xs font-semibold transition-colors disabled:opacity-40 ${
+                                  className={`h-10 rounded-lg border text-sm font-semibold transition-colors disabled:opacity-40 ${
                                     selected === n
                                       ? 'border-orange-400 bg-orange-400 text-white shadow-sm'
                                       : 'border-border bg-background text-foreground hover:border-orange-300 hover:bg-orange-50 dark:hover:bg-orange-950/20'
@@ -472,8 +543,10 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                               ))}
                               <input
                                 type="number"
+                                inputMode="numeric"
                                 min={0}
                                 placeholder="…"
+                                aria-label={`Other quantity for size ${item.sizeNumber ?? ''}`.trim()}
                                 value={customDraft[item.id] ?? ''}
                                 onChange={e => {
                                   setCustomDraft(prev => ({ ...prev, [item.id]: e.target.value }))
@@ -481,7 +554,7 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                                 }}
                                 onKeyDown={e => { if (e.key === 'Enter') confirmQty() }}
                                 disabled={isPending}
-                                className="shrink-0 w-10 h-7 rounded-md border border-border bg-background px-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-orange-400 placeholder:text-muted-foreground disabled:opacity-40"
+                                className="h-10 w-full min-w-0 rounded-lg border border-border bg-background px-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-orange-400 placeholder:text-muted-foreground disabled:opacity-40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                               />
                             </div>
                           )}
@@ -496,14 +569,18 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
           )}
         </div>
 
-        {/* Sticky bottom CTA — only for mine tab */}
+        {/* Sticky bottom CTA — only for mine tab; above the phone's bottom menu */}
         {!selectedOrder.readOnly && (
-          <div className="fixed bottom-0 inset-x-0 bg-background/95 backdrop-blur border-t border-border px-4 py-3 safe-area-inset-bottom">
-            <div className="max-w-2xl mx-auto">
+          <div className="fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-30 bg-background/95 backdrop-blur border-t border-border px-3 sm:px-4 py-2.5 md:bottom-0 md:pb-[calc(0.625rem+env(safe-area-inset-bottom))]">
+            <div className="max-w-2xl mx-auto space-y-2">
+              {packError && (
+                <p role="alert" className="rounded-lg bg-red-50 px-3 py-1.5 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-400">{packError}</p>
+              )}
               <button
+                type="button"
                 onClick={handleMarkPacked}
                 disabled={!allItemsDone || isPending}
-                className={`w-full rounded-xl py-3.5 text-sm font-semibold transition-colors shadow-sm ${
+                className={`w-full h-12 rounded-xl text-sm font-semibold transition-colors shadow-sm ${
                   allItemsDone
                     ? 'bg-purple-600 hover:bg-purple-700 text-white'
                     : 'bg-muted text-muted-foreground cursor-not-allowed'
@@ -530,6 +607,8 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
             o.id === orderId ? { ...o, status: 'pending', pickerId: null } : o
           )
         )
+        // Released: whoever claims it next starts fresh.
+        setPackStore(clearPackProgress(packKey, orderId))
         onPickerChange?.(result.orderId, null)
         setSubTab('all')
       } catch (err) {
@@ -545,11 +624,11 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
 
   return (
     <div className={embedded ? '' : 'min-h-screen bg-background'}>
-      <div className={embedded ? '' : 'max-w-2xl mx-auto px-4 py-4 sm:py-6'}>
+      <div className={embedded ? '' : 'max-w-2xl mx-auto px-3 sm:px-4 py-4 sm:py-6'}>
 
         {/* Header */}
         {!embedded && (
-          <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center justify-between mb-4">
             <div>
               <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">Packing Queue</h1>
               <p className="text-xs text-muted-foreground mt-0.5">Orders awaiting packing</p>
@@ -558,50 +637,29 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
           </div>
         )}
 
-        {/* Stat cards */}
-        <div className="grid grid-cols-3 gap-3 mb-4">
-          <div className="rounded-xl border border-border bg-card px-4 py-3">
-            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">My Orders</p>
-            <p className="text-2xl font-bold text-blue-600 dark:text-blue-400 tabular-nums mt-0.5">{counts.mine}</p>
-          </div>
-          <div className="rounded-xl border border-border bg-card px-4 py-3">
-            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">To Pack</p>
-            <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400 tabular-nums mt-0.5">{counts.myPending}</p>
-          </div>
-          <div className="rounded-xl border border-border bg-card px-4 py-3">
-            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Packed</p>
-            <p className="text-2xl font-bold text-green-600 dark:text-green-400 tabular-nums mt-0.5">{counts.myPackedPairs}</p>
-          </div>
+        {/* Cards open their list */}
+        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-3">
+          <StatButton label="Available" value={counts.available} color="text-yellow-600 dark:text-yellow-400"
+            hint="Pending orders nobody has claimed" active={subTab === 'all'} onClick={() => setSubTab('all')} />
+          <StatButton label="My Orders" value={counts.mine} color="text-blue-600 dark:text-blue-400"
+            active={subTab === 'mine'} onClick={() => setSubTab('mine')} />
+          <StatButton label="Pairs to pack" value={counts.toPack} color="text-purple-600 dark:text-purple-400"
+            hint="Pairs still to check in your orders" active={false} onClick={() => setSubTab('mine')} />
         </div>
 
         {/* Sub-tabs */}
-        <div className="flex rounded-xl border border-border bg-muted/40 p-1 mb-4 gap-1">
-          {(['all', 'mine'] as SubTab[]).map(tab => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setSubTab(tab)}
-              className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-colors ${
-                subTab === tab
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {tab === 'all' ? 'All Orders' : 'My Orders'}
-              <span className={`inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums ${
-                subTab === tab ? 'bg-foreground text-background' : 'bg-muted-foreground/20 text-muted-foreground'
-              }`}>
-                {tab === 'all' ? availableOrders.length : counts.mine}
-              </span>
-            </button>
-          ))}
+        <div className="mb-3">
+          <SegTabs label="Packing queue" active={subTab} onChange={setSubTab} tabs={[
+            { value: 'all', label: 'All Orders', count: counts.available },
+            { value: 'mine', label: 'My Orders', count: counts.mine },
+          ]} />
         </div>
 
         {/* Error banner */}
         {claimError && (
           <div className="mb-3 flex items-center justify-between gap-2 rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 px-3.5 py-2.5 text-xs text-red-700 dark:text-red-400">
             <span>{claimError}</span>
-            <button type="button" onClick={() => setClaimError(null)} className="shrink-0 text-red-400 hover:text-red-600">
+            <button type="button" aria-label="Close" onClick={() => setClaimError(null)} className="shrink-0 text-red-400 hover:text-red-600">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
@@ -628,55 +686,71 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
           )}
 
           {displayList.map(order => {
-            const isClaiming   = claimingId === order.id
-            const isLoading    = loadingId === order.id
+            const isClaiming    = claimingId === order.id
+            const isLoading     = loadingId === order.id
             const isUnassigning = unassigningId === order.id
+            const mine          = subTab === 'mine'
+            const checked       = checkedPairs(order)
+            const started       = mine && checked > 0
 
             return (
               <div
                 key={order.id}
-                className={`rounded-xl border bg-card transition-all ${
-                  subTab === 'mine'
-                    ? 'border-blue-200 dark:border-blue-800'
-                    : 'border-border'
-                }`}
+                className={`rounded-xl border bg-card transition-all ${mine ? 'border-blue-200 dark:border-blue-900' : 'border-border'} ${isLoading ? 'opacity-60' : ''}`}
               >
-                {/* Clickable row — using div to avoid nested <button> hydration error */}
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => !isLoading && openOrder(order.id)}
-                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') openOrder(order.id) }}
-                  className={`w-full flex items-center gap-3 px-3.5 py-3 text-left cursor-pointer select-none ${isLoading ? 'opacity-60 pointer-events-none' : ''}`}
-                >
-                  {/* Leading color dot */}
-                  <div className={`shrink-0 w-2 h-2 rounded-full ${subTab === 'mine' ? 'bg-blue-500' : 'bg-yellow-500'}`} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-foreground truncate">
-                      {order.shopkeeperName}
-                      <span className="ml-1.5 text-xs font-normal text-muted-foreground tabular-nums">({order.totalPairs} pairs)</span>
+                <div className="flex items-stretch">
+                  {/* The order itself opens it; the action button sits beside it (no button inside a button). */}
+                  <button
+                    type="button"
+                    onClick={() => !isLoading && openOrder(order.id)}
+                    disabled={isLoading}
+                    className="min-w-0 flex-1 px-3.5 py-3 text-left rounded-l-xl hover:bg-muted/30 active:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <p className="truncate text-sm font-semibold text-foreground">{order.shopkeeperName}</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      <span className="font-mono" data-no-translate>{order.orderNumber}</span>
+                      {` · ${fmt(order.orderedAt)}`}
                     </p>
-                    <p className="text-[11px] text-muted-foreground font-mono">{order.orderNumber} · {fmt(order.orderedAt)}</p>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {isLoading && <span className="text-[11px] text-muted-foreground">Loading…</span>}
-                    {subTab === 'all' ? (
-                      <button
-                        type="button"
-                        onClick={e => { e.stopPropagation(); handleClaim(e, order.id) }}
-                        disabled={isPending || isClaiming}
-                        className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-1.5 text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        {isClaiming ? 'Claiming…' : 'Claim →'}
-                      </button>
+                    {mine ? (
+                      <div className="mt-2 flex items-center gap-2">
+                        <ProgressBar done={checked} total={order.totalPairs} />
+                        <span className="shrink-0 text-[11px] font-semibold tabular-nums text-muted-foreground">
+                          {`${checked}/${order.totalPairs} pairs`}
+                        </span>
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-xs font-medium text-foreground tabular-nums">{`${order.totalPairs} pairs`}</p>
+                    )}
+                    {isLoading && <p className="mt-1 text-[11px] text-muted-foreground">Loading…</p>}
+                  </button>
+                  <div className="flex shrink-0 flex-col items-end justify-center gap-1.5 py-3 pr-3">
+                    {mine ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => openOrder(order.id)}
+                          disabled={isLoading}
+                          className="h-9 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3.5 text-xs font-semibold transition-colors disabled:opacity-40"
+                        >
+                          {started ? 'Continue →' : 'Pack →'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => doUnassign(order.id)}
+                          disabled={isPending || isUnassigning}
+                          className="h-8 rounded-lg px-2 text-[11px] font-medium text-muted-foreground hover:text-red-600 dark:hover:text-red-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {isUnassigning ? 'Releasing…' : 'Release'}
+                        </button>
+                      </>
                     ) : (
                       <button
                         type="button"
-                        onClick={e => { e.stopPropagation(); doUnassign(order.id) }}
-                        disabled={isPending || isUnassigning}
-                        className="rounded-lg border border-border text-muted-foreground px-3 py-1.5 text-xs font-medium hover:border-red-300 hover:text-red-600 dark:hover:border-red-700 dark:hover:text-red-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        onClick={e => handleClaim(e, order.id)}
+                        disabled={isPending || isClaiming}
+                        className="h-10 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-4 text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                       >
-                        {isUnassigning ? 'Releasing…' : 'Release'}
+                        {isClaiming ? 'Claiming…' : 'Claim →'}
                       </button>
                     )}
                   </div>
