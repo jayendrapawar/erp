@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { signOut } from '@/lib/auth-client'
 import { useShortcut, useShortcutScope } from '@/lib/shortcuts'
+import { openKeyboardHelp } from './keyboard-help'
 import { useLanguage } from '@/lib/language-context'
 import { applyTheme, currentTheme, type Theme } from '@/lib/theme'
 import type { NavIcon, SideLink, SideSection } from '@/lib/nav'
@@ -212,6 +213,15 @@ export function Sidebar({ sections }: { sections: SideSection[] }) {
               data-no-translate
             >
               {collapsed ? (language === 'en' ? 'हि' : 'EN') : (language === 'en' ? 'हिंदी' : 'English')}
+            </button>
+            <button
+              type="button"
+              onClick={openKeyboardHelp}
+              aria-label="Keyboard shortcuts (?)"
+              title="Keyboard shortcuts (?)"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-sidebar-border text-sm font-bold hover:bg-sidebar-accent/60 hover:text-foreground"
+            >
+              ?
             </button>
             <button
               type="button"

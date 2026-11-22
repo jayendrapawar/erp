@@ -4,6 +4,7 @@ import { NAV_ITEMS, sidebarSections } from '@/lib/nav'
 import { BottomNav } from './bottom-nav'
 import { SessionUserProvider } from './session-user'
 import { Sidebar } from './sidebar'
+import { KeyboardHelp } from './keyboard-help'
 
 /**
  * Wraps every page (root layout): shares the signed-in user's name and role with the profile menu,
@@ -21,6 +22,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
         <div className="min-w-0 flex-1">{children}</div>
       </div>
       {u && <BottomNav items={items} />}
+      {u && <KeyboardHelp />}
     </SessionUserProvider>
   )
 }

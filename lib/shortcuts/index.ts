@@ -8,3 +8,5 @@ export {
   useShortcutScope,
 } from './react'
 export type { ShortcutHelp, UseShortcutOptions } from './react'
+export { firstField, focusables, submitIn, useDialogKeys } from './dialog'
+export type { DialogKeysOptions } from './dialog'

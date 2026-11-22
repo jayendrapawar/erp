@@ -248,9 +248,11 @@ test('two shortcuts on the same key: higher priority, then the latest, wins', ()
 test('help-only entries are listed but never fire; global ones are listed first', () => {
   const { r } = setup()
   r.register('enter', null, { label: 'Next step', group: 'New order' })
+  r.register([], null, { label: 'Pick colour N', group: 'New order', display: '1–9' })
   r.register('mod+k', () => {}, { label: 'Jump to…', group: 'Global', global: true })
   assert.equal(r.handleKey(key('Enter')), false)
-  assert.deepEqual(r.list().map((s) => s.label), ['Jump to…', 'Next step'])
+  assert.deepEqual(r.list().map((s) => s.label), ['Jump to…', 'Next step', 'Pick colour N'])
+  assert.equal(r.list()[2].display, '1–9')
 })
 
 test('actions for Ctrl+K: only those marked, on this screen, under the dialog that asks', () => {

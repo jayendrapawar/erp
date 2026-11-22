@@ -52,6 +52,8 @@ export interface ShortcutOptions {
   hidden?: boolean
   /** Higher wins when two shortcuts on screen use the same key. Default 0; later wins on a tie. */
   priority?: number
+  /** Listed-only entries (no handler): text shown instead of the keys, e.g. "1–9". */
+  display?: string
 }
 
 export interface RegistryEnv {
@@ -81,6 +83,7 @@ export interface ListedShortcut {
   global: boolean
   /** Plain-key shortcut that is switched off right now (a Scan box is on screen). */
   offHere: boolean
+  display?: string
 }
 
 export interface ListedAction extends ListedShortcut { run: () => void }
@@ -143,7 +146,7 @@ export function createShortcutRegistry(env: RegistryEnv) {
       const list = Array.isArray(keys) ? keys : [keys]
       let seqs: Sequence[]
       try {
-        seqs = list.map(parseSequence)
+        seqs = !handler && opts.display ? [] : list.map(parseSequence)
       } catch (err) {
         env.onError?.(String(err instanceof Error ? err.message : err))
         return () => {}
@@ -221,8 +224,9 @@ export function createShortcutRegistry(env: RegistryEnv) {
         const key = `${group}\u0000${e.opts.label}\u0000${e.keys.join(',')}`
         if (seen.has(key)) continue
         seen.add(key)
-        const offHere = scanner && e.seqs.every((s) => s.length === 2 || !(isModCombo(s[0]) || isEscape(s[0])))
-        out.push({ id: e.id, keys: e.keys, label: e.opts.label, group, global: !!e.opts.global, offHere })
+        // Keys a focused control handles itself (no handler) are not switched off by the registry.
+        const offHere = !!e.handler && scanner && e.seqs.every((s) => s.length === 2 || !(isModCombo(s[0]) || isEscape(s[0])))
+        out.push({ id: e.id, keys: e.keys, label: e.opts.label, group, global: !!e.opts.global, offHere, display: e.opts.display })
       }
       return out.sort((a, b) => Number(b.global) - Number(a.global))
     },

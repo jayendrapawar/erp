@@ -111,29 +111,30 @@ export function useShortcut(keys: string | string[], handler: ShortcutHandler, o
   }, [keyText, scope, label, group, global, allowPrint, preventDefault, action, hidden, priority, enabled, hasWhen, hasWithin])
 }
 
-export interface ShortcutHelp { keys: string | string[]; label: string }
+/** keys: real key names ("enter", "shift+enter"); or display: free text for ranges ("1–9"). */
+export interface ShortcutHelp { keys?: string | string[]; display?: string; label: string }
 
 /**
  * List keys that a focused control handles itself (the New Order flow's Enter, digits, arrows…) in
  * the "?" cheat sheet. They are not matched by the registry.
  */
-export function useShortcutHelp(entries: ShortcutHelp[], opts: { group: string; when?: () => boolean; within?: RefObject<HTMLElement | null>; enabled?: boolean }) {
+export function useShortcutHelp(entries: ShortcutHelp[], opts: { group: string; global?: boolean; when?: () => boolean; within?: RefObject<HTMLElement | null>; enabled?: boolean }) {
   const scope = useContext(ScopeContext)
   const optsRef = useRef(opts)
   useLayoutEffect(() => { optsRef.current = opts })
   const text = JSON.stringify(entries)
-  const { group, enabled = true } = opts
+  const { group, global, enabled = true } = opts
   const hasWhen = !!opts.when, hasWithin = !!opts.within
   useEffect(() => {
     if (!enabled) return
     const r = getShortcutRegistry()
-    const offs = (JSON.parse(text) as ShortcutHelp[]).map((h) => r.register(h.keys, null, {
-      label: h.label, group, scope,
+    const offs = (JSON.parse(text) as ShortcutHelp[]).map((h) => r.register(h.keys ?? [], null, {
+      label: h.label, group, global, scope, display: h.display,
       when: hasWhen ? () => optsRef.current.when?.() ?? true : undefined,
       isShown: hasWithin ? () => isShown(optsRef.current.within?.current) : undefined,
     }))
     return () => offs.forEach((off) => off())
-  }, [text, group, scope, enabled, hasWhen, hasWithin])
+  }, [text, group, global, scope, enabled, hasWhen, hasWithin])
 }
 
 /**
