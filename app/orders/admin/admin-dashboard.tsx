@@ -3,6 +3,7 @@
 import { useShowMore } from '@/components/show-more'
 import { sizeWithCode } from '@/lib/orders/size-label'
 import { useState, useTransition, useMemo, useEffect, useCallback } from 'react'
+import { useUrlFilters } from '@/lib/use-url-filters'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
 import { adminAssignPicker, adminUnassignPicker, getOrderWithItems, getPickerAssignments, deleteOrder, getBillLines } from '@/app/actions/orders'
@@ -64,6 +65,8 @@ const ALL_STATUSES = ['pending', 'assigned', 'packed', 'dispatched', 'delivered'
 export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = false, pickerMapOverride, onPickerChange }: Props) {
   const [isPending, startTransition] = useTransition()
   const [filters, setFilters] = useState<FilterValues>({})
+  // Opened from Ctrl+K "# " search: /orders/admin?f.order=…#overview
+  useUrlFilters(['order', 'shop'], v => setFilters(f => ({ ...f, ...v })))
 
   // ── Filter + sort ──
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'order'>('date-desc')

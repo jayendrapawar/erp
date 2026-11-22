@@ -5,7 +5,7 @@
 // sign out. Collapses to icons; the choice is remembered per device. Phones keep the bottom bar.
 // No database queries: the menu comes from the user's roles (components/app-nav.tsx).
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
+import { useCallback, useEffect, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
@@ -13,8 +13,10 @@ import {
   ScanBarcode, Search, ShoppingCart, Sun, type LucideIcon,
 } from 'lucide-react'
 import { signOut } from '@/lib/auth-client'
-import { useShortcut, useShortcutScope } from '@/lib/shortcuts'
+import { useShortcut } from '@/lib/shortcuts'
 import { openKeyboardHelp } from './keyboard-help'
+import { CommandPalette } from './command-palette'
+import { URL_FILTERS_EVENT } from '@/lib/use-url-filters'
 import { useLanguage } from '@/lib/language-context'
 import { applyTheme, currentTheme, type Theme } from '@/lib/theme'
 import type { NavIcon, SideLink, SideSection } from '@/lib/nav'
@@ -39,10 +41,13 @@ export function useOpenLink() {
   const router = useRouter()
   const pathname = usePathname() ?? ''
   return useCallback((href: string) => {
-    const [path, hash] = href.split('#')
-    if (hash && path === pathname) {
+    const [pathAndQuery, hash] = href.split('#')
+    const [path, query] = pathAndQuery.split('?')
+    if ((hash || query) && path === pathname) {
+      // Same page: change the address and tell the page (tab from the hash, filters from "f.…").
       window.history.pushState(null, '', href)
       window.dispatchEvent(new HashChangeEvent('hashchange'))
+      window.dispatchEvent(new Event(URL_FILTERS_EVENT))
     } else {
       router.push(href)
     }
@@ -83,7 +88,10 @@ export function Sidebar({ sections }: { sections: SideSection[] }) {
     window.addEventListener('hashchange', read)
     return () => window.removeEventListener('hashchange', read)
   }, [pathname])
-  useShortcut('mod+k', () => setJumpOpen(true), { label: 'Jump to a page or tab', group: 'Global', global: true })
+  useShortcut('mod+k', () => setJumpOpen(true), { label: 'Jump to a page, action (>) or record (#)', group: 'Global', global: true })
+  // Ctrl K "> " actions available everywhere.
+  useShortcut([], () => setTheme(currentTheme() === 'dark' ? 'light' : 'dark'), { label: 'Switch light / dark theme', group: 'Global', global: true, action: true, hidden: true })
+  useShortcut([], () => setLanguage(language === 'en' ? 'hi' : 'en'), { label: 'Switch language (English / हिंदी)', group: 'Global', global: true, action: true, hidden: true })
 
   // Not on sign-in pages, and never in the retailer shop (/shop), even if staff are signed in.
   if (HIDDEN_ON.includes(pathname) || pathname === '/shop' || pathname.startsWith('/shop/')) return null
@@ -257,67 +265,7 @@ export function Sidebar({ sections }: { sections: SideSection[] }) {
         </div>
       </aside>
 
-      {jumpOpen && <JumpTo sections={sections} onClose={() => setJumpOpen(false)} onOpen={(href) => { setJumpOpen(false); openLink(href) }} />}
+      {jumpOpen && <CommandPalette sections={sections} onClose={() => setJumpOpen(false)} onOpen={(href) => { setJumpOpen(false); openLink(href) }} />}
     </>
-  )
-}
-
-/** "Jump to…" (Ctrl K): type part of a page or tab name, arrows to move, Enter to open. */
-function JumpTo({ sections, onClose, onOpen }: { sections: SideSection[]; onClose: () => void; onOpen: (href: string) => void }) {
-  const [q, setQ] = useState('')
-  const [pos, setPos] = useState(0)
-  const input = useRef<HTMLInputElement>(null)
-  const all = useMemo(() => sections.flatMap((s) => s.links.flatMap((l) => [
-    { href: l.href, label: l.label, where: s.title ?? '' },
-    ...(l.children ?? []).map((c) => ({ href: c.href, label: c.label, where: l.label })),
-  ])), [sections])
-  const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, '')
-  const shown = all.filter((x) => !q || norm(`${x.label} ${x.where}`).includes(norm(q)))
-
-  useEffect(() => { input.current?.focus() }, [])
-  useEffect(() => { setPos(0) }, [q])
-  // While open only its own keys work; Ctrl K again closes it (as before).
-  const { id: scope, scopeProps } = useShortcutScope()
-  useShortcut('mod+k', onClose, { label: 'Close', scope, hidden: true })
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-start justify-center bg-black/50 p-4 pt-[12vh]" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label="Jump to a page" {...scopeProps} className="w-full max-w-lg overflow-hidden rounded-2xl border border-border bg-popover shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2 border-b border-border px-4">
-          <Search className="h-4 w-4 text-muted-foreground" aria-hidden />
-          <input
-            ref={input}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') onClose()
-              else if (e.key === 'ArrowDown') { e.preventDefault(); setPos((p) => Math.min(p + 1, shown.length - 1)) }
-              else if (e.key === 'ArrowUp') { e.preventDefault(); setPos((p) => Math.max(p - 1, 0)) }
-              else if (e.key === 'Enter' && shown[pos]) onOpen(shown[pos].href)
-            }}
-            placeholder="Type a page or tab, e.g. articles, biller"
-            aria-label="Page or tab"
-            className="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-          />
-          <kbd className="rounded border border-border px-1.5 text-[10px] text-muted-foreground">Esc</kbd>
-        </div>
-        <ul className="max-h-[50vh] overflow-y-auto p-2">
-          {shown.length === 0 && <li className="px-3 py-6 text-center text-sm text-muted-foreground">No page or tab matches.</li>}
-          {shown.map((x, i) => (
-            <li key={x.href}>
-              <button
-                type="button"
-                onMouseEnter={() => setPos(i)}
-                onClick={() => onOpen(x.href)}
-                className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${i === pos ? 'bg-accent text-accent-foreground' : 'text-foreground'}`}
-              >
-                <span className="font-medium">{x.label}</span>
-                <span className="text-xs text-muted-foreground">{x.where}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
   )
 }

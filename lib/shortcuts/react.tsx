@@ -103,7 +103,7 @@ export function useShortcut(keys: string | string[], handler: ShortcutHandler, o
   const hasWithin = !!opts.within
   useEffect(() => {
     if (!enabled) return
-    return getShortcutRegistry().register(keyText.split('|'), (e) => handlerRef.current(e), {
+    return getShortcutRegistry().register(keyText ? keyText.split('|') : [], (e) => handlerRef.current(e), {
       label, group, global, allowPrint, preventDefault, action, hidden, priority, scope,
       when: hasWhen ? () => optsRef.current.when?.() ?? true : undefined,
       isShown: hasWithin ? () => isShown(optsRef.current.within?.current) : undefined,

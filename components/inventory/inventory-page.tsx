@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
 import { PageHeader } from '@/app/orders/_components/shared'
 import { PageNav } from '@/components/page-nav'
 import { useHashTab } from '@/lib/use-hash-tab'
+import { useUrlFilters } from '@/lib/use-url-filters'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { OverviewTab } from './overview-tab'
 import { FilterBar, FiltersButton, activeFilterCount, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
@@ -173,6 +174,8 @@ function StockTab({ initial, onOpen, patch }: { initial: { rows: StockVariant[];
   const [showEmpty, setShowEmpty] = useState(false)
   const [error, setError] = useState('')
   const [busy, start] = useTransition()
+  // Opened from Ctrl+K "# " search (/inventory?f.code=…#stock): show the article even with no stock.
+  useUrlFilters(['code', 'name'], (v) => { setFilters((f) => ({ ...f, ...v })); setShowEmpty(true) })
   const fq = useDebounced(JSON.stringify(filters))
   const query = (page: number) => {
     const v = JSON.parse(fq) as FilterValues

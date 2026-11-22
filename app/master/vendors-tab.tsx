@@ -2,6 +2,7 @@
 
 import { ShopAccessDialog } from '@/components/master/shop-access-dialog'
 import { useState, useMemo, useTransition, useRef } from 'react'
+import { useUrlFilters } from '@/lib/use-url-filters'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { saveVendor, importVendors } from '@/app/actions/vendors'
 import type { Vendor } from '@/app/actions/vendors'
@@ -128,6 +129,8 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
   }
 
   const [filters, setFilters] = useState<FilterValues>({})
+  // Opened from Ctrl+K "# " search: /master?f.name=…#vendors
+  useUrlFilters(['name', 'id', 'phone'], v => setFilters(f => ({ ...f, ...v })))
 
   // ── Modal state ──
   const [modalMode, setModalMode] = useState<'add' | 'edit' | null>(null)
