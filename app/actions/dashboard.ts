@@ -154,6 +154,21 @@ export async function getOverallStockStats(): Promise<OverallStockStats> {
   }
 }
 
+// The browser runs server actions one at a time, so two actions in Promise.all on the client run one
+// after the other. These run each pair in parallel on the server: one request (Orders speed, 22 Nov 2026).
+
+/** Scanned inventory list + its statistics, one request. */
+export async function getScannedInventoryView() {
+  const [summary, stats] = await Promise.all([getInventorySummary(), getStatistics()])
+  return { summary, stats }
+}
+
+/** Overall stock list + its statistics, one request. */
+export async function getOverallStockView() {
+  const [items, stats] = await Promise.all([getOverallStockSummary(), getOverallStockStats()])
+  return { items, stats }
+}
+
 /** Every one of my active scan events, one row per box (CSV export). */
 export async function exportToExcel(): Promise<Record<string, string | number>[]> {
   const u = await requirePermission('inventory.view')

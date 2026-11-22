@@ -6,13 +6,11 @@ import { BarChart3, Filter, Package, PieChart, QrCode, Tag, TrendingUp, User } f
 import {
   exportOverallStockToCSV,
   exportToExcel,
-  getInventorySummary,
+  getOverallStockView,
   getLoggedInUserName,
   getOverallChartData,
-  getOverallStockStats,
-  getOverallStockSummary,
+  getScannedInventoryView,
   getScannedChartData,
-  getStatistics,
 } from '@/app/actions/dashboard'
 import { PageNav } from '@/components/page-nav'
 import { CHART_COLORS, DRILLDOWN_EMPTY_LABEL } from '@/components/dashboard/constants'
@@ -128,10 +126,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
     try {
       setLoading(true)
       setError(null)
-      const [summaryData, statsData] = await Promise.all([
-        getInventorySummary(),
-        getStatistics(),
-      ])
+      const { summary: summaryData, stats: statsData } = await getScannedInventoryView() // one request
       setInventory(summaryData as InventoryItem[])
       setFilteredInventory(summaryData as InventoryItem[])
       setStats(statsData as Statistics)
@@ -149,10 +144,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
     try {
       setLoading(true)
       setError(null)
-      const [items, overallStats] = await Promise.all([
-        getOverallStockSummary(),
-        getOverallStockStats(),
-      ])
+      const { items, stats: overallStats } = await getOverallStockView() // one request
       setStockItems(items)
       setFilteredStock(items)
       setStockStats(overallStats)
