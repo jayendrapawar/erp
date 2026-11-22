@@ -7,6 +7,7 @@ import { useHashTab } from '@/lib/use-hash-tab'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DIVISIONS, describeOnlyFor, formatSizes } from '@/lib/catalog/assortments'
 import { useQrScanner } from '@/components/scanner/use-qr-scanner'
+import { useScanForwarder } from '@/lib/shortcuts'
 import { playAlreadyScanned, playScanOk } from '@/lib/scan-sound'
 import { ManualCartonPanel } from './manual-carton-panel'
 import { ConfirmCartonCard } from './confirm-carton-card'
@@ -631,22 +632,9 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
     setScanValue('')
     if (code) submit(code)
   }
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null
-      // Radio buttons (the confirm card's choices) do not take typing: a scan then still reaches the Scan box.
-      if (target?.matches('input:not([type="radio"]):not([type="checkbox"]), textarea, select, [contenteditable="true"]')) return
-      if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1) return
-      if (document.querySelector('[role="dialog"]')) return
-      const input = scanRef.current
-      if (!input) return
-      event.preventDefault()
-      input.focus({ preventScroll: true })
-      setScanValue((v) => v + event.key)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  // Radio buttons (the confirm card's choices) do not take typing: a scan then still reaches the Scan box.
+  // Only while the Receive tab is on screen; plain-key shortcuts are off meanwhile.
+  useScanForwarder(scanRef, (ch) => setScanValue((v) => v + ch))
   // On a computer the Scan box has the cursor from the start.
   useEffect(() => { if (!window.matchMedia('(pointer: coarse)').matches) focusScan() }, [focusScan])
 

@@ -7,6 +7,7 @@ import {
   useRef, useState, forwardRef,
 } from 'react'
 import { fuzzyFilter } from '@/lib/fuzzy'
+import { useScanForwarder } from '@/lib/shortcuts'
 import { buildInvoiceHtml } from '@/lib/bill-html'
 import { getBillTemplate } from '@/app/actions/bill-template'
 import type { BillTemplate } from '@/lib/bill-template'
@@ -465,21 +466,9 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
     setScanValue('')
     if (code) handleQrDecode(code)
   }
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null
-      if (target?.matches('input, textarea, select, [contenteditable="true"]')) return
-      if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1) return
-      if (articleDialogRef.current || document.querySelector('[role="dialog"]')) return
-      const input = scanInputRef.current
-      if (!input) return
-      event.preventDefault()
-      input.focus({ preventScroll: true })
-      setScanValue(v => v + event.key)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  // Keys typed while no text box has the cursor go to the Scan box (only while it is on screen).
+  // It also tells the shortcut system this is a billing screen: plain-key shortcuts are off.
+  useScanForwarder(scanInputRef, ch => setScanValue(v => v + ch), () => articleDialogRef.current)
   // On a computer the Scan box has the cursor from the start.
   // (The panel can mount hidden behind a tab: focus it again when it becomes visible.)
   useEffect(() => {

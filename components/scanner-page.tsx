@@ -27,11 +27,14 @@ import { enqueue, getQueue, removeFromQueue, type OfflineEntry } from '@/lib/off
 import { isCartonQr, isValidWarehouseQr, parseQr, type ParsedQr } from '@/lib/qr-parser'
 import { syncFlags, syncQueue, type SyncResult } from '@/lib/sync-engine'
 import { useOnline } from '@/lib/use-online'
+import { useScannerScreen } from '@/lib/shortcuts'
 
 const CARTON_MESSAGE = 'This is an outer-carton label. Scan the individual footwear boxes instead.'
 const MISSING_MESSAGE = 'Saved. This article or size is not in the master yet; an admin will link it.'
 
 export function ScannerPage() {
+  // Scanner screen: plain-key shortcuts are off (docs/architecture/keyboard.md).
+  useScannerScreen()
   const { t } = useLanguage()
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)

@@ -9,6 +9,7 @@ import { PageNav } from '@/components/page-nav'
 import { fuzzyFilter } from '@/lib/fuzzy'
 import type { ArticleDetail, CatalogueData } from '@/app/actions/catalogue'
 import { useCatalogueCache } from '@/lib/use-catalogue-cache'
+import { useShortcut } from '@/lib/shortcuts'
 import type { OrderSet } from '@/app/actions/sets'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -187,7 +188,8 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
     } else if (e.key === 'ArrowDown') {
       e.preventDefault()
       setActiveIdx(i => Math.max(i - 1, 0))
-    } else if (e.key === 'Enter') {
+    } else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+      // Ctrl+Enter is left to the page shortcut (create the order).
       e.preventDefault()
       const item = displayedResults[activeIdx]
       if (item) { onSelect(item); setOpen(false); inputRef.current?.blur() }
@@ -408,17 +410,8 @@ const SHORTCUTS: [string, string][] = [
 /** Keyboard guide on New Order (computers only): a "?" button (or the ? key) opens it. */
 function ShortcutGuide() {
   const [open, setOpen] = useState(false)
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement
-      if (e.key === 'Escape') setOpen(false)
-      if (e.key !== '?' || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
-      e.preventDefault()
-      setOpen(o => !o)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  useShortcut('?', () => setOpen(o => !o), { label: 'Keyboard shortcuts', group: 'Global', global: true })
+  useShortcut('escape', () => setOpen(false), { label: 'Close the shortcuts', hidden: true, when: () => open, preventDefault: false })
   return (
     <div className="relative hidden justify-end [@media(pointer:fine)]:flex">
       <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open} aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)"
@@ -835,17 +828,11 @@ export function SalesmanDashboard({ orders: recentOrders, userName, embedded, ca
   }, [view])
 
   // Ctrl+Enter anywhere on the new-order screen: place the order (opens the usual checks / confirmation).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return
-      const form = document.getElementById('new-order-form') as HTMLFormElement | null
-      if (!form) return
-      e.preventDefault()
-      form.requestSubmit()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  useShortcut('mod+enter', () => {
+    const form = document.getElementById('new-order-form') as HTMLFormElement | null
+    if (!form) return false
+    form.requestSubmit()
+  }, { label: 'Create the order', group: 'New order', action: true })
   // colorQuantities: preserved per-color quantities while user navigates
   // key = colorId, value = sizeLabel→qty
   const [colorQuantities, setColorQuantities] = useState<Record<number, Record<string, number>>>({})

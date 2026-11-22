@@ -13,6 +13,7 @@ import {
   ScanBarcode, Search, ShoppingCart, Sun, type LucideIcon,
 } from 'lucide-react'
 import { signOut } from '@/lib/auth-client'
+import { useShortcut, useShortcutScope } from '@/lib/shortcuts'
 import { useLanguage } from '@/lib/language-context'
 import { applyTheme, currentTheme, type Theme } from '@/lib/theme'
 import type { NavIcon, SideLink, SideSection } from '@/lib/nav'
@@ -81,13 +82,7 @@ export function Sidebar({ sections }: { sections: SideSection[] }) {
     window.addEventListener('hashchange', read)
     return () => window.removeEventListener('hashchange', read)
   }, [pathname])
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setJumpOpen((o) => !o) }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  useShortcut('mod+k', () => setJumpOpen(true), { label: 'Jump to a page or tab', group: 'Global', global: true })
 
   // Not on sign-in pages, and never in the retailer shop (/shop), even if staff are signed in.
   if (HIDDEN_ON.includes(pathname) || pathname === '/shop' || pathname.startsWith('/shop/')) return null
@@ -271,10 +266,13 @@ function JumpTo({ sections, onClose, onOpen }: { sections: SideSection[]; onClos
 
   useEffect(() => { input.current?.focus() }, [])
   useEffect(() => { setPos(0) }, [q])
+  // While open only its own keys work; Ctrl K again closes it (as before).
+  const { id: scope, scopeProps } = useShortcutScope()
+  useShortcut('mod+k', onClose, { label: 'Close', scope, hidden: true })
 
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center bg-black/50 p-4 pt-[12vh]" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label="Jump to a page" className="w-full max-w-lg overflow-hidden rounded-2xl border border-border bg-popover shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label="Jump to a page" {...scopeProps} className="w-full max-w-lg overflow-hidden rounded-2xl border border-border bg-popover shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 border-b border-border px-4">
           <Search className="h-4 w-4 text-muted-foreground" aria-hidden />
           <input
