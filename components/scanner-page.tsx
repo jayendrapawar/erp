@@ -28,6 +28,7 @@ import { isCartonQr, isValidWarehouseQr, parseQr, type ParsedQr } from '@/lib/qr
 import { syncFlags, syncQueue, type SyncResult } from '@/lib/sync-engine'
 import { useOnline } from '@/lib/use-online'
 import { useScannerScreen } from '@/lib/shortcuts'
+import { DialogKeys } from '@/components/dialog-keys'
 
 const CARTON_MESSAGE = 'This is an outer-carton label. Scan the individual footwear boxes instead.'
 const MISSING_MESSAGE = 'Saved. This article or size is not in the master yet; an admin will link it.'
@@ -822,7 +823,7 @@ export function ScannerPage() {
           </div>
         )}
         {error && (
-          <div className="rounded-md bg-destructive/15 px-3 py-2 text-sm text-destructive">
+          <div role="alert" className="rounded-md bg-destructive/15 px-3 py-2 text-sm text-destructive">
             {error}
           </div>
         )}
@@ -1516,6 +1517,7 @@ export function ScannerPage() {
         {/* ── Delete confirm dialog ─────────────────────────────────────── */}
         {deleteTarget && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <DialogKeys onClose={() => setDeleteTarget(null)} />
             <div className="w-full max-w-sm rounded-xl bg-background border shadow-lg p-6 space-y-4">
               <div className="flex items-center gap-2">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-destructive/10">

@@ -28,6 +28,7 @@ import { NewArticleDialog } from '@/components/scanner/new-article-dialog'
 import { ArticlePhotosDialog } from '@/components/master/article-photos-dialog'
 import { getArticlePhotoCounts } from '@/app/actions/article-photos'
 import { parseQr } from '@/lib/qr-parser'
+import { DialogKeys } from '@/components/dialog-keys'
 
 export type { Article }
 
@@ -675,6 +676,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
           onClick={() => setModalMode(null)}
         >
+          <DialogKeys onClose={() => setModalMode(null)} />
           <div
             className={`w-full ${modalMode === 'add' ? 'sm:max-w-3xl' : 'sm:max-w-lg'} rounded-t-3xl sm:rounded-2xl border border-border bg-background shadow-2xl overflow-hidden`}
             onClick={e => e.stopPropagation()}
@@ -709,7 +711,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
 
             <div className="p-5 space-y-4 overflow-y-auto max-h-[75vh] sm:max-h-[80vh]">
               {formError && (
-                <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
+                <p role="alert" className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
               )}
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
@@ -945,7 +947,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
               >
                 Cancel
               </button>
-              <button
+              <button data-primary
                 type="button"
                 onClick={handleSave}
                 disabled={isSaving}
@@ -972,6 +974,7 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
           onClick={() => setDeleteTarget(null)}
         >
+          <DialogKeys onClose={() => setDeleteTarget(null)} />
           <div
             className="w-full max-w-sm rounded-2xl border border-border bg-background p-6 shadow-2xl m-4"
             onClick={e => e.stopPropagation()}
@@ -981,14 +984,14 @@ export function ArticlesTab({ initialArticles, initialMissingArticles, initialRe
               Are you sure you want to delete <span className="font-semibold text-foreground">&quot;{deleteTarget.artName}&quot;</span> ({deleteTarget.color || 'no color'})? This action cannot be undone.
             </p>
             <div className="flex gap-3">
-              <button
+              <button data-autofocus
                 onClick={() => setDeleteTarget(null)}
                 disabled={isDeleting}
                 className="flex-1 rounded-xl border border-border py-2.5 text-sm font-medium hover:bg-muted transition-all disabled:opacity-50"
               >
                 Cancel
               </button>
-              <button
+              <button data-primary data-destructive
                 onClick={() => {
                   startDelete(async () => {
                     try {

@@ -7,6 +7,7 @@ import type { Assortment } from '@/lib/catalog/assortment-store'
 import { ASSORTMENT_SEGMENTS, DIVISIONS, SEGMENTS, SIZE_COLUMNS, codeSizes, describeOnlyFor, formatSizes, validateAssortment } from '@/lib/catalog/assortments'
 import { UploadGuide } from '@/components/upload-guide'
 import { activeFilterCount, applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
+import { DialogKeys } from '@/components/dialog-keys'
 
 const ASSORTMENT_FILTERS: ColumnFilterDef<Assortment>[] = [
   { key: 'division', label: 'Division', kind: 'select', options: DIVISIONS, get: a => a.division },
@@ -260,11 +261,11 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
         <Modal title={form.id ? `Edit assortment ${form.code}` : 'Add assortment'} onClose={() => !busy && setForm(null)}
           footer={<>
             <button disabled={busy} onClick={() => setForm(null)} className="flex-1 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted">Cancel</button>
-            <button disabled={busy || check.errors.length > 0} onClick={save} className="flex-1 rounded-lg bg-foreground text-background px-3 py-2 text-sm font-semibold hover:opacity-90 disabled:opacity-50">
+            <button data-primary disabled={busy || check.errors.length > 0} onClick={save} className="flex-1 rounded-lg bg-foreground text-background px-3 py-2 text-sm font-semibold hover:opacity-90 disabled:opacity-50">
               {busy ? 'Saving…' : form.id ? 'Save as new version' : 'Add'}
             </button>
           </>}>
-          {formError && <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>}
+          {formError && <p role="alert" className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label htmlFor="as-division" className={labelCls}>Division</label>
@@ -343,7 +344,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
           </>}>
           <p className="text-sm text-muted-foreground">{retiring.division} · {retiring.segment} · {retiring.packing} pairs · <span className="font-mono">{formatSizes(retiring.sizes)}</span></p>
           <p className="text-xs text-muted-foreground">It stops being offered but is kept as history.</p>
-          {formError && <p className="text-xs text-red-600 dark:text-red-400">{formError}</p>}
+          {formError && <p role="alert" className="text-xs text-red-600 dark:text-red-400">{formError}</p>}
           <input value={retireReason} onChange={e => setRetireReason(e.target.value)} className={inputCls} placeholder="Reason (optional)" aria-label="Reason" />
         </Modal>
       )}
@@ -354,7 +355,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
           footer={<>
             <button disabled={busy} onClick={() => setUploadOpen(false)} className="flex-1 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted">Close</button>
             {upload && upload.lines.length > 0 && (
-              <button disabled={busy || !tally || tally.error > 0 || tally.new + tally.changed === 0} onClick={applyUpload}
+              <button data-primary disabled={busy || !tally || tally.error > 0 || tally.new + tally.changed === 0} onClick={applyUpload}
                 className="flex-1 rounded-lg bg-foreground text-background px-3 py-2 text-sm font-semibold hover:opacity-90 disabled:opacity-50">
                 {busy ? 'Saving…' : tally && tally.error > 0 ? 'Fix errors first' : `Save ${tally ? tally.new + tally.changed : 0} change(s)`}
               </button>
@@ -405,6 +406,7 @@ export function AssortmentsTab({ initialAssortments, canEdit }: Props) {
 function Modal({ title, children, footer, onClose, wide }: { title: string; children: React.ReactNode; footer: React.ReactNode; onClose: () => void; wide?: boolean }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4" onClick={onClose}>
+      <DialogKeys onClose={onClose} />
       <div role="dialog" aria-modal="true" aria-label={title} className={`w-full ${wide ? 'max-w-2xl' : 'max-w-md'} rounded-2xl border border-border bg-background shadow-2xl max-h-[90vh] flex flex-col`} onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-border"><p className="font-semibold text-sm text-foreground">{title}</p></div>
         <div className="p-5 space-y-3 overflow-y-auto">{children}</div>

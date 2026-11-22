@@ -6,6 +6,7 @@ import { useListKeys } from '@/lib/shortcuts/list'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
 import { markDispatched, markDelivered, getOrderWithItems } from '@/app/actions/orders'
 import { PageNav } from '@/components/page-nav'
+import { DialogKeys } from '@/components/dialog-keys'
 
 interface DispatchOrder {
   id: number; orderNumber: string; shopkeeperName: string; shopkeeperPhone: string | null
@@ -206,6 +207,7 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
           className="fixed inset-0 z-40 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
           onClick={() => setDetailOrder(null)}
         >
+          <DialogKeys onClose={() => setDetailOrder(null)} />
           <div
             className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85vh] sm:max-h-none overflow-y-auto shadow-2xl rounded-t-2xl sm:rounded-none"
             onClick={e => e.stopPropagation()}
@@ -262,7 +264,7 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
                   <p className="px-4 py-6 text-sm text-muted-foreground text-center">Loading items…</p>
                 )}
                 {detailError && (
-                  <p className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>
+                  <p role="alert" className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>
                 )}
                 {!detailLoading && !detailError && detailItems.length === 0 && (
                   <p className="px-4 py-6 text-sm text-muted-foreground text-center">No items found.</p>
@@ -405,6 +407,7 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
       {/* Pickup confirmation modal */}
       {pickupModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <DialogKeys onClose={closePickupModal} />
           <div className="w-full max-w-sm rounded-2xl bg-background border border-border p-6 shadow-lg">
             <h2 className="text-base font-semibold mb-1">Confirm Pick Up</h2>
             <p className="text-xs text-muted-foreground mb-5">
@@ -449,7 +452,7 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
               >
                 Cancel
               </button>
-              <button
+              <button data-primary
                 onClick={handleConfirmPickup}
                 disabled={!canConfirm}
                 className="flex-1 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"

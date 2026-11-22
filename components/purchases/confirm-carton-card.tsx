@@ -38,7 +38,7 @@ export function ConfirmCartonCard({ ask, waiting, busy, error, onAnswer }: Props
   }
 
   return (
-    <section className="space-y-3 rounded-xl border-2 border-sky-500/60 bg-sky-50/50 p-4 dark:bg-sky-950/20" aria-label="Confirm carton assortment">
+    <section data-form className="space-y-3 rounded-xl border-2 border-sky-500/60 bg-sky-50/50 p-4 dark:bg-sky-950/20" aria-label="Confirm carton assortment">
       <div>
         <p className="text-sm font-semibold" data-no-translate>{ask.label}</p>
         <p className="text-xs text-muted-foreground">{`Bill ${ask.refNo} · line ${ask.lineNo} · ${ask.lineReceived} of ${ask.lineCartons} cartons received · ${ask.pairsPerCarton} pairs per carton`}</p>
@@ -96,7 +96,7 @@ export function ConfirmCartonCard({ ask, waiting, busy, error, onAnswer }: Props
       </div>
 
       {error && <p className="rounded-lg bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">{error}</p>}
-      <button onClick={confirm} disabled={!ready} className="w-full rounded-lg bg-foreground px-3 py-2.5 text-sm font-semibold text-background hover:opacity-90 disabled:opacity-50">
+      <button data-primary onClick={confirm} disabled={!ready} className="w-full rounded-lg bg-foreground px-3 py-2.5 text-sm font-semibold text-background hover:opacity-90 disabled:opacity-50">
         {busy ? 'Saving…' : 'Confirm and receive'}
       </button>
       {waiting > 0 && <p className="text-[11px] text-muted-foreground">{`${waiting} more carton(s) scanned — they come next.`}</p>}

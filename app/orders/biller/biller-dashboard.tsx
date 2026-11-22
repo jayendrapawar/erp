@@ -19,6 +19,7 @@ import { BillingScannerPage, type BillingVendor } from '@/components/billing-sca
 import { useShortcut } from '@/lib/shortcuts'
 import { useListKeys } from '@/lib/shortcuts/list'
 import { tablistKeyDown, tabProps, useTabKeys } from '@/lib/shortcuts/tabs'
+import { DialogKeys } from '@/components/dialog-keys'
 
 const BILLER_TABS: { value: BillerTab; label: string }[] = [
   { value: 'verify', label: 'Invoices' }, { value: 'emergency', label: 'Direct Billing' }, { value: 'generated', label: 'Receipts' },
@@ -1266,6 +1267,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
           className="fixed inset-0 z-40 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
           onClick={() => setDetailOrder(null)}
         >
+          <DialogKeys onClose={() => setDetailOrder(null)} />
           <div
             className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85vh] sm:max-h-none overflow-y-auto shadow-2xl rounded-t-2xl sm:rounded-none"
             onClick={e => e.stopPropagation()}
@@ -1313,7 +1315,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   <p className="text-sm font-semibold text-foreground">Order Items</p>
                 </div>
                 {detailLoading && <p className="px-4 py-6 text-sm text-muted-foreground text-center">Loading items…</p>}
-                {detailError  && <p className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>}
+                {detailError  && <p role="alert" className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>}
                 {!detailLoading && !detailError && detailItems.length === 0 && (
                   <p className="px-4 py-6 text-sm text-muted-foreground text-center">No items found.</p>
                 )}
@@ -1610,6 +1612,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       {/* ── Scan & verify modal ── */}
       {scanOrder && (
         <div className="fixed inset-0 z-50 flex flex-col bg-background">
+          <DialogKeys onClose={closeScanner} />
 
           {/* ── Top header ── */}
           <div className="shrink-0 flex items-center gap-3 px-4 py-3 border-b border-border bg-background">
@@ -2065,6 +2068,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
           className="fixed inset-0 z-[60] flex flex-col justify-end bg-black/50 backdrop-blur-sm"
           onClick={() => setManualTarget(null)}
         >
+          <DialogKeys onClose={() => setManualTarget(null)} />
           <div
             className="bg-background rounded-t-2xl border-t border-border shadow-2xl"
             onClick={e => e.stopPropagation()}
@@ -2227,6 +2231,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       {/* ── Print Config Modal ── */}
       {printConfigOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <DialogKeys onClose={() => setPrintConfigOpen(false)} />
           {/* Backdrop */}
           <div
             className="absolute inset-0 bg-black/50 backdrop-blur-sm"
@@ -2294,7 +2299,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
               >
                 Cancel
               </button>
-              <button
+              <button data-primary
                 type="button"
                 onClick={confirmPrint}
                 className="flex-1 h-11 rounded-xl bg-primary text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring flex items-center justify-center gap-2"

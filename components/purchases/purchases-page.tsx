@@ -40,6 +40,8 @@ import {
 import type { BillDetail, BillRow, ConfirmCarton, ExpectedStockRow, PurchaseSummary, ReceiptRow, ReceiveOutcome } from '@/lib/purchases/store'
 import type { UploadFileResult } from '@/app/api/purchases/upload/route'
 import type { MailCheckResult } from '@/lib/purchases/mail'
+import { DialogKeys } from '@/components/dialog-keys'
+import { askConfirm } from '@/components/confirm-dialog'
 
 interface Props {
   initialSummary: PurchaseSummary
@@ -202,7 +204,7 @@ function MailStartPanel({ state, onChange, canSet, mailboxReady }: { state: Mail
         {canSet && !editing && (
           <>
             <button onClick={() => { setEditing(true); setDay(state.day ?? today) }} className="rounded-lg border border-border bg-background px-2.5 py-1 font-medium hover:bg-muted">{on ? 'Change date' : 'Turn on…'}</button>
-            {on && <button onClick={() => { if (window.confirm('Stop reading bills from mail? Bills already imported stay.')) save(null) }} disabled={busy} className="rounded-lg border border-border bg-background px-2.5 py-1 font-medium text-red-600 dark:text-red-400 hover:bg-muted">Turn off</button>}
+            {on && <button onClick={async () => { if (await askConfirm({ message: 'Stop reading bills from mail? Bills already imported stay.', confirmLabel: 'Stop', destructive: true })) save(null) }} disabled={busy} className="rounded-lg border border-border bg-background px-2.5 py-1 font-medium text-red-600 dark:text-red-400 hover:bg-muted">Turn off</button>}
           </>
         )}
       </div>
@@ -226,7 +228,7 @@ function MailStartPanel({ state, onChange, canSet, mailboxReady }: { state: Mail
           </div>
         </div>
       )}
-      {error && <p className="mt-1.5 text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mt-1.5 text-red-600 dark:text-red-400">{error}</p>}
     </div>
   )
 }
@@ -307,7 +309,7 @@ function BillsTab({ bills, canUpload, mailReady, onOpen, onUploaded }: { bills: 
           Show received and cancelled bills
         </label>
       </div>
-      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {mail && (
         <p className="mb-2 text-xs text-muted-foreground">
           Mail since {when.format(new Date(mail.since))}: {mail.found} bill mail{mail.found === 1 ? '' : 's'} found, {mail.alreadyDone} already imported, {mail.processed} read now
@@ -381,11 +383,7 @@ function BillDialog({ billId, canManage, onClose, onChanged }: { billId: number;
     getBillDetail(billId).then((x) => { setD(x); if (!x) setError('Bill not found.') }).catch((e) => setError(errText(e, 'Could not load.')))
   }, [billId])
   useEffect(() => { load() }, [load])
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [busy, onClose])
+  // Esc: <DialogKeys> (focus returns to the opener).
 
   const run = (f: () => Promise<string | void>) => start(async () => {
     setError(''); setNote('')
@@ -395,6 +393,7 @@ function BillDialog({ billId, canManage, onClose, onChanged }: { billId: number;
   const b = d?.bill
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm sm:px-4" onClick={() => !busy && onClose()}>
+      <DialogKeys onClose={() => !busy && onClose()} />
       <div role="dialog" aria-modal="true" aria-label={b ? `Bill ${b.refNo}` : 'Bill'} className="w-full sm:max-w-3xl rounded-t-2xl sm:rounded-2xl border border-border bg-background shadow-2xl max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-border">
           {b ? (
@@ -420,7 +419,7 @@ function BillDialog({ billId, canManage, onClose, onChanged }: { billId: number;
                 </select>
               </label>
             </div>
-            {error && <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>}
+            {error && <p role="alert" className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>}
             {note && <p className="text-xs bg-muted rounded-lg px-3 py-2">{note}</p>}
             {b.pendingStock > 0 && (
               <p className="text-xs text-muted-foreground">{b.pendingStock} received carton(s) were checked against this bill without adding stock: scan their boxes with the warehouse scanner.</p>
@@ -453,9 +452,9 @@ function BillDialog({ billId, canManage, onClose, onChanged }: { billId: number;
                           </span>
                           {l.options.map((o) => (
                             <button key={o.id} disabled={!canManage || busy}
-                              onClick={() => {
+                              onClick={async () => {
                                 // "Only for" other articles: ask before using it for this article as well.
-                                if (!o.covers && !window.confirm(`This assortment is only for ${describeOnlyFor(o.onlyFor)}.\n\nUse the same assortment for ${l.articleCode} too?\n\nOK = use it for ${l.articleCode} too · Cancel = keep it separate (enter the pairs per size when the carton arrives)`)) return
+                                if (!o.covers && !await askConfirm({ confirmLabel: `Use for ${l.articleCode} too`, cancelLabel: 'Keep separate', message: `This assortment is only for ${describeOnlyFor(o.onlyFor)}.\n\nUse the same assortment for ${l.articleCode} too?\n\nOK = use it for ${l.articleCode} too · Cancel = keep it separate (enter the pairs per size when the carton arrives)` })) return
                                 run(async () => { await setLineAssortmentAction(l.id, o.id, !o.covers); return !o.covers ? `Assortment now also used for ${l.articleCode}. It is proposed for each carton at receiving.` : 'Assortment saved. It is proposed for each carton at receiving.' })
                               }}
                               className={`rounded-md border px-1.5 py-0.5 hover:bg-muted disabled:opacity-60 ${o.id === l.suggestedId ? 'border-green-600' : o.covers ? 'border-border' : 'border-amber-400 border-dashed'}`}>
@@ -689,7 +688,7 @@ function ReceiveTab({ onReceived, onOpenBill }: { onReceived: () => void; onOpen
       <p className="text-[11px] text-muted-foreground">
         {manualOpen ? 'Manual entry: scan one pair box from the carton (scanner or camera).' : 'Scan the outer carton label with the barcode scanner, or use the camera. Label damaged? Use Manual entry.'}
       </p>
-      {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="text-xs text-red-600 dark:text-red-400">{error}</p>}
       <div className={`relative overflow-hidden rounded-xl border border-border bg-black ${active ? '' : 'hidden'}`}>
         <video ref={videoRef} playsInline muted className="w-full max-h-[45vh] object-cover" />
       </div>
@@ -778,7 +777,7 @@ function ExpectedTab() {
       <FilterBar className="mb-3" defs={EXPECTED_FILTERS} values={filters} onChange={setFilters} />
       <FiltersButton className="mb-3 sm:hidden" defs={EXPECTED_FILTERS} values={filters} onChange={setFilters} />
       <p className="text-xs text-muted-foreground mb-2">Pairs on open bills not received yet. {rows.length ? `${num.format(rows.reduce((n, r) => n + r.pairs, 0))} pairs in ${rows.length} rows.` : ''}</p>
-      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {!busy && rows.length === 0 && <p className="text-center py-10 text-sm text-muted-foreground">{activeFilterCount(filters) ? 'Nothing matches.' : 'Nothing expected.'}</p>}
       <div className={`rounded-xl border border-border divide-y divide-border overflow-hidden ${rows.length ? '' : 'hidden'} ${busy ? 'opacity-70' : ''}`}>
         {rows.map((r) => (
@@ -813,7 +812,7 @@ function ReceiptsList({ unexpected, canManage, onChanged }: { unexpected?: boole
   return (
     <div>
       <p className="text-xs text-muted-foreground mb-2">Cartons scanned at receiving that match no open bill (or more cartons than the bill lists). Stock was not changed. Upload the missing bill, then undo and scan the carton again — or undo it if it was scanned by mistake.</p>
-      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {!busy && rows.length === 0 && <p className="text-center py-10 text-sm text-muted-foreground">None.</p>}
       <ReceiptRows rows={rows} canManage={canManage} busy={busy} voiding={voiding} setVoiding={setVoiding} reason={reason} setReason={setReason}
         onVoid={(id) => start(async () => {

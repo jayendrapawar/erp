@@ -26,7 +26,7 @@ export function BillEmailSettings() {
   const changed = info ? email.trim().toLowerCase() !== info.email || password.trim() !== '' : false
 
   return (
-    <section className="space-y-3 rounded-xl border border-border bg-card p-4" aria-labelledby="bill-email-h">
+    <section data-form className="space-y-3 rounded-xl border border-border bg-card p-4" aria-labelledby="bill-email-h">
       <div className="flex items-center gap-2">
         <h3 id="bill-email-h" className="flex-1 text-sm font-semibold">Bill email</h3>
         <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${ready ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'}`}>
@@ -45,7 +45,7 @@ export function BillEmailSettings() {
           placeholder={info?.hasPassword ? 'Saved — type a new one only to change it' : '16 letters from Google'} className={`${inputCls} mt-1`} />
       </label>
       {info?.updatedByName && <p className="text-[11px] text-muted-foreground">Last changed by {info.updatedByName}{info.updatedAt ? `, ${new Date(info.updatedAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}</p>}
-      <button type="button" disabled={busy || !changed}
+      <button data-primary type="button" disabled={busy || !changed}
         onClick={() => start(async () => {
           setMsg(null)
           try { const i = await saveBillEmailSender(email, password); setInfo(i); setEmail(i.email); setPassword(''); setMsg({ ok: true, text: 'Saved. Send a test to check it works.' }) }

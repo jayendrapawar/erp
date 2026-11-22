@@ -9,6 +9,7 @@ import { saveVendor, importVendors } from '@/app/actions/vendors'
 import type { Vendor } from '@/app/actions/vendors'
 import { csvToCells, downloadCsv } from '@/lib/csv'
 import { UploadGuide, type UploadColumn } from '@/components/upload-guide'
+import { DialogKeys } from '@/components/dialog-keys'
 
 const RETAILER_FILTERS: ColumnFilterDef<Vendor>[] = [
   { key: 'id', label: 'ID', kind: 'text', get: v => v.id },
@@ -402,6 +403,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
           onClick={() => setModalMode(null)}
         >
+          <DialogKeys onClose={() => setModalMode(null)} />
           <div
             className="w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl border border-border bg-background shadow-2xl"
             onClick={e => e.stopPropagation()}
@@ -420,7 +422,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
 
             <div className="p-5 space-y-3 overflow-y-auto max-h-[65vh] sm:max-h-[70vh]">
               {formError && (
-                <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
+                <p role="alert" className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
               )}
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
@@ -476,7 +478,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
               <button onClick={() => setModalMode(null)} disabled={isSaving} className="flex-1 rounded-xl border border-border px-3 py-3 text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50">
                 Cancel
               </button>
-              <button onClick={handleSave} disabled={isSaving} className="flex-1 rounded-xl bg-foreground text-background px-3 py-3 text-sm font-semibold hover:opacity-90 active:scale-95 transition-all disabled:opacity-60">
+              <button data-primary onClick={handleSave} disabled={isSaving} className="flex-1 rounded-xl bg-foreground text-background px-3 py-3 text-sm font-semibold hover:opacity-90 active:scale-95 transition-all disabled:opacity-60">
                 {isSaving ? 'Saving…' : modalMode === 'add' ? 'Add Retailer' : 'Save Changes'}
               </button>
             </div>

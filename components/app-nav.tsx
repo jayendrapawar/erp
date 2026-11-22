@@ -6,6 +6,8 @@ import { SessionUserProvider } from './session-user'
 import { Sidebar } from './sidebar'
 import { KeyboardHelp } from './keyboard-help'
 import { GoToKeys } from './go-to-keys'
+import { ConfirmHost } from './confirm-dialog'
+import { FormKeys } from './form-keys'
 
 /**
  * Wraps every page (root layout): shares the signed-in user's name and role with the profile menu,
@@ -26,6 +28,8 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
       {u && <BottomNav items={items} />}
       {u && <KeyboardHelp />}
       {u && <GoToKeys targets={goToTargets(sections, u.roles)} />}
+      {u && <FormKeys />}
+      <ConfirmHost />
     </SessionUserProvider>
   )
 }

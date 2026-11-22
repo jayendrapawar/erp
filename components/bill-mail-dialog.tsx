@@ -6,6 +6,7 @@
 import { useEffect, useState, useTransition } from 'react'
 import { Mail, X } from 'lucide-react'
 import { getBillMailDefaults, mailBills, type MailDefaults } from '@/app/actions/bill-email'
+import { DialogKeys } from '@/components/dialog-keys'
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : 'Email not sent.')
 
@@ -20,17 +21,14 @@ export function BillMailDialog({ orderIds, onClose }: { orderIds: number[]; onCl
     getBillMailDefaults(orderIds).then((x) => { setD(x); setTo(x.suggestedTo) }).catch((e) => setMsg({ ok: false, text: errText(e) }))
   }, [orderIds])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [busy, onClose])
+  // Esc: <DialogKeys> (focus returns to the opener).
 
   const oneRetailer = d?.retailers.length === 1
   const sent = msg?.ok === true
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center sm:p-4" onClick={() => !busy && onClose()}>
+      <DialogKeys onClose={() => !busy && onClose()} />
       <section role="dialog" aria-modal="true" aria-labelledby="mail-h" onClick={(e) => e.stopPropagation()}
         className="w-full max-w-md space-y-4 rounded-t-2xl border border-border bg-card p-5 shadow-2xl sm:rounded-2xl">
         <div className="flex items-center gap-3">
@@ -75,7 +73,7 @@ export function BillMailDialog({ orderIds, onClose }: { orderIds: number[]; onCl
           {sent ? (
             <button type="button" onClick={onClose} className="h-12 w-full rounded-xl border border-border text-sm font-bold hover:bg-muted">Done</button>
           ) : (
-            <button type="submit" disabled={busy || !d?.ready || !to.trim()}
+            <button data-primary type="submit" disabled={busy || !d?.ready || !to.trim()}
               className="h-12 w-full rounded-xl bg-primary text-sm font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
               {busy ? 'Sending…' : 'Send'}
             </button>

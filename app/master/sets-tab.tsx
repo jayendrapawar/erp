@@ -4,6 +4,7 @@ import { useState, useTransition, useRef } from 'react'
 import { useListKeys } from '@/lib/shortcuts/list'
 import { saveSet, deleteSet } from '@/app/actions/sets'
 import type { OrderSet } from '@/app/actions/sets'
+import { DialogKeys } from '@/components/dialog-keys'
 
 export type { OrderSet }
 
@@ -220,6 +221,7 @@ export function SetsTab({ initialSets, onListChange }: Props) {
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
           onClick={() => setModalMode(null)}
         >
+          <DialogKeys onClose={() => setModalMode(null)} />
           <div
             className="w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl border border-border bg-background shadow-2xl"
             onClick={e => e.stopPropagation()}
@@ -245,7 +247,7 @@ export function SetsTab({ initialSets, onListChange }: Props) {
 
             <div className="p-5 space-y-4 overflow-y-auto max-h-[65vh]">
               {formError && (
-                <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
+                <p role="alert" className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
               )}
 
               <div>
@@ -299,7 +301,7 @@ export function SetsTab({ initialSets, onListChange }: Props) {
               >
                 Cancel
               </button>
-              <button
+              <button data-primary
                 onClick={handleSave}
                 disabled={isSaving}
                 className="flex-1 rounded-xl bg-foreground text-background px-3 py-3 text-sm font-semibold hover:opacity-90 active:scale-95 transition-all disabled:opacity-60"
@@ -317,6 +319,7 @@ export function SetsTab({ initialSets, onListChange }: Props) {
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
           onClick={() => setDeleteTarget(null)}
         >
+          <DialogKeys onClose={() => setDeleteTarget(null)} />
           <div
             className="w-full sm:max-w-sm rounded-t-3xl sm:rounded-2xl border border-border bg-background shadow-2xl p-5"
             onClick={e => e.stopPropagation()}
@@ -329,14 +332,14 @@ export function SetsTab({ initialSets, onListChange }: Props) {
               Delete <span className="font-medium text-foreground">{deleteTarget.name}</span>? This cannot be undone.
             </p>
             <div className="flex gap-2">
-              <button
+              <button data-autofocus
                 onClick={() => setDeleteTarget(null)}
                 disabled={isDeleting}
                 className="flex-1 rounded-xl border border-border px-3 py-3 text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
-              <button
+              <button data-primary data-destructive
                 onClick={handleDeleteConfirm}
                 disabled={isDeleting}
                 className="flex-1 rounded-xl bg-red-600 text-white px-3 py-3 text-sm font-semibold hover:bg-red-700 active:scale-95 transition-all disabled:opacity-60"

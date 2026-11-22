@@ -8,6 +8,7 @@ import { useListKeys } from '@/lib/shortcuts/list'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
 import { adminAssignPicker, adminUnassignPicker, getOrderWithItems, getPickerAssignments, deleteOrder, getBillLines } from '@/app/actions/orders'
+import { DialogKeys } from '@/components/dialog-keys'
 
 interface MrpLine {
   artNumber: string
@@ -235,6 +236,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
             className="fixed inset-0 z-40 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
             onClick={() => setDetailOrder(null)}
           >
+            <DialogKeys onClose={() => setDetailOrder(null)} />
             <div
               className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85vh] sm:max-h-none overflow-y-auto shadow-2xl rounded-t-2xl sm:rounded-none"
               onClick={e => e.stopPropagation()}
@@ -314,7 +316,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                     <p className="px-4 py-6 text-sm text-muted-foreground text-center">Loading items…</p>
                   )}
                   {detailError && (
-                    <p className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>
+                    <p role="alert" className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>
                   )}
                   {!detailLoading && !detailError && detailItems.length === 0 && (
                     <p className="px-4 py-6 text-sm text-muted-foreground text-center">No items found.</p>
@@ -600,13 +602,14 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
         {/* ── Delete confirmation dialog ── */}
         {deleteConfirmId !== null && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+            <DialogKeys onClose={() => setDeleteConfirmId(null)} />
             <div className="w-full max-w-sm rounded-2xl bg-background border border-border p-6 shadow-lg">
               <h2 className="text-base font-semibold mb-1 text-foreground">Delete Order?</h2>
               <p className="text-xs text-muted-foreground mb-5">
                 This will permanently delete <span className="font-medium text-foreground">{detailOrder?.orderNumber}</span> and all its items. This cannot be undone.
               </p>
               <div className="flex gap-3">
-                <button
+                <button data-autofocus
                   type="button"
                   onClick={() => setDeleteConfirmId(null)}
                   disabled={isDeleting}
@@ -614,7 +617,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                 >
                   Cancel
                 </button>
-                <button
+                <button data-primary data-destructive
                   type="button"
                   onClick={() => handleDeleteOrder(deleteConfirmId)}
                   disabled={isDeleting}

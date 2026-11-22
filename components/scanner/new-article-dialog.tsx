@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { suggestSizes } from './size-suggestions'
+import { DialogKeys } from '@/components/dialog-keys'
 
 type Props = {
   rawQr: string
@@ -106,13 +107,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
     return () => { cancelled = true }
   }, [parsed.articleCode])
 
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !loading) onClose()
-    }
-    window.addEventListener('keydown', closeOnEscape)
-    return () => window.removeEventListener('keydown', closeOnEscape)
-  }, [loading, onClose])
+  // Esc: <DialogKeys> (focus returns to the opener).
 
   useEffect(() => {
     if (!warning && !errorMessage) return
@@ -194,6 +189,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
+      <DialogKeys onClose={() => { if (!loading) onClose() }} />
       <div role="dialog" aria-modal="true" aria-labelledby="new-article-title" className="w-full max-w-lg max-h-[92dvh] overflow-y-auto rounded-xl border bg-background p-5 shadow-lg sm:p-6">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>

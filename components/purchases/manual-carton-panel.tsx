@@ -215,7 +215,7 @@ export function ManualCartonPanel({ registerBoxHandler, cameraActive, onStartCam
 
       {error && <p className="rounded-lg bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">{error}</p>}
       {box && lines.length > 0 && (
-        <button onClick={receive} disabled={!canReceive} className="w-full rounded-lg bg-foreground px-3 py-2.5 text-sm font-semibold text-background hover:opacity-90 disabled:opacity-50">
+        <button data-primary onClick={receive} disabled={!canReceive} className="w-full rounded-lg bg-foreground px-3 py-2.5 text-sm font-semibold text-background hover:opacity-90 disabled:opacity-50">
           {busy ? 'Saving…' : 'Receive carton'}
         </button>
       )}

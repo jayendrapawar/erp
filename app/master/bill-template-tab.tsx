@@ -9,6 +9,7 @@ import { getBillTemplate, saveBillTemplate } from '@/app/actions/bill-template'
 import { buildInvoiceHtml, type PageSize } from '@/lib/bill-html'
 import { DEFAULT_BILL_TEMPLATE, checkBillTemplate, type BillTemplate } from '@/lib/bill-template'
 import { BillEmailSettings } from '@/components/master/bill-email-settings'
+import { askConfirm } from '@/components/confirm-dialog'
 
 const SAMPLE = {
   vendor: { name: 'Sample Footwear', phone: '98250 00000', area: 'Udhna', address: 'Main Road, Surat' },
@@ -77,7 +78,7 @@ export function BillTemplateTab() {
   }
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:items-start">
+    <div data-form className="grid gap-5 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:items-start">
       <div className="space-y-4">
         <section className="space-y-3 rounded-xl border border-border p-4">
           <h3 className="text-sm font-semibold">Shop</h3>
@@ -119,11 +120,11 @@ export function BillTemplateTab() {
         {problems.length > 0 && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">{problems.join(' ')}</p>}
         {msg && <p className={`rounded-lg px-3 py-2 text-xs ${msg.ok ? 'bg-green-50 text-green-800 dark:bg-green-950/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300'}`}>{msg.text}</p>}
         <div className="flex gap-2">
-          <button type="button" onClick={save} disabled={busy || !dirty || problems.length > 0} className="flex-1 rounded-lg bg-foreground px-4 py-2.5 text-sm font-semibold text-background disabled:opacity-50">
+          <button data-primary type="button" onClick={save} disabled={busy || !dirty || problems.length > 0} className="flex-1 rounded-lg bg-foreground px-4 py-2.5 text-sm font-semibold text-background disabled:opacity-50">
             {busy ? 'Saving…' : dirty ? 'Save' : 'Saved'}
           </button>
           <button type="button" onClick={() => saved && setT(saved)} disabled={!dirty || busy} className="rounded-lg border border-border px-4 py-2.5 text-sm disabled:opacity-50">Undo changes</button>
-          <button type="button" onClick={() => { if (window.confirm('Put back the standard shop details?')) setT({ ...DEFAULT_BILL_TEMPLATE }) }} className="rounded-lg border border-border px-3 py-2.5 text-xs">Standard</button>
+          <button type="button" onClick={async () => { if (await askConfirm({ message: 'Put back the standard shop details? Your changes on this page are lost.', confirmLabel: 'Put back', destructive: true })) setT({ ...DEFAULT_BILL_TEMPLATE }) }} className="rounded-lg border border-border px-3 py-2.5 text-xs">Standard</button>
         </div>
         <BillNumberSettings />
         <BillEmailSettings />

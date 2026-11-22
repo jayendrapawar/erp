@@ -26,7 +26,7 @@ export function BillNumberSettings() {
   const preview = Number.isFinite(n) && n > 0 ? fmt(prefix.trim(), Math.floor(n), Number(padding) || 0) : '—'
 
   return (
-    <section className="space-y-3 rounded-xl border border-border bg-card p-4" aria-labelledby="bill-no-h">
+    <section data-form className="space-y-3 rounded-xl border border-border bg-card p-4" aria-labelledby="bill-no-h">
       <h3 id="bill-no-h" className="text-sm font-semibold">Bill numbers</h3>
       <p className="text-xs text-muted-foreground">
         Every bill gets the next number when it is billed (Invoices and Direct Billing). No two bills share a number.
@@ -52,7 +52,7 @@ export function BillNumberSettings() {
           {info.updatedByName ? ` Last changed by ${info.updatedByName}.` : ''}
         </p>
       )}
-      <button type="button" disabled={busy || !(n > 0)}
+      <button data-primary type="button" disabled={busy || !(n > 0)}
         onClick={() => start(async () => {
           setMsg(null)
           try { load(await saveBillNumbering({ prefix, next: n, padding: Number(padding) || 0 })); setMsg({ ok: true, text: 'Saved.' }) }

@@ -3,10 +3,11 @@
 // Master → Retailers → Shop: switch a retailer's ordering shop on/off, set the sign-in mobile number
 // and a PIN, then share the details with the retailer (owner, 21 Nov 2026).
 
-import { useEffect, useState, useTransition } from 'react'
+import { useState, useTransition } from 'react'
 import { X } from 'lucide-react'
 import { setShopAccess } from '@/app/actions/shop-access'
 import type { Vendor } from '@/app/actions/vendors'
+import { DialogKeys } from '@/components/dialog-keys'
 
 const inputCls = 'mt-1 h-11 w-full rounded-xl border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring'
 const errText = (e: unknown) => (e instanceof Error ? e.message : 'Not saved.')
@@ -28,17 +29,14 @@ export function ShopAccessDialog({ retailer, onClose, onSaved }: { retailer: Ven
   const hasPin = Boolean(retailer.shopPinSetAt)
   const locked = retailer.shopLockedUntil && new Date(retailer.shopLockedUntil).getTime() > Date.now()
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [busy, onClose])
+  // Esc: <DialogKeys> (focus returns to the opener).
 
   const link = typeof window !== 'undefined' ? `${window.location.origin}/shop` : '/shop'
   const shareText = shared ? `Shayona order app: ${link}\nMobile: ${shared.phone}\nPIN: ${shared.pin}` : ''
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center sm:p-4" onClick={() => !busy && onClose()}>
+      <DialogKeys onClose={() => !busy && onClose()} />
       <section role="dialog" aria-modal="true" aria-labelledby="shop-h" onClick={(e) => e.stopPropagation()}
         className="w-full max-w-md space-y-4 rounded-t-2xl border border-border bg-card p-5 shadow-2xl sm:rounded-2xl">
         <div className="flex items-start gap-3">
@@ -92,7 +90,7 @@ export function ShopAccessDialog({ retailer, onClose, onSaved }: { retailer: Ven
               {locked && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Locked after wrong PINs — setting a new PIN unlocks it.</p>}
             </div>
             {msg && <p role="status" className={`rounded-lg px-3 py-2 text-sm ${msg.ok ? 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-200' : 'bg-red-500/15 text-red-700 dark:text-red-300'}`}>{msg.text}</p>}
-            <button type="submit" disabled={busy} className="h-12 w-full rounded-xl bg-primary text-sm font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+            <button data-primary type="submit" disabled={busy} className="h-12 w-full rounded-xl bg-primary text-sm font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
               {busy ? 'Saving…' : 'Save'}
             </button>
           </form>

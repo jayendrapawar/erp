@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition, useRef } from 'react'
 import { useListKeys } from '@/lib/shortcuts/list'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { saveSupplier, type Supplier, type SupplierInput } from '@/app/actions/suppliers'
+import { DialogKeys } from '@/components/dialog-keys'
 
 type Form = Omit<SupplierInput, 'divisions' | 'paymentTermsDays'> & { divisionsText: string; paymentTermsText: string }
 
@@ -179,12 +180,13 @@ export function SuppliersTab({ initialSuppliers, readOnly = false, onListChange 
 
       {modalMode && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4" onClick={() => !saving && setModalMode(null)}>
+          <DialogKeys onClose={() => !saving && setModalMode(null)} />
           <div className="w-full max-w-md rounded-2xl border border-border bg-background shadow-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
               <p className="font-semibold text-sm text-foreground">{modalMode === 'add' ? 'Add Supplier' : 'Edit Supplier'}</p>
             </div>
             <div className="p-5 space-y-3">
-              {formError && <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>}
+              {formError && <p role="alert" className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>}
               <div className="grid grid-cols-2 gap-3">
                 {field('name', 'Name *', { placeholder: 'e.g. Relaxo Footwears Ltd — Sparx', span: true })}
                 {field('contactPerson', 'Contact person')}
@@ -207,7 +209,7 @@ export function SuppliersTab({ initialSuppliers, readOnly = false, onListChange 
             </div>
             <div className="flex gap-2 px-5 py-4 border-t border-border">
               <button disabled={saving} onClick={() => setModalMode(null)} className="flex-1 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted transition-colors">Cancel</button>
-              <button disabled={saving} onClick={handleSave} className="flex-1 rounded-lg bg-foreground text-background px-3 py-2 text-sm font-semibold hover:opacity-90 transition-opacity disabled:opacity-60">
+              <button data-primary disabled={saving} onClick={handleSave} className="flex-1 rounded-lg bg-foreground text-background px-3 py-2 text-sm font-semibold hover:opacity-90 transition-opacity disabled:opacity-60">
                 {saving ? 'Saving…' : modalMode === 'add' ? 'Add Supplier' : 'Save Changes'}
               </button>
             </div>

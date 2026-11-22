@@ -9,6 +9,7 @@ import { Printer, X } from 'lucide-react'
 import { getBillLines } from '@/app/actions/orders'
 import { buildInvoiceHtml, transliterateToHindi, type MrpLine, type PageSize } from '@/lib/bill-html'
 import type { BillTemplate } from '@/lib/bill-template'
+import { DialogKeys } from '@/components/dialog-keys'
 
 export interface PreviewBill {
   id: number
@@ -61,11 +62,7 @@ export function BillPreviewDialog({ bill, template, defaultPageSize, fallbackLin
     return () => { live = false }
   }, [bill.shopkeeperName, template?.showHindiName])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Esc: <DialogKeys> (focus returns to the opener).
 
   const html = useMemo(() => (lines && lines.length > 0 ? buildInvoiceHtml({
     vendor: { name: bill.shopkeeperName, nameHindi: hindi, phone: bill.shopkeeperPhone, address: bill.shopkeeperAddress },
@@ -82,6 +79,7 @@ export function BillPreviewDialog({ bill, template, defaultPageSize, fallbackLin
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-black/70" role="dialog" aria-modal="true" aria-label={`Bill ${bill.orderNumber}`}>
+      <DialogKeys onClose={onClose} />
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2.5 sm:px-4">
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-bold text-foreground" data-no-translate>{bill.shopkeeperName}</p>
@@ -105,7 +103,7 @@ export function BillPreviewDialog({ bill, template, defaultPageSize, fallbackLin
         </button>
       </div>
       <div className="relative min-h-0 flex-1 bg-neutral-300 dark:bg-neutral-800">
-        {error && <p className="p-6 text-center text-sm text-red-600 dark:text-red-400">{error}</p>}
+        {error && <p role="alert" className="p-6 text-center text-sm text-red-600 dark:text-red-400">{error}</p>}
         {!error && lines === null && <p className="p-6 text-center text-sm text-muted-foreground">Loading the bill…</p>}
         {!error && lines !== null && lines.length === 0 && <p className="p-6 text-center text-sm text-muted-foreground">This bill has no lines saved.</p>}
         {html && <iframe ref={frame} title={`Bill ${bill.orderNumber}`} srcDoc={html} className="h-full w-full border-0" />}

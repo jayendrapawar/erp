@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react'
 import { uploadPresigned } from '@vercel/blob/client'
 import { addArticlePhoto, deleteArticlePhoto, getArticlePhotos, makeMainArticlePhoto, type ArticlePhotoList } from '@/app/actions/article-photos'
 import { shrinkPhoto } from '@/lib/photos/shrink'
+import { DialogKeys } from '@/components/dialog-keys'
 
 export interface PhotoArticle { id: number; artName: string; artCode: string; color: string; colorCode: string }
 
@@ -32,11 +33,7 @@ export function ArticlePhotosDialog({ article, onClose, onCountChange }: {
     getArticlePhotos(article.id).then(setData).catch((e) => setError(errMsg(e)))
   }, [article.id])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [busy, onClose])
+  // Esc: <DialogKeys> (focus returns to the opener).
 
   async function uploadFiles(files: File[]) {
     if (!files.length || !data) return
@@ -72,6 +69,7 @@ export function ArticlePhotosDialog({ article, onClose, onCountChange }: {
   const photos = data?.photos ?? []
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => !busy && onClose()}>
+      <DialogKeys onClose={() => !busy && onClose()} />
       <div className="w-full sm:max-w-2xl max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-border bg-background shadow-2xl sm:m-4" onClick={(e) => e.stopPropagation()}>
         <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-border bg-background px-5 py-4">
           <div className="min-w-0">
@@ -92,7 +90,7 @@ export function ArticlePhotosDialog({ article, onClose, onCountChange }: {
               The photo store (Vercel Blob) is not connected yet, so photos cannot be uploaded.
             </p>
           )}
-          {error && <p className="whitespace-pre-line rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">{error}</p>}
+          {error && <p role="alert" className="whitespace-pre-line rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">{error}</p>}
 
           {!data && !error && <p className="text-sm text-muted-foreground">Loading…</p>}
 

@@ -26,6 +26,7 @@ import {
   correctStockAction, getMovements, getStockPage, getStockSummary, getUnscannedDispatch, getVariantDetail, undoCorrectionAction,
 } from '@/app/actions/inventory'
 import type { Movement, MovementKind, StockSummary, StockVariant, UnscannedDispatch, VariantDetail } from '@/lib/inventory/stock-queries'
+import { DialogKeys } from '@/components/dialog-keys'
 
 interface Props {
   initialSummary: StockSummary
@@ -232,7 +233,7 @@ function StockTab({ initial, onOpen, patch }: { initial: { rows: StockVariant[];
       <p className="text-xs text-muted-foreground mb-2">
         {busy && rows.length === 0 ? 'Loading…' : `${num.format(total)} article${total === 1 ? '' : 's'}${busy ? ' · updating…' : ''}`}
       </p>
-      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {!busy && rows.length === 0 && (
         <p className="text-center py-10 text-sm text-muted-foreground">
           {activeFilterCount(filters) ? 'Nothing matches.' : showEmpty ? 'No articles.' : 'No stock yet. Scanned boxes appear here.'}
@@ -358,7 +359,7 @@ function MovementsTab({ staff, onOpen }: { staff: Props['staff']; onOpen: (id: n
           <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className={`${inputCls} text-xs py-1.5 w-full`} />
         </label>
       </div>
-      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {busy && rows.length === 0 && <p className="text-center py-10 text-sm text-muted-foreground">Loading…</p>}
       {!busy && rows.length === 0 && !error && <p className="text-center py-10 text-sm text-muted-foreground">No movements.</p>}
       <div className={`rounded-xl border border-border divide-y divide-border overflow-hidden ${rows.length ? '' : 'hidden'} ${busy ? 'opacity-70' : ''}`}>
@@ -393,11 +394,7 @@ function VariantDialog({ articleId, canAdjust, onClose, onChanged }: { articleId
     return () => { live = false }
   }, [articleId])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [busy, onClose])
+  // Esc: <DialogKeys> (focus returns to the opener).
 
   const v = detail?.variant
   const selected = v?.sizes.find((s) => s.skuId === skuId)
@@ -432,6 +429,7 @@ function VariantDialog({ articleId, canAdjust, onClose, onChanged }: { articleId
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm sm:px-4" onClick={() => !busy && onClose()}>
+      <DialogKeys onClose={() => !busy && onClose()} />
       <div role="dialog" aria-modal="true" aria-label={v ? `${v.artName} ${v.color}` : 'Article stock'}
         className="w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl border border-border bg-background shadow-2xl max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-border">
@@ -483,13 +481,13 @@ function VariantDialog({ articleId, canAdjust, onClose, onChanged }: { articleId
                 </div>
                 <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (required), e.g. counted shelf, damaged" aria-label="Reason" className={`${inputCls} w-full`} />
                 {dir === 'remove' && amount > selected.pairs && <p className="text-xs text-red-600 dark:text-red-400">Only {selected.pairs} in stock for this size.</p>}
-                <button onClick={saveCorrection} disabled={!valid || busy} className="w-full rounded-lg bg-foreground text-background px-3 py-2 text-sm font-semibold hover:opacity-90 disabled:opacity-50">
+                <button data-primary onClick={saveCorrection} disabled={!valid || busy} className="w-full rounded-lg bg-foreground text-background px-3 py-2 text-sm font-semibold hover:opacity-90 disabled:opacity-50">
                   {busy ? 'Saving…' : qty ? `${dir === 'add' ? 'Add' : 'Remove'} ${amount} pair${amount === 1 ? '' : 's'} — size ${selected.size} becomes ${selected.pairs + (dir === 'add' ? amount : -amount)}` : 'Enter pairs'}
                 </button>
               </div>
             )}
 
-            {error && <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>}
+            {error && <p role="alert" className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>}
 
             <div>
               <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Latest movements</p>
@@ -548,7 +546,7 @@ function DispatchTab() {
       <p className="text-xs text-muted-foreground mb-3">
         Boxes billed that were never scanned into stock, so stock was not reduced. Check whether they should have been counted.
       </p>
-      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
       {busy && rows.length === 0 && <p className="text-center py-10 text-sm text-muted-foreground">Loading…</p>}
       {!busy && rows.length === 0 && !error && <p className="text-center py-10 text-sm text-muted-foreground">None. Every billed box came out of stock.</p>}
       <div className={`rounded-xl border border-border divide-y divide-border overflow-hidden ${rows.length ? '' : 'hidden'}`}>

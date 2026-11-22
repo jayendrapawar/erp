@@ -21,6 +21,8 @@ import {
   removeFromDirectBill, saveDirectBillDraft, scanIntoDirectBill, startDirectBillDraft,
 } from '@/app/actions/billing'
 import type { DraftHeader, DraftSummary, GeneratedBill, MasterMatch } from '@/lib/billing/bill-stock'
+import { DialogKeys } from '@/components/dialog-keys'
+import { askConfirm } from '@/components/confirm-dialog'
 
 function newUuid(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
@@ -223,13 +225,10 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
 
 /** Right-hand panel for things used now and then (box by hand, drafts). Esc or a tap outside closes it. */
 function SidePanel({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Esc: <DialogKeys> (focus returns to the opener).
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/50" onClick={onClose}>
+      <DialogKeys onClose={onClose} />
       <section role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()}
         className="flex h-full w-full max-w-md flex-col border-l border-border bg-card shadow-2xl">
         <div className="flex items-center gap-3 border-b border-border px-5 py-4">
@@ -431,7 +430,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
   }
 
   async function discardDraftById(id: number) {
-    if (!window.confirm('Discard this draft? Its boxes are freed; nothing is billed.')) return
+    if (!(await askConfirm({ message: 'Discard this draft? Its boxes are freed; nothing is billed.', confirmLabel: 'Discard draft', destructive: true }))) return
     try {
       await discardDirectBillDraft(id)
       if (draftIdRef.current === id) resetLocal()
@@ -1192,6 +1191,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
         {/* ── Confirm dialog ── */}
         {deleteTarget && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+            <DialogKeys onClose={() => { setDeleteTarget(null); focusScan() }} />
             <div className="w-full max-w-sm space-y-4 rounded-xl border border-border bg-background p-6 shadow-xl">
               <h3 className="text-base font-semibold">{deleteTarget === '__all__' ? 'Clear all items?' : 'Remove this line?'}</h3>
               <p className="text-sm text-muted-foreground">
@@ -1200,10 +1200,10 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
                   : 'All boxes of this line are removed from the bill.'}
               </p>
               <div className="flex gap-2 pt-1">
-                <Button variant="destructive" className="flex-1" onClick={() => { void (deleteTarget === '__all__' ? clearBill() : removeLine(deleteTarget)).then(focusScan) }}>
+                <Button data-primary data-destructive variant="destructive" className="flex-1" onClick={() => { void (deleteTarget === '__all__' ? clearBill() : removeLine(deleteTarget)).then(focusScan) }}>
                   {deleteTarget === '__all__' ? 'Clear all' : 'Remove'}
                 </Button>
-                <Button variant="outline" className="flex-1" onClick={() => { setDeleteTarget(null); focusScan() }}>Cancel</Button>
+                <Button data-autofocus variant="outline" className="flex-1" onClick={() => { setDeleteTarget(null); focusScan() }}>Cancel</Button>
               </div>
             </div>
           </div>
