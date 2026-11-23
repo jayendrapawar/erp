@@ -32,6 +32,9 @@ registry below, so it is always current.
 
 | Keys | Does |
 |---|---|
+| `↑ ↓ ← →` | Move to the nearest button, link or box in that direction (owner, 24 Nov 2026). Inside a dialog they stay in the dialog; ↑ ↓ stay in the menu or in the page, ← → move between them. Lists, tab bars, search lists, the size matrix and menus use the arrows first, then hand over at their ends. Text boxes: ← → move the caret until its ends; text areas: ↑ leaves from the first line, ↓ from the last; dropdowns: ↑ ↓ change the value, ← → leave; number boxes: ↑ ↓ change it; date boxes keep all arrows (Esc, then an arrow, to leave). Also on the scanner / billing screens (scanners never send arrows) |
+| `Enter` | Press / select the focused button or link; ticks a focused checkbox; opens a focused dropdown |
+| `Esc` | Leave the focused button or box (closes a dialog, a menu or a search list first); the next arrow carries on from there |
 | `Ctrl K` | Jump to… a page or tab; `> ` actions on this page; `# ` find an order / bill number, retailer or article code |
 | `?` | This list (also the **?** button in the sidebar) |
 | `g` then `h` `o` `i` `s` `b` `p` `m` `r` | Go to Home, Orders, Inventory, Scanner, Billing, Purchases, Master, Reports (only pages your roles open; a "g…" hint shows; 1.5 s or Esc cancels) |
@@ -46,7 +49,7 @@ users / retailers / suppliers / articles / assortments / sets, Purchases bills.
 
 | Keys | Does |
 |---|---|
-| `↑ ↓` / `j k` | Move the highlighted row (real focus; ring in both themes) |
+| `↑ ↓` (on a row) / `j k` | Move the highlighted row (real focus; ring in both themes); past the first / last row the arrows move on to the buttons above / below. `→` on a row goes to its buttons |
 | `Home` / `End` | First / last row shown; `↓` on the last row reaches "Show more" (Enter presses it) |
 | `Enter` | Open the row (Master: edit; Users: role menu) |
 | `Space` / `x` | Tick the row (Receipts: for mail) |
@@ -59,7 +62,7 @@ users / retailers / suppliers / articles / assortments / sets, Purchases bills.
 |---|---|
 | `Alt 1…9` | Tab 1…9: Orders hub (admin, or your order roles), Inventory, Master, Purchases |
 | `Alt Shift 1…3` | Biller tabs (Invoices, Direct Billing, Receipts) — they sit inside the Orders hub |
-| `← → Home End` | On a focused tab bar (role="tablist") |
+| `← → Home End` | On a focused tab bar (role="tablist"); past the first / last tab the arrow leaves the bar |
 
 ### Dialogs and confirms
 
@@ -79,7 +82,7 @@ users / retailers / suppliers / articles / assortments / sets, Purchases bills.
 | New Order (salesman) | Enter steps vendor → article → colour → sizes; 1–9 colour; ←→ quantity; Shift+Enter add and stay; Esc skip article; `Ctrl Enter` creates the order at once (no confirmation, as before). Tab also walks every quantity chip and box in the size matrix (Enter / Space press a chip; the highlighted size follows) and every line in the order (Enter edits it). "New" while New Order is open puts the cursor in the vendor search |
 | Ctrl K `> ` actions | Create the order, Direct bill, Upload bill PDFs, New …, theme, language, menu width |
 | Picker list (orders) | Keyboard changes wait for Enter (or leaving the list); Esc puts the old picker back. A mouse pick saves at once |
-| Master role menu | Enter / ↓ opens, ↑↓ move, Space ticks, Esc / Tab close |
+| Master role menu | Enter / Space opens, ↑↓ move, Space ticks, Esc / Tab close |
 
 ## For developers
 
@@ -138,6 +141,16 @@ tabs), dispatcher and warehouse, and inside 19 dialogs (retailer, supplier, arti
 shop access, photos, order details, article stock, purchase bill, bill preview, mail, by hand, drafts,
 Ctrl K, ?, New Order). Focus never left an open dialog. The only pointer-only spot left is a click on a
 size row of the New Order matrix, which only highlights that row; focusing any chip in it does the same.
+
+### Arrow keys alone (24 Nov 2026)
+
+A second script starts on each page with nothing focused and explores breadth-first with the arrow
+keys only (never Enter; arrows that change a dropdown, number or date are skipped). Every control was
+reached on Home, Orders (overview, salesman, biller, picker, dispatcher), Inventory (overview, stock),
+Purchases (bills, receive), Master (users, retailers, suppliers, sets, bill template), Reports and
+Scanner. Inventory → Movements: the second date box is reached with Esc + arrow (date boxes keep
+their arrows). Code: `components/arrow-nav.tsx`, geometry `lib/shortcuts/spatial.ts`
+(tests/shortcuts/spatial.test.ts).
 
 ## Still needs a mouse / not done
 

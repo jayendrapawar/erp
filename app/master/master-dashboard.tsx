@@ -99,7 +99,8 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
     setIsOpen(!isOpen)
   }
 
-  // Keyboard: the menu is in a portal at the end of the page, so focus moves into it when it opens;
+  // Keyboard: Enter / Space open the menu (arrows move between buttons). The menu is in a portal at
+  // the end of the page, so focus moves into it when it opens;
   // ↑↓ move between roles, Space ticks, Esc / Tab close it and return to the button.
   useEffect(() => {
     if (!isOpen) return
@@ -163,7 +164,6 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
         type="button"
         disabled={disabled}
         onClick={handleButtonClick}
-        onKeyDown={e => { if (e.key === 'ArrowDown' && !isOpen) { e.preventDefault(); handleButtonClick() } }}
         aria-haspopup="true"
         aria-expanded={isOpen}
         aria-label={`Roles: ${displayText}`}

@@ -88,14 +88,19 @@ export function useListKeys(ref: RefObject<HTMLElement | null>, opts: ListKeysOp
     if (at < 0) return focusRow(step > 0 ? rows[0] : rows[rows.length - 1])
     const next = at + step
     if (next >= rows.length) {
-      // Past the last row drawn: "Show more" (Enter presses it).
+      // Past the last row drawn: "Show more" (Enter presses it); none: the arrow moves on (components/arrow-nav.tsx).
       const more = [...root.querySelectorAll<HTMLElement>('[data-show-more]')].find((b) => isShown(b))
         ?? [...document.querySelectorAll<HTMLElement>('[data-show-more]')].find((b) => isShown(b) && root.parentElement?.contains(b))
-      if (more) { more.focus(); more.scrollIntoView({ block: 'nearest' }) }
+      if (!more) return false
+      more.focus(); more.scrollIntoView({ block: 'nearest' })
       return
     }
-    focusRow(rows[Math.max(0, next)])
+    // Above the first row: the arrow moves on to the filter / buttons above.
+    if (next < 0) return false
+    focusRow(rows[next])
   }
+  /** ↑ ↓ belong to the list only while a row of it has the focus (elsewhere they move between buttons). */
+  const arrow = (step: number) => (ref.current && currentRow(ref.current) ? move(step) : false)
 
   /** Keys that belong to a focused control inside the row (a button, a checkbox…) are left to it. */
   const onRowItself = () => {
@@ -107,8 +112,10 @@ export function useListKeys(ref: RefObject<HTMLElement | null>, opts: ListKeysOp
   }
 
   const common = { group, within: ref, enabled }
-  useShortcut(['arrowdown', 'j'], () => move(1), { ...common, label: 'Next row' })
-  useShortcut(['arrowup', 'k'], () => move(-1), { ...common, label: 'Previous row' })
+  useShortcut('j', () => move(1), { ...common, label: 'Next row' })
+  useShortcut('k', () => move(-1), { ...common, label: 'Previous row' })
+  useShortcut('arrowdown', () => arrow(1), { ...common, label: 'Next row (on a row)' })
+  useShortcut('arrowup', () => arrow(-1), { ...common, label: 'Previous row (on a row)' })
   useShortcut('home', () => move('first'), { ...common, label: 'First row' })
   useShortcut('end', () => move('last'), { ...common, label: 'Last row shown (then ↓ for Show more)' })
   useShortcut('enter', () => {

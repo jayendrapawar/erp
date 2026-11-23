@@ -476,6 +476,8 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
     if (e.key === 'Escape') { e.preventDefault(); onEscape?.(); return }
     if (e.shiftKey && digit && digit !== '0') { e.preventDefault(); onColour?.(Number(digit)); return }
     if (inInput || e.ctrlKey || e.metaKey || e.altKey || !sizes.length) return
+    // On a focused chip the arrows move between chips (page arrow navigation); digits still type.
+    if ((e.target as HTMLElement).tagName === 'BUTTON' && e.key.startsWith('Arrow')) return
     const r = Math.min(row, sizes.length - 1)
     const label = sizeKey(sizes[r])
     const current = quantities[label] ?? 0

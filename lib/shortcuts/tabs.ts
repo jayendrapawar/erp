@@ -32,15 +32,17 @@ export function useTabKeys(tabs: readonly { value: string; label: string }[], se
   }
 }
 
-/** onKeyDown for a role="tablist": ←/→ (↑/↓ when vertical), Home/End move to a tab and open it. */
+/** onKeyDown for a role="tablist": ←/→, Home/End move to a tab and open it. ↑/↓, and ←/→ past the
+ *  ends, are left to the page's arrow navigation (components/arrow-nav.tsx): they leave the tab bar. */
 export function tablistKeyDown(e: ReactKeyboardEvent<HTMLElement>) {
-  const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End']
+  const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
   if (!keys.includes(e.key) || e.altKey || e.ctrlKey || e.metaKey) return
   const tabs = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]:not([disabled])')]
   if (!tabs.length) return
   const at = tabs.indexOf(document.activeElement as HTMLElement)
-  const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1
-    : (Math.max(0, at) + (e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1) + tabs.length) % tabs.length
+  const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : Math.max(0, at) + (e.key === 'ArrowLeft' ? -1 : 1)
+  // Past the first / last tab the arrow leaves the tab bar (components/arrow-nav.tsx), no wrapping.
+  if (next < 0 || next >= tabs.length) return
   e.preventDefault()
   tabs[next].focus()
   tabs[next].click()
