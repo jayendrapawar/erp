@@ -81,14 +81,14 @@ describe('billing takes stock out (integration)', { skip: !harnessEnabled() && '
 
   test('generating takes boxes out: exact box → scanned, else hand-counted → unscanned, else Unscanned dispatch', async () => {
     await assert.rejects(generateDirectBill(h.db, biller, draftId, { shopkeeperName: '' }), /retailer/)
-    const bill = await generateDirectBill(h.db, biller, draftId, { shopkeeperName: 'Test Shop', lineDiscPct: 25, manualLines: [{ artNumber: 'FL-20', mrp: 239.5, qty: 2 }] })
+    const bill = await generateDirectBill(h.db, biller, draftId, { shopkeeperName: 'Test Shop', lineDiscPct: 25, manualLines: [{ artNumber: 'FL-20', mrp: 239.5, qty: 2 }] }, { pickerId: 'u-admin' })
     orderId = bill.id
     assert.deepEqual(bill.stock, { scanned: 1, carton: 0, unscanned: 1, unscanned_dispatch: 1 })
     assert.deepEqual(bill.lines.map((l) => [l.artNumber, l.mrp, l.qty]).sort(), [['FL-20', 239.5, 2], ['PUGN42G', 339.5, 2], ['SS0703G', 649, 1]])
     assert.deepEqual([await bal('scanned'), await bal('unscanned')], [0, 0])
     const o = (await h.db.execute<{ status: string; isEmergency: boolean }>(sql`SELECT status, "isEmergency" FROM orders WHERE id = ${orderId}`)).rows[0]
     assert.deepEqual([o.status, o.isEmergency], ['billed', true])
-    await assert.rejects(generateDirectBill(h.db, biller, draftId, { shopkeeperName: 'Test Shop' }), /already generated/)
+    await assert.rejects(generateDirectBill(h.db, biller, draftId, { shopkeeperName: 'Test Shop' }, { pickerId: 'u-admin' }), /already generated/)
     assert.equal((await listOpenDrafts(h.db)).length, 0)
     const disp = await listUnscannedDispatch(h.db)
     assert.deepEqual(disp.rows.map((r) => [r.articleCode, r.size, r.artName]), [['SS0703G', '7', null]])

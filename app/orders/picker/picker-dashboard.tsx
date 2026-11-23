@@ -1,12 +1,11 @@
 'use client'
 import { useState, useTransition, useMemo, useEffect, useRef } from 'react'
 import { useListKeys } from '@/lib/shortcuts/list'
-import { StatusPill, fmt, StatButton, SegTabs } from '../_components/shared'
+import { StatusPill, fmt } from '../_components/shared'
 import { PageNav } from '@/components/page-nav'
 import {
   getOrderWithItems,
   bulkSaveAndPackOrder,
-  selfAssignOrder,
   unassignOrder,
 } from '@/app/actions/orders'
 import type { Order, OrderItem, OrderItemStatus } from '@/lib/db/schema'
@@ -30,11 +29,18 @@ interface Props {
   queue: QueueItem[]
   currentPickerId: string
   embedded?: boolean
-  /** Called when a picker claims (pickerId set) or releases (pickerId null) an order */
+  /** Called when a picker releases an order (pickerId null) */
   onPickerChange?: (orderId: number, pickerId: string | null) => void
 }
 
-type SubTab = 'all' | 'mine'
+function StatTile({ label, value, color, hint }: { label: string; value: number; color: string; hint?: string }) {
+  return (
+    <div className="min-w-0 rounded-xl border border-border bg-card px-2.5 py-2 sm:px-4 sm:py-3" title={hint}>
+      <p className="truncate text-[11px] font-medium text-muted-foreground sm:text-xs sm:uppercase sm:tracking-wide">{label}</p>
+      <p className={`mt-0.5 text-xl font-bold tabular-nums sm:text-2xl ${color}`}>{value}</p>
+    </div>
+  )
+}
 
 /** Thin progress bar: `done` of `total`. */
 function ProgressBar({ done, total, tone = 'blue' }: { done: number; total: number; tone?: 'blue' | 'green' }) {
@@ -51,13 +57,10 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
   // Keyboard: ↑↓ / j k orders, Enter opens (lib/shortcuts/list.ts).
   const queueListRef = useRef<HTMLDivElement>(null)
   useListKeys(queueListRef, { label: 'Picker queue' })
-  const [selectedOrder, setSelectedOrder] = useState<{ order: Order; items: OrderItem[]; readOnly: boolean } | null>(null)
+  const [selectedOrder, setSelectedOrder] = useState<{ order: Order; items: OrderItem[] } | null>(null)
   const [isPending, startTransition] = useTransition()
   const [loadingId, setLoadingId] = useState<number | null>(null)
-  const [claimingId, setClaimingId] = useState<number | null>(null)
   const [unassigningId, setUnassigningId] = useState<number | null>(null)
-  // Opens on the picker's own orders when there are some (work in hand first), else on the available ones.
-  const [subTab, setSubTab] = useState<SubTab>(() => (initialQueue.some(o => o.pickerId === currentPickerId) ? 'mine' : 'all'))
   const [claimError, setClaimError] = useState<string | null>(null)
   const [packError, setPackError] = useState<string | null>(null)
   // touched: itemId → confirmed qty
@@ -75,15 +78,13 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
   const [seededId, setSeededId] = useState<number | null>(null)
   const [restoredCount, setRestoredCount] = useState(0)
 
-  // ── Split lists ──────────────────────────────────────────────────────────────
-  const availableOrders = useMemo(() => queue.filter(o => !o.pickerId && o.status === 'pending'), [queue])
-  const myOrders        = useMemo(() => queue.filter(o => o.pickerId === currentPickerId), [queue, currentPickerId])
+  // ── My orders only (owner, 23 Nov 2026): the salesman or admin assigns orders; no "All orders" list.
+  const myOrders = useMemo(() => queue.filter(o => o.pickerId === currentPickerId), [queue, currentPickerId])
 
   /** Pairs of an order already checked: saved progress on this phone, else what the server knows. */
   const checkedPairs = (o: QueueItem) => Math.min(o.totalPairs, packStore[o.id]?.doneOrderedPairs ?? o.packedPairs)
 
   const counts = {
-    available: availableOrders.length,
     mine:      myOrders.length,
     toPack:    myOrders.reduce((s, o) => s + Math.max(0, o.totalPairs - checkedPairs(o)), 0),
   }
@@ -92,38 +93,14 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
   function openOrder(orderId: number) {
     setLoadingId(orderId)
     setPackError(null)
-    const readOnly = subTab === 'all'
     startTransition(async () => {
       try {
         const data = await getOrderWithItems(orderId)
-        setSelectedOrder({ ...data, readOnly })
+        setSelectedOrder(data)
       } catch (err) {
         setClaimError(err instanceof Error ? err.message : 'Could not open the order')
       } finally {
         setLoadingId(null)
-      }
-    })
-  }
-
-  // ── Claim an order ───────────────────────────────────────────────────────────
-  function handleClaim(e: React.MouseEvent, orderId: number) {
-    e.stopPropagation()
-    setClaimError(null)
-    setClaimingId(orderId)
-    startTransition(async () => {
-      try {
-        const result = await selfAssignOrder(orderId)
-        setQueue(prev =>
-          prev.map(o =>
-            o.id === orderId ? { ...o, status: 'assigned', pickerId: currentPickerId } : o
-          )
-        )
-        onPickerChange?.(result.orderId, result.pickerId)
-        setSubTab('mine')
-      } catch (err) {
-        setClaimError(err instanceof Error ? err.message : 'Failed to claim order')
-      } finally {
-        setClaimingId(null)
       }
     })
   }
@@ -162,8 +139,8 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
   // Pre-seed touched/pending/customDraft whenever selectedOrder changes; bring back saved progress.
   useEffect(() => {
     if (!selectedOrder) { setTouched({}); setPending({}); setCustomDraft({}); setSeededId(null); setRestoredCount(0); return }
-    const { order, items, readOnly } = selectedOrder
-    const saved = readOnly ? {} : restorableTouched(readPackStore(packKey)[order.id], order, items)
+    const { order, items } = selectedOrder
+    const saved = restorableTouched(readPackStore(packKey)[order.id], order, items)
     const touchedSeed: Record<number, number> = {}
     const pendingSeed: Record<number, number> = {}
     const draftSeed: Record<number, string> = {}
@@ -189,7 +166,7 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
 
   // Save confirmed quantities on every change (packing view only, once seeded).
   useEffect(() => {
-    if (!selectedOrder || selectedOrder.readOnly || seededId !== selectedOrder.order.id) return
+    if (!selectedOrder || seededId !== selectedOrder.order.id) return
     const { order, items } = selectedOrder
     const confirmedHere = items.some(i => i.status !== 'packed' && i.status !== 'out_of_stock' && i.id in touched)
     setPackStore(confirmedHere
@@ -270,77 +247,23 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                 <StatusPill status={selectedOrder.order.status} />
               </div>
             </div>
-            {!selectedOrder.readOnly && (
-              <div className="mt-2 flex items-center gap-2">
-                <ProgressBar done={doneCount} total={totalCount} />
-                <span className="shrink-0 text-[11px] font-semibold tabular-nums text-muted-foreground">{`${doneCount}/${totalCount} sizes`}</span>
-              </div>
-            )}
+            <div className="mt-2 flex items-center gap-2">
+              <ProgressBar done={doneCount} total={totalCount} />
+              <span className="shrink-0 text-[11px] font-semibold tabular-nums text-muted-foreground">{`${doneCount}/${totalCount} sizes`}</span>
+            </div>
           </div>
         </div>
 
         <div className="max-w-2xl mx-auto px-3 sm:px-4 py-3 sm:py-4 pb-44 md:pb-28">
 
-          {!selectedOrder.readOnly && restoredCount > 0 && (
+          {restoredCount > 0 && (
             <p role="status" className="mb-3 flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
               <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582M20 20v-5h-.581M4.582 9A8 8 0 0120 15M19.418 15A8 8 0 014 9" /></svg>
               {`Your earlier packing was kept: ${restoredCount} sizes already confirmed`}
             </p>
           )}
 
-          {/* ── READ-ONLY consolidated table (All orders tab) ── */}
-          {selectedOrder.readOnly ? (
-            <div className="rounded-xl border border-border bg-card overflow-x-auto">
-              <table className="w-full text-sm border-collapse">
-                <thead className="bg-muted/20 border-b border-border">
-                  <tr>
-                    <th className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground w-24">Article</th>
-                    <th className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground w-28">Color</th>
-                    <th className="text-left px-3 py-2.5 text-xs font-medium text-muted-foreground">Size / Qty</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {articleGroups.map(({ artNumber, colorGroups }) =>
-                    colorGroups.map(({ color, items }, ci) => (
-                      <tr key={`${artNumber}-${color}`} className="border-b border-border hover:bg-muted/20">
-                        {ci === 0 && (
-                          <td
-                            className="px-3 py-2.5 font-semibold text-xs align-top border-r border-border"
-                            rowSpan={colorGroups.length}
-                          >
-                            {artNumber}
-                            <span className="block font-normal text-muted-foreground tabular-nums">
-                              {`${colorGroups.flatMap(cg => cg.items).reduce((s, i) => s + i.quantityOrdered, 0)} pairs`}
-                            </span>
-                          </td>
-                        )}
-                        <td className="px-3 py-2.5 text-xs font-medium text-foreground align-top w-28 border-r border-border">{color}</td>
-                        <td className="px-3 py-2.5 align-top">
-                          <div className="flex flex-wrap gap-x-3 gap-y-1">
-                            {items.map(item => (
-                              <span key={item.id} className="text-xs tabular-nums whitespace-nowrap">
-                                <span className="text-muted-foreground">{item.sizeNumber ?? '—'}{item.artCode ? <span className="text-[10px]" data-no-translate>{` ${item.artCode}`}</span> : null}</span>
-                                <span className="mx-0.5 text-muted-foreground">/</span>
-                                <span className="font-semibold text-foreground">{item.quantityOrdered}</span>
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-                <tfoot className="border-t-2 border-border bg-muted/20">
-                  <tr>
-                    <td colSpan={2} className="px-3 py-2.5 text-xs font-medium text-muted-foreground text-right">Total pairs</td>
-                    <td className="px-3 py-2.5 text-xs font-bold">{totalPairs}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          ) : (
-
-          /* ── INTERACTIVE packing view (Mine tab) ── */
+          {/* ── Packing view ── */}
           <div className="space-y-3">
             {articleGroups.map(({ artNumber, colorGroups }) => {
               const allItems = colorGroups.flatMap(cg => cg.items)
@@ -570,12 +493,10 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
               )
             })}
           </div>
-          )}
         </div>
 
-        {/* Sticky bottom CTA — only for mine tab; above the phone's bottom menu */}
-        {!selectedOrder.readOnly && (
-          <div className="fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-30 bg-background/95 backdrop-blur border-t border-border px-3 sm:px-4 py-2.5 md:bottom-0 md:pb-[calc(0.625rem+env(safe-area-inset-bottom))]">
+        {/* Sticky bottom CTA, above the phone's bottom menu */}
+        <div className="fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-30 bg-background/95 backdrop-blur border-t border-border px-3 sm:px-4 py-2.5 md:bottom-0 md:pb-[calc(0.625rem+env(safe-area-inset-bottom))]">
             <div className="max-w-2xl mx-auto space-y-2">
               {packError && (
                 <p role="alert" className="rounded-lg bg-red-50 px-3 py-1.5 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-400">{packError}</p>
@@ -594,7 +515,6 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
               </button>
             </div>
           </div>
-        )}
       </div>
     )
   }
@@ -606,15 +526,10 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
     startTransition(async () => {
       try {
         const result = await unassignOrder(orderId)
-        setQueue(prev =>
-          prev.map(o =>
-            o.id === orderId ? { ...o, status: 'pending', pickerId: null } : o
-          )
-        )
-        // Released: whoever claims it next starts fresh.
+        // Released: it goes back to the salesman / admin to assign; whoever gets it next starts fresh.
+        setQueue(prev => prev.filter(o => o.id !== orderId))
         setPackStore(clearPackProgress(packKey, orderId))
         onPickerChange?.(result.orderId, null)
-        setSubTab('all')
       } catch (err) {
         setClaimError(err instanceof Error ? err.message : 'Failed to release order')
       } finally {
@@ -624,7 +539,7 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
   }
 
   // ── Queue view ───────────────────────────────────────────────────────────────
-  const displayList = subTab === 'all' ? availableOrders : myOrders
+  const displayList = myOrders
 
   return (
     <div className={embedded ? '' : 'min-h-screen bg-background'}>
@@ -641,22 +556,10 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
           </div>
         )}
 
-        {/* Cards open their list */}
-        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-3">
-          <StatButton label="Available" value={counts.available} color="text-yellow-600 dark:text-yellow-400"
-            hint="Pending orders nobody has claimed" active={subTab === 'all'} onClick={() => setSubTab('all')} />
-          <StatButton label="My Orders" value={counts.mine} color="text-blue-600 dark:text-blue-400"
-            active={subTab === 'mine'} onClick={() => setSubTab('mine')} />
-          <StatButton label="Pairs to pack" value={counts.toPack} color="text-purple-600 dark:text-purple-400"
-            hint="Pairs still to check in your orders" active={false} onClick={() => setSubTab('mine')} />
-        </div>
-
-        {/* Sub-tabs */}
-        <div className="mb-3">
-          <SegTabs label="Packing queue" active={subTab} onChange={setSubTab} tabs={[
-            { value: 'all', label: 'All Orders', count: counts.available },
-            { value: 'mine', label: 'My Orders', count: counts.mine },
-          ]} />
+        {/* My orders only (owner, 23 Nov 2026) */}
+        <div className="grid grid-cols-2 gap-2 sm:gap-3 mb-3">
+          <StatTile label="My Orders" value={counts.mine} color="text-blue-600 dark:text-blue-400" />
+          <StatTile label="Pairs to pack" value={counts.toPack} color="text-purple-600 dark:text-purple-400" hint="Pairs still to check in your orders" />
         </div>
 
         {/* Error banner */}
@@ -676,32 +579,22 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-8 h-8 opacity-40">
                 <path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><polyline points="16 3 12 7 8 3"/>
               </svg>
-              <p className="text-sm">
-                {subTab === 'mine'
-                  ? 'No orders assigned to you yet'
-                  : 'No available orders right now 🎉'}
-              </p>
-              {subTab === 'mine' && (
-                <button type="button" onClick={() => setSubTab('all')} className="text-xs text-blue-600 dark:text-blue-400 hover:underline">
-                  Browse All Orders →
-                </button>
-              )}
+              <p className="text-sm">No orders assigned to you yet</p>
+              <p className="text-xs">The salesman or admin assigns orders to you.</p>
             </div>
           )}
 
           {displayList.map(order => {
-            const isClaiming    = claimingId === order.id
             const isLoading     = loadingId === order.id
             const isUnassigning = unassigningId === order.id
-            const mine          = subTab === 'mine'
             const checked       = checkedPairs(order)
-            const started       = mine && checked > 0
+            const started       = checked > 0
 
             return (
               <div
                 key={order.id}
                 data-list-row
-                className={`rounded-xl border bg-card transition-all ${mine ? 'border-blue-200 dark:border-blue-900' : 'border-border'} ${isLoading ? 'opacity-60' : ''}`}
+                className={`rounded-xl border border-blue-200 bg-card transition-all dark:border-blue-900 ${isLoading ? 'opacity-60' : ''}`}
               >
                 <div className="flex items-stretch">
                   {/* The order itself opens it; the action button sits beside it (no button inside a button). */}
@@ -717,21 +610,15 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                       <span className="font-mono" data-no-translate>{order.orderNumber}</span>
                       {` · ${fmt(order.orderedAt)}`}
                     </p>
-                    {mine ? (
-                      <div className="mt-2 flex items-center gap-2">
-                        <ProgressBar done={checked} total={order.totalPairs} />
-                        <span className="shrink-0 text-[11px] font-semibold tabular-nums text-muted-foreground">
-                          {`${checked}/${order.totalPairs} pairs`}
-                        </span>
-                      </div>
-                    ) : (
-                      <p className="mt-1 text-xs font-medium text-foreground tabular-nums">{`${order.totalPairs} pairs`}</p>
-                    )}
+                    <div className="mt-2 flex items-center gap-2">
+                      <ProgressBar done={checked} total={order.totalPairs} />
+                      <span className="shrink-0 text-[11px] font-semibold tabular-nums text-muted-foreground">
+                        {`${checked}/${order.totalPairs} pairs`}
+                      </span>
+                    </div>
                     {isLoading && <p className="mt-1 text-[11px] text-muted-foreground">Loading…</p>}
                   </button>
                   <div className="flex shrink-0 flex-col items-end justify-center gap-1.5 py-3 pr-3">
-                    {mine ? (
-                      <>
                         <button
                           type="button"
                           onClick={() => openOrder(order.id)}
@@ -748,17 +635,6 @@ export function PickerDashboard({ queue: initialQueue, currentPickerId, embedded
                         >
                           {isUnassigning ? 'Releasing…' : 'Release'}
                         </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={e => handleClaim(e, order.id)}
-                        disabled={isPending || isClaiming}
-                        className="h-10 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-4 text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        {isClaiming ? 'Claiming…' : 'Claim →'}
-                      </button>
-                    )}
                   </div>
                 </div>
               </div>

@@ -52,6 +52,8 @@ interface Props {
   embedded?: boolean
   vendors?: BillingVendor[]
   articles?: string[]
+  /** Direct bill: who picked the goods (pickers and admins). */
+  pickers?: { id: string; name: string | null }[]
 }
 
 interface DetailItem {
@@ -71,7 +73,7 @@ function itemKey(artNumber: string, sizeNumber: string | null, artCode?: string 
   return `${artNumber}|${sizeNumber ?? ''}|${(artCode ?? '').toUpperCase()}`
 }
 
-export function BillerDashboard({ orders: initialOrders, currentBillerId = '', embedded, vendors = [], articles = [] }: Props) {
+export function BillerDashboard({ orders: initialOrders, currentBillerId = '', embedded, vendors = [], articles = [], pickers = [] }: Props) {
   const [orders, setOrders] = useState(initialOrders)
   const [isPending, startTransition] = useTransition()
   const [activeId, setActiveId] = useState<number | null>(null)
@@ -1138,6 +1140,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
               <BillingScannerPage
                 vendors={vendors}
                 articles={articles}
+                pickers={pickers}
                 embedded
                 onBillGenerated={(data) => {
                   const newOrder: BillerOrder = {

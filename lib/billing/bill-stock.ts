@@ -19,6 +19,7 @@ import { audit } from '@/lib/audit'
 import { parseQr } from '@/lib/qr/parser'
 import { normalizeArticleValue } from '@/lib/article-utils'
 import { mainLocationId } from '@/lib/inventory/ledger'
+import { assertPickerChoice } from '@/lib/orders/pickers'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const NORM = (col: unknown) => sql`upper(regexp_replace(btrim(${col}), '\\s+', ' ', 'g'))`
@@ -356,7 +357,7 @@ export interface GeneratedBill {
  * not taxed, paid at once). One transaction; ~12 statements whatever the number of boxes.
  */
 export async function generateDirectBill(
-  db: Db, actor: Actor, draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn } = {},
+  db: Db, actor: Actor, draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn; pickerId?: string } = {},
 ): Promise<GeneratedBill> {
   const walk = bill.walkIn ? cleanWalkIn(bill.walkIn) : null
   const h = cleanHeader(walk ? { ...header, shopkeeperName: walk.name, shopkeeperPhone: walk.phone || null } : header)
@@ -367,6 +368,8 @@ export async function generateDirectBill(
     const r = walk ? null : (await tx.execute<{ id: string; taxType: TaxType }>(sql`
       SELECT id, "taxType" FROM retailers WHERE lower(btrim("partyName")) = lower(btrim(${h.shopkeeperName})) ORDER BY id LIMIT 1`)).rows[0]
     if (!walk && !r) throw new Error(notInMasterMessage(h.shopkeeperName))
+    // Every Direct bill names who picked the goods (owner, 23 Nov 2026).
+    const pickerId = await assertPickerChoice(tx, bill.pickerId)
     const scans = await tx.select({ articleCode: billScans.articleCode, mrp: billScans.mrp }).from(billScans)
       .where(and(eq(billScans.draftId, draftId), eq(billScans.status, 'active')))
     const lines = buildLines(scans, h.manualLines)
@@ -374,7 +377,7 @@ export async function generateDirectBill(
     const number = orderNumber()
     const [order] = await tx.insert(orders).values({
       orderNumber: number, shopkeeperName: h.shopkeeperName, shopkeeperPhone: h.shopkeeperPhone, shopkeeperAddress: h.shopkeeperAddress,
-      retailerId: r?.id ?? null, billerId: actor.id, status: 'billed', isEmergency: true, billedAt: sql`now()`,
+      retailerId: r?.id ?? null, billerId: actor.id, pickerId, status: 'billed', isEmergency: true, billedAt: sql`now()`,
     }).returning({ id: orders.id, billedAt: orders.billedAt })
     await tx.insert(billLines).values(lines.map((l) => ({ orderId: order.id, artNumber: l.artNumber, mrp: String(l.mrp), qty: l.qty, lineDiscPct: String(h.lineDiscPct) })))
     // Official bill number, frozen amounts, ledger entry; HSN on each line — same transaction.
@@ -387,7 +390,7 @@ export async function generateDirectBill(
     const stock = await postOrderScans(tx, actor, order.id, number)
     await tx.update(directBillDrafts).set({ ...h, lineDiscPct: String(h.lineDiscPct), status: 'billed', orderId: order.id, closedAt: sql`now()`, updatedAt: sql`now()` })
       .where(eq(directBillDrafts.id, draftId))
-    await audit(tx, { actor, action: 'direct_bill.generated', entityType: 'order', entityId: order.id, after: { orderNumber: number, billNo: frozen.billNo, draftId, boxes: scans.length, stock } })
+    await audit(tx, { actor, action: 'direct_bill.generated', entityType: 'order', entityId: order.id, after: { orderNumber: number, billNo: frozen.billNo, draftId, pickerId, boxes: scans.length, stock } })
     return {
       id: order.id, orderNumber: number, billNo: frozen.billNo, lines, stock, billedAt: new Date(order.billedAt ?? Date.now()).toISOString(),
       taxType: frozen.taxType, totals: frozen.totals, retailerId: frozen.retailerId,

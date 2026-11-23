@@ -88,7 +88,7 @@ type TabData = {
   overview: Props['overview']
   salesman: { salesmanOrders: SalesmanOrder[]; sets: OrderSet[]; pickers_list: { id: string; name: string | null }[] }
   picker: { pickerQueue: QueueItem[] }
-  biller: { billerOrders: any[]; billingVendors: BillingVendor[] }
+  biller: { billerOrders: any[]; billingVendors: BillingVendor[]; pickers: { id: string; name: string | null }[] }
   dispatcher: { dispatchOrders: DispatchOrder[] }
   procurement: { procurementRows: ProcurementRow[] }
 }
@@ -374,7 +374,7 @@ export function AdminHub({
           <div className={activeTab === 'biller' ? '' : 'hidden'}>
             {tabBody('biller', d => (
               <WithCatalogue>{catalogue => (
-                <BillerDashboard orders={d.billerOrders} currentBillerId={adminId} vendors={d.billingVendors} articles={catalogue.articles.map(a => a.artNumber)} embedded />
+                <BillerDashboard orders={d.billerOrders} currentBillerId={adminId} vendors={d.billingVendors} articles={catalogue.articles.map(a => a.artNumber)} pickers={d.pickers} embedded />
               )}</WithCatalogue>
             ))}
           </div>

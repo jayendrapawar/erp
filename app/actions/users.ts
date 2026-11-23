@@ -6,6 +6,7 @@ import { db } from '@/lib/db'
 import { user } from '@/lib/db/schema'
 import { getSessionUser, requirePermission, requireUser } from '@/lib/authz'
 import { audit } from '@/lib/audit'
+import { listPickerChoices } from '@/lib/orders/pickers'
 import { ROLES, serializeRoles, type Role } from '@/lib/permissions'
 
 /** 'user' = signed in but not yet given a role: no access to any module. */
@@ -43,9 +44,10 @@ export async function updateUserRole(userId: string, role: string) {
   revalidatePath('/orders/admin')
 }
 
+/** Who can be named as an order's picker: pickers and admins (lib/orders/pickers.ts). */
 export async function getPickersList() {
   await requireUser()
-  return db.select({ id: user.id, name: user.name }).from(user).where(hasRole('picker'))
+  return listPickerChoices(db)
 }
 
 export async function getCurrentUserRole(): Promise<string> {

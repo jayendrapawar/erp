@@ -177,7 +177,7 @@ export function MultiRoleOrdersHub({
 
         {hasBiller && (
           <div className={activeTab === 'biller' ? '' : 'hidden'}>
-            <BillerDashboard orders={billerOrders} currentBillerId={currentBillerId} vendors={billingVendors} articles={catalogue.articles.map(a => a.artNumber)} embedded />
+            <BillerDashboard orders={billerOrders} currentBillerId={currentBillerId} vendors={billingVendors} articles={catalogue.articles.map(a => a.artNumber)} pickers={pickers} embedded />
           </div>
         )}
 

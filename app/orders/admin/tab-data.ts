@@ -13,6 +13,7 @@ import {
 } from '@/app/actions/orders'
 import { getUsersByRole } from '@/app/actions/users'
 import { getSets } from '@/app/actions/sets'
+import { listPickerChoices } from '@/lib/orders/pickers'
 
 export const ADMIN_TABS = ['overview', 'salesman', 'picker', 'biller', 'dispatcher', 'procurement'] as const
 export type AdminTab = (typeof ADMIN_TABS)[number]
@@ -42,15 +43,16 @@ async function loadSalesman() {
 }
 
 async function loadBiller() {
-  const [billerOrders, vendorRows] = await Promise.all([
+  const [billerOrders, vendorRows, pickers] = await Promise.all([
     getBillerQueue(),
     db.select(retailerColumns).from(vendors).where(eq(vendors.status, 'active')).orderBy(asc(vendors.partyName)),
+    listPickerChoices(db), // Direct bill: who picked it
   ])
   const billingVendors: BillingVendor[] = vendorRows.map((v) => ({
     id: v.id, name: v.partyName, code: v.area || null, phone: v.phone || null,
     address: [v.address, v.city].filter(Boolean).join(', ') || null,
   }))
-  return { billerOrders, billingVendors }
+  return { billerOrders, billingVendors, pickers }
 }
 
 async function loadDispatcher() {

@@ -134,7 +134,7 @@ describe('purchases: expected stock, carton receiving (integration)', { skip: !h
     const before8 = await bal('8', 'carton')
     const draft = await createDraft(h.db, admin)
     assert.equal((await addDraftScan(h.db, admin, draft, BOX_8, randomUUID())).status, 'added')
-    const out = await generateDirectBill(h.db, admin, draft, { shopkeeperName: 'Shop' })
+    const out = await generateDirectBill(h.db, admin, draft, { shopkeeperName: 'Shop' }, { pickerId: 'u-admin' })
     assert.deepEqual(out.stock, { scanned: 0, carton: 1, unscanned: 0, unscanned_dispatch: 0 })
     assert.equal(await bal('8', 'carton'), before8 - 1)
   })

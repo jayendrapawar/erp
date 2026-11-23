@@ -13,6 +13,7 @@ import { cancelSaleBill } from '@/lib/billing/sale-bill'
 import { SALE_BILL_AMOUNT_COLUMNS, amountsFromRow, type BillAmounts, type SaleBillAmountRow } from '@/lib/billing/bill-amounts'
 import { audit } from '@/lib/audit'
 import { olderOrders, recentOrders, type OrderScope } from '@/lib/orders/order-list'
+import { assertPickerChoice } from '@/lib/orders/pickers'
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -205,8 +206,9 @@ export async function cancelOrder(orderId: number) {
 
 // ── Picker actions ────────────────────────────────────────────────────────────
 
+/** The signed-in picker's own open orders (owner, 23 Nov 2026: the Picker screen shows My orders only). */
 export async function getPickerQueue() {
-  await requireRole('picker', 'admin', 'accountant')
+  const u = await requireRole('picker', 'admin', 'accountant')
   return db
     .select({
       id: orders.id,
@@ -220,7 +222,7 @@ export async function getPickerQueue() {
     })
     .from(orders)
     .leftJoin(orderItems, eq(orderItems.orderId, orders.id))
-    .where(inArray(orders.status, ['pending', 'assigned']))
+    .where(and(inArray(orders.status, ['pending', 'assigned']), eq(orders.pickerId, u.id)))
     .groupBy(orders.id)
     .orderBy(desc(orders.orderedAt))
 }
@@ -557,35 +559,38 @@ export async function adminUpdateOrderStatus(orderId: number, status: OrderStatu
 }
 
 /**
- * Admin sends an order straight to billing (owner, 23 Nov 2026; Orders → Salesman → Assign picker →
- * "Direct bill"): it skips the picker and waits on the
- * biller's Bills tab as a Direct bill (isEmergency + packed). The biller scans the boxes against the
- * ordered pairs; what is not received is marked on the order when it is billed. One statement + audit.
+ * Admin sends an order straight to billing (owner, 23 Nov 2026; Orders → Salesman → ⚡ on the order):
+ * it skips the picking screen and waits on the biller's Bills tab as a Direct bill (isEmergency +
+ * packed). Every Direct bill names who picked the goods (pickerId). The biller scans the boxes against
+ * the ordered pairs; what is not received is marked on the order when it is billed. 2 statements + audit.
  */
-export async function sendToBilling(orderId: number) {
+export async function sendToBilling(orderId: number, pickerId: string) {
   const u = await requireRole('admin')
   return db.transaction(async (tx) => {
+    const picker = await assertPickerChoice(tx, pickerId)
     const [row] = await tx.update(orders)
-      .set({ status: 'packed', isEmergency: true, pickerId: null, packedAt: sql`now()`, updatedAt: sql`now()` })
+      .set({ status: 'packed', isEmergency: true, pickerId: picker, packedAt: sql`now()`, updatedAt: sql`now()` })
       .where(and(eq(orders.id, orderId), inArray(orders.status, ['pending', 'assigned'])))
       .returning(LIST_ROW)
     if (!row) throw new Error('Only pending or assigned orders can be sent straight to billing (it may have been packed already). Reload and check.')
-    await audit(tx, { actor: { id: u.id, name: u.name }, action: 'order.sent_to_billing', entityType: 'order', entityId: orderId, after: { status: 'packed', direct: true } })
+    await audit(tx, { actor: { id: u.id, name: u.name }, action: 'order.sent_to_billing', entityType: 'order', entityId: orderId, after: { status: 'packed', direct: true, pickerId: picker } })
     return row
   })
 }
 
+/** Returns the saved row, so the Orders list shows the new status at once. */
 export async function salesmanAssignPicker(orderId: number, pickerId: string) {
   await requireRole('salesman', 'admin')
   // One statement: the status is decided from the row as it is at that moment (no gap between a read
   // and the write in which a picker could change it).
   const [row] = await db.update(orders)
     .set({ pickerId, status: sql`CASE WHEN ${orders.status} = 'pending' THEN 'assigned'::order_status ELSE ${orders.status} END`, updatedAt: sql`now()` })
-    .where(eq(orders.id, orderId)).returning({ id: orders.id })
+    .where(eq(orders.id, orderId)).returning(LIST_ROW)
   if (!row) throw new Error('Order not found')
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
   revalidatePath('/orders/picker')
+  return row
 }
 
 export async function adminAssignPicker(orderId: number, pickerId: string) {

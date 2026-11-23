@@ -44,7 +44,7 @@ describe('inventory overview: old, cut size, idle, movers, reorder (integration)
     for (const r of [...sold.filter((x) => x.raw.includes('BRBR0008')).slice(0, 3), ...sold.filter((x) => x.raw.includes('BRBR0009')).slice(0, 3)]) {
       assert.equal((await addDraftScan(h.db, wh, draft, r.raw, randomUUID())).status, 'added')
     }
-    await generateDirectBill(h.db, wh, draft, { shopkeeperName: 'Test Shop' })
+    await generateDirectBill(h.db, wh, draft, { shopkeeperName: 'Test Shop' }, { pickerId: 'u-wh' })
   })
   after(async () => { await h?.close() })
 

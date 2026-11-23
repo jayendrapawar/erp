@@ -259,13 +259,15 @@ interface Props {
    * stock, then calls this.
    */
   onBillGenerated?: (data: DirectBillGenerated) => void
+  /** Direct Billing: who can be named as the picker (owner, 23 Nov 2026: every Direct bill says who picked it). */
+  pickers?: { id: string; name: string | null }[]
   /** Suppress the full-page chrome (header, sign-out) when embedded */
   embedded?: boolean
 }
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export function BillingScannerPage({ vendors, articles = [], onBillGenerated, embedded }: Props) {
+export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pickers = [], embedded }: Props) {
 
   // Guard: vendors may briefly be undefined during SSR/hydration
   const safeVendors = vendors ?? []
@@ -273,6 +275,8 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
   // ── Vendor search ──────────────────────────────────────────────────────────
   const [skQuery, setSkQuery]               = useState('')
   const [selectedVendor, setSelectedVendor] = useState<BillingVendor | null>(null)
+  // Direct Billing: who picked the goods (kept on this screen only; chosen again for a resumed draft).
+  const [pickedBy, setPickedBy] = useState('')
 
   const skResults = useMemo<BillingVendor[]>(() => {
     if (!skQuery.trim()) return safeVendors.slice(0, 20)
@@ -384,6 +388,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
     setTouched({})
     setSelectedVendor(null)
     setSkQuery('')
+    setPickedBy('')
     setLineDiscPct(30)
     draftIdRef.current = null
     draftPromiseRef.current = null
@@ -775,7 +780,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
       try {
         const id = await ensureDraft()
         const header = draftHeader()
-        const res = await generateDirectBillFromDraft(id, header)
+        const res = await generateDirectBillFromDraft(id, header, { pickerId: pickedBy })
         onBillGenerated({ ...res, shopkeeperName: header.shopkeeperName, shopkeeperPhone: header.shopkeeperPhone, shopkeeperAddress: header.shopkeeperAddress })
         resetLocal()
         if (res.stock.unscanned_dispatch > 0) showWarning(`Bill ${res.orderNumber} saved. ${res.stock.unscanned_dispatch} box(es) went out as Unscanned dispatch.`)
@@ -858,8 +863,10 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
 
   // Undo stays available while the last added box is still on the bill (also after a warning).
   const canUndo = !!lastAdded && billLines.some(l => l.boxCodes.includes(lastAdded.raw))
-  const canGenerate = !!selectedVendor && billLines.length > 0 && !isSaving && pendingScans === 0
+  const needsPicker = directBill && !pickedBy
+  const canGenerate = !!selectedVendor && !needsPicker && billLines.length > 0 && !isSaving && pendingScans === 0
   const generateHint = !selectedVendor ? 'Choose the retailer to generate the bill.'
+    : needsPicker ? 'Choose who picked the goods.'
     : billLines.length === 0 ? 'Scan boxes to start the bill.'
     : pendingScans > 0 ? 'Saving scans…' : ''
   const TONE = {
@@ -916,6 +923,17 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, em
                 </div>
               )}
             </div>
+
+            {directBill && (
+              <div className="min-w-0 flex-[0_1_200px]">
+                <label htmlFor="picked-by" className="sr-only">Picked by</label>
+                <select id="picked-by" value={pickedBy} onChange={e => { setPickedBy(e.target.value); focusScan() }} required
+                  className={`h-12 w-full rounded-xl border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring ${pickedBy ? 'border-border' : 'border-amber-400 text-muted-foreground'}`}>
+                  <option value="">Picked by — choose</option>
+                  {pickers.map(p => <option key={p.id} value={p.id}>{`Picked by ${p.name ?? p.id}`}</option>)}
+                </select>
+              </div>
+            )}
 
             <form onSubmit={e => { e.preventDefault(); submitScan() }} className="min-w-0 flex-[2_1_300px]">
               <label htmlFor="scan-box" className="sr-only">Scan box</label>

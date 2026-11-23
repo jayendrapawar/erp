@@ -49,12 +49,12 @@ interface Props {
   catalogue: CatalogueData
   sets: OrderSet[]
   pickers: { id: string; name: string | null }[]
-  /** Admin: the picker list also offers "Direct bill" (skip the picker, straight to the biller). */
+  /** Admin: each open order also has ⚡ Direct bill (skip the picking screen, straight to the biller). */
   canDirectBill?: boolean
 }
 
-/** Picker choice meaning "no picker: send straight to billing" (owner, 23 Nov 2026). */
-const DIRECT_BILL = '__direct__'
+/** Orders a picker can still be given, or that can be sent straight to billing. */
+const OPEN_FOR_PICKING = ['pending', 'assigned']
 
 // Alias types that were previously imported from catalogue actions
 type ShopkeeperResult = CatalogueData['vendors'][number]
@@ -899,6 +899,32 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
   const [pickerAssigning, startPickerAssign] = useTransition()
   // selectedOrdersForAssign: the orders that were selected when print was clicked
   const [selectedOrdersForAssign, setSelectedOrdersForAssign] = useState<ExistingOrder[]>([])
+  // One order from the Orders list (owner, 23 Nov 2026): Assign a picker, or ⚡ Direct bill (admin),
+  // which also names who picked the goods.
+  const [rowAction, setRowAction] = useState<{ order: ExistingOrder; mode: 'assign' | 'direct' } | null>(null)
+  const [rowPicker, setRowPicker] = useState('')
+  const [rowError, setRowError] = useState('')
+  const [rowSaving, startRowSave] = useTransition()
+  function openRowAction(order: ExistingOrder, mode: 'assign' | 'direct') {
+    setRowPicker(''); setRowError(''); setRowAction({ order, mode })
+  }
+  function saveRowAction() {
+    if (!rowAction) return
+    if (!rowPicker) { setRowError(rowAction.mode === 'direct' ? 'Choose who picked the goods.' : 'Choose a picker.'); return }
+    const { order, mode } = rowAction
+    setRowError('')
+    startRowSave(async () => {
+      try {
+        const row = mode === 'direct' ? await sendToBilling(order.id, rowPicker) : await salesmanAssignPicker(order.id, rowPicker)
+        keepSaved(row, order.salesmanName ?? null)
+        const who = pickers.find(p => p.id === rowPicker)?.name ?? 'the picker'
+        setNotice(mode === 'direct' ? `${order.orderNumber} sent to the biller (picked by ${who}).` : `${order.orderNumber} assigned to ${who}.`)
+        setRowAction(null)
+      } catch (e) {
+        setRowError(e instanceof Error ? e.message : 'Could not save. Check the connection and try again.')
+      }
+    })
+  }
   const [printSettingsSnapshot, setPrintSettingsSnapshot] = useState<{ pageSize: 'A4' | 'A5'; orientation: 'portrait' | 'landscape' }>({ pageSize: 'A5', orientation: 'portrait' })
 
   // ── Cancel order confirm (existing orders list) ──
@@ -1956,13 +1982,15 @@ ${bills}
             <div ref={ordersListRef} className="space-y-2">
               {shownOrders.map(order => {
                 const tag = orderTag(order)
+                const canPick = pickers.length > 0 && OPEN_FOR_PICKING.includes(order.status)
                 return (
+                  <div key={order.id} data-list-row className="flex items-stretch rounded-xl border border-border bg-card">
+                  {/* The order opens it; Assign and ⚡ Direct bill sit beside it (no button inside a button). */}
                   <button
-                    key={order.id}
                     type="button"
-                    data-list-row
+                    data-row-open
                     onClick={() => handleViewOrder(order)}
-                    className="w-full text-left rounded-xl border border-border bg-card px-3.5 py-3 hover:bg-muted/30 active:bg-muted/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="min-w-0 flex-1 text-left rounded-xl px-3.5 py-3 hover:bg-muted/30 active:bg-muted/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <p className="min-w-0 flex-1 truncate font-semibold text-sm text-foreground">{order.shopkeeperName}</p>
@@ -1984,6 +2012,24 @@ ${bills}
                     </div>
                     {order.notes && <p className="mt-1 line-clamp-1 text-xs italic text-muted-foreground">{order.notes}</p>}
                   </button>
+                  {canPick && (
+                    <div className="flex shrink-0 items-center gap-1.5 py-2 pr-2.5">
+                      <button type="button" onClick={() => openRowAction(order, 'assign')}
+                        aria-label={`Assign a picker to ${order.orderNumber}`}
+                        className="h-9 rounded-lg border border-border bg-background px-3 text-xs font-semibold hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                        {order.status === 'assigned' ? 'Reassign' : 'Assign'}
+                      </button>
+                      {canDirectBill && (
+                        <button type="button" onClick={() => openRowAction(order, 'direct')}
+                          title="Direct bill — skip picking, straight to the biller"
+                          aria-label={`Direct bill ${order.orderNumber}`}
+                          className="flex h-9 w-9 items-center justify-center rounded-lg border border-amber-300 bg-amber-50 text-base text-amber-700 hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300 dark:hover:bg-amber-950/60">
+                          <span aria-hidden>⚡</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  </div>
                 )
               })}
             </div>
@@ -2955,6 +3001,58 @@ ${bills}
         )
       })()}
 
+      {/* ── One order: Assign picker / ⚡ Direct bill (who picked it) ── */}
+      {rowAction && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
+          onClick={e => { if (e.target === e.currentTarget && !rowSaving) setRowAction(null) }}
+        >
+          <DialogKeys onClose={() => { if (!rowSaving) setRowAction(null) }} />
+          <form
+            role="dialog" aria-modal="true" aria-labelledby="row-action-title"
+            onSubmit={e => { e.preventDefault(); saveRowAction() }}
+            className="w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl bg-background p-5 shadow-2xl space-y-4"
+          >
+            <div>
+              <p id="row-action-title" className="text-lg font-bold text-foreground">
+                {rowAction.mode === 'direct' ? '⚡ Direct bill' : 'Assign picker'}
+              </p>
+              <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                {rowAction.order.shopkeeperName} · <span className="font-mono" data-no-translate>{rowAction.order.orderNumber}</span>
+              </p>
+            </div>
+            {rowAction.mode === 'direct' && (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                The order skips the picking screen and goes to the biller&apos;s Bills tab. The biller scans the boxes; pairs not received are marked on the order.
+              </p>
+            )}
+            <label className="block space-y-1.5">
+              <span className="text-sm font-medium text-foreground">{rowAction.mode === 'direct' ? 'Who picked it?' : 'Picker'}</span>
+              <select
+                autoFocus
+                value={rowPicker}
+                onChange={e => { setRowPicker(e.target.value); setRowError('') }}
+                className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="">— Choose —</option>
+                {pickers.map(p => <option key={p.id} value={p.id}>{p.name ?? p.id}</option>)}
+              </select>
+            </label>
+            {rowError && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{rowError}</p>}
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setRowAction(null)} disabled={rowSaving}
+                className="flex-1 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold hover:bg-muted disabled:opacity-50">
+                Cancel
+              </button>
+              <button type="submit" disabled={rowSaving}
+                className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+                {rowSaving ? 'Saving…' : rowAction.mode === 'direct' ? 'Send to biller' : 'Assign'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* ── Picker assignment dialog ── */}
       {pickerAssignOpen && (
         <div
@@ -2996,9 +3094,6 @@ ${bills}
                     className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     <option value="">— Skip / No picker —</option>
-                    {canDirectBill && ['pending', 'assigned'].includes(order.status) && (
-                      <option value={DIRECT_BILL}>⚡ Direct bill — no picker, straight to the biller</option>
-                    )}
                     {pickers.map(p => (
                       <option key={p.id} value={p.id}>{p.name ?? p.id}</option>
                     ))}
@@ -3014,18 +3109,12 @@ ${bills}
                 disabled={pickerAssigning}
                 onClick={() => {
                   startPickerAssign(async () => {
-                    // Fire all assignments in parallel (skip blanks). "Direct bill" sends the order
-                    // straight to the biller (admin only): it skips the picker; the biller scans the
-                    // boxes against the order and what is not received is marked.
+                    // Fire all assignments in parallel (skip blanks); the list shows each saved row at once.
                     try {
                       await Promise.all(
                         selectedOrdersForAssign
                           .filter(o => pickerAssignMap[o.id])
-                          .map(async o => {
-                            if (pickerAssignMap[o.id] !== DIRECT_BILL) return salesmanAssignPicker(o.id, pickerAssignMap[o.id])
-                            const row = await sendToBilling(o.id)
-                            keepSaved(row, o.salesmanName ?? null)
-                          })
+                          .map(async o => keepSaved(await salesmanAssignPicker(o.id, pickerAssignMap[o.id]), o.salesmanName ?? null))
                       )
                     } catch (e) {
                       window.alert(`Not all orders were assigned: ${e instanceof Error ? e.message : 'network problem'}`)

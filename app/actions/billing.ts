@@ -62,7 +62,7 @@ export async function discardDirectBillDraft(draftId: number): Promise<void> {
 }
 
 /** Generate a Direct Bill: a master retailer (bill type from it unless chosen), or a walk-in customer. */
-export async function generateDirectBillFromDraft(draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn } = {}): Promise<GeneratedBill> {
+export async function generateDirectBillFromDraft(draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn; pickerId?: string } = {}): Promise<GeneratedBill> {
   const actor = await biller()
   if (bill.taxType !== undefined && !isTaxType(bill.taxType)) throw new Error('Unknown bill type.')
   return generateDirectBill(db, actor, draftId, header, bill)

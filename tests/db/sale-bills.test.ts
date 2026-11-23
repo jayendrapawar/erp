@@ -37,7 +37,7 @@ describe('sale bills and the party ledger (integration)', { skip: !harnessEnable
 
   before(async () => {
     h = await createHarness()
-    await h.db.execute(sql`INSERT INTO "user" (id, name, email, role) VALUES ('u-biller', 'Biller', 'b@test.local', 'biller')`)
+    await h.db.execute(sql`INSERT INTO "user" (id, name, email, role) VALUES ('u-biller', 'Biller', 'b@test.local', 'biller'), ('u-picker', 'Picker', 'p@test.local', 'picker, salesman')`)
     await h.db.execute(sql`INSERT INTO retailers (id, "partyName", "taxType") VALUES ('V1', 'Om Shoes', 'intra_state'), ('V2', 'Delhi Traders', 'inter_state'), ('V3', 'Small Shop', 'untaxed')`)
     await h.db.execute(sql`UPDATE document_sequences SET prefix = '', next = 101 WHERE name = 'sale_bill'`)
   })
@@ -112,15 +112,19 @@ describe('sale bills and the party ledger (integration)', { skip: !harnessEnable
     await healthy()
   })
 
-  test('Direct Bill: needs a master retailer; walk-in: name only, untaxed, typed discount, no ledger entry', async () => {
+  test('Direct Bill: needs a master retailer and who picked it; walk-in: name only, untaxed, typed discount, no ledger entry', async () => {
     const d1 = await createDraft(h.db, biller)
     const manual = [{ artNumber: 'FL-20', mrp: 239.5, qty: 2 }]
-    await assert.rejects(generateDirectBill(h.db, biller, d1, { shopkeeperName: 'Nobody Shoes', manualLines: manual }), /not in the retailer master/)
-    const party = await generateDirectBill(h.db, biller, d1, { shopkeeperName: 'delhi traders', lineDiscPct: 30, manualLines: manual })
+    const picked = { pickerId: 'u-picker' }
+    await assert.rejects(generateDirectBill(h.db, biller, d1, { shopkeeperName: 'Nobody Shoes', manualLines: manual }, picked), /not in the retailer master/)
+    await assert.rejects(generateDirectBill(h.db, biller, d1, { shopkeeperName: 'delhi traders', manualLines: manual }), /who picked/)
+    await assert.rejects(generateDirectBill(h.db, biller, d1, { shopkeeperName: 'delhi traders', manualLines: manual }, { pickerId: 'u-biller' }), /not a picker/)
+    const party = await generateDirectBill(h.db, biller, d1, { shopkeeperName: 'delhi traders', lineDiscPct: 30, manualLines: manual }, picked)
     assert.deepEqual([party.retailerId, party.taxType, party.totals.igstBp], ['V2', 'inter_state', 500])
+    assert.equal((await q<{ pickerId: string }>(sql`SELECT "pickerId" FROM orders WHERE id = ${party.id}`))[0].pickerId, 'u-picker')
     const d2 = await createDraft(h.db, biller)
-    await assert.rejects(generateDirectBill(h.db, biller, d2, { manualLines: manual }, { walkIn: { name: ' ', paidMode: 'cash' } }), /customer's name/)
-    const walk = await generateDirectBill(h.db, biller, d2, { lineDiscPct: 30, manualLines: manual }, { walkIn: { name: 'Ramesh', phone: '98', paidMode: 'upi', discountPct: 10 } })
+    await assert.rejects(generateDirectBill(h.db, biller, d2, { manualLines: manual }, { walkIn: { name: ' ', paidMode: 'cash' }, ...picked }), /customer's name/)
+    const walk = await generateDirectBill(h.db, biller, d2, { lineDiscPct: 30, manualLines: manual }, { walkIn: { name: 'Ramesh', phone: '98', paidMode: 'upi', discountPct: 10 }, ...picked })
     assert.deepEqual([walk.retailerId, walk.taxType, walk.totals.discountBp], [null, 'untaxed', 1000])
     assert.match(walk.billNo, /^E\d+$/)
     const [sb] = await q<{ customerName: string; paidMode: string; retailerId: string | null }>(sql`SELECT "customerName", "paidMode", "retailerId" FROM sale_bills WHERE "orderId" = ${walk.id}`)
