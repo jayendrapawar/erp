@@ -2,6 +2,7 @@
 
 import { stampBillLineHsn } from '@/lib/billing/bill-number'
 import { billingPartyFor, cancelSaleBill, freezeSaleBill, isTaxType, notInMasterMessage, type TaxType, type WalkIn } from '@/lib/billing/sale-bill'
+import type { BillRates } from '@/lib/billing/bill-totals'
 import type { BillTotalsPaise } from '@/lib/billing/bill-totals'
 import { audit } from '@/lib/audit'
 import { recordReceivedPairs } from '@/lib/billing/received-pairs'
@@ -62,7 +63,7 @@ export async function discardDirectBillDraft(draftId: number): Promise<void> {
 }
 
 /** Generate a Direct Bill: a master retailer (bill type from it unless chosen), or a walk-in customer. */
-export async function generateDirectBillFromDraft(draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn; pickerId?: string } = {}): Promise<GeneratedBill> {
+export async function generateDirectBillFromDraft(draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn; pickerId?: string; rates?: BillRates } = {}): Promise<GeneratedBill> {
   const actor = await biller()
   if (bill.taxType !== undefined && !isTaxType(bill.taxType)) throw new Error('Unknown bill type.')
   return generateDirectBill(db, actor, draftId, header, bill)
@@ -84,7 +85,7 @@ export async function billOrder(
   scannedQrs: string[],
   lines: { artNumber: string; mrp: number; qty: number }[],
   lineDiscPct: number,
-  opts: { taxType?: TaxType; packed?: { itemId: number; qty: number }[] } = {},
+  opts: { taxType?: TaxType; packed?: { itemId: number; qty: number }[]; rates?: BillRates } = {},
 ): Promise<StockOutCounts & { skipped: number; billNo: string; taxType: TaxType; totals: BillTotalsPaise }> {
   const actor = await biller()
   if (opts.taxType !== undefined && !isTaxType(opts.taxType)) throw new Error('Unknown bill type.')
@@ -109,7 +110,7 @@ export async function billOrder(
     if (!clean.length) throw new Error('No items on this bill.')
     await tx.insert(billLines).values(clean.map((l) => ({ orderId, artNumber: l.artNumber, mrp: String(l.mrp), qty: l.qty, lineDiscPct: String(pct) })))
     // Official bill number, frozen amounts and the ledger entry; HSN on each line — same transaction.
-    const bill = await freezeSaleBill(tx, actor, { orderId, source: 'invoice', lines: clean, lineDiscPct: pct, party: { retailerId: o.retailerId, taxType: opts.taxType ?? o.taxType } })
+    const bill = await freezeSaleBill(tx, actor, { orderId, source: 'invoice', lines: clean, lineDiscPct: pct, party: { retailerId: o.retailerId, taxType: opts.taxType ?? o.taxType }, rates: opts.rates })
     await stampBillLineHsn(tx, orderId)
     const counts = await recordOrderScans(tx, actor, orderId, o.orderNumber, Array.isArray(scannedQrs) ? scannedQrs : [])
     return { ...counts, billNo: bill.billNo, taxType: bill.taxType, totals: bill.totals }

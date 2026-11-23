@@ -17,11 +17,52 @@
  *   round-off       to the nearest rupee (50 paise goes up); old bills keep 0
  *
  * Percentages are handled in basis points (1 % = 100 bp), so 4.75 % = 475 bp is exact.
+ *
+ * The bill discount and GST rates are editable (owner, 24 Nov 2026): the defaults live in Master →
+ * Bill template (start: 4.75 %, CGST 2.5 %, SGST 2.5 %, IGST 5 %) and a bill may change them; each
+ * bill saves the rates it was made with.
  */
 
 export type TaxType = 'intra_state' | 'inter_state' | 'untaxed'
 
 export const BILL_RATES_BP = { discount: 475, cgst: 250, sgst: 250, igst: 500 } as const
+
+/** Bill discount and GST rates, in percent. */
+export interface BillRates { discountPct: number; cgstPct: number; sgstPct: number; igstPct: number }
+
+export const DEFAULT_BILL_RATES: BillRates = {
+  discountPct: BILL_RATES_BP.discount / 100, cgstPct: BILL_RATES_BP.cgst / 100, sgstPct: BILL_RATES_BP.sgst / 100, igstPct: BILL_RATES_BP.igst / 100,
+}
+
+/**
+ * The rates a bill of this type gets: what was typed on the bill, else the default (Master → Bill
+ * template). A bill without GST gets no bill discount unless one is typed.
+ */
+export function billRatesFor(taxType: TaxType, defaults: BillRates = DEFAULT_BILL_RATES, edits: Partial<BillRates> = {}): BillRates {
+  return {
+    discountPct: edits.discountPct ?? (taxType === 'untaxed' ? 0 : defaults.discountPct),
+    cgstPct: edits.cgstPct ?? defaults.cgstPct,
+    sgstPct: edits.sgstPct ?? defaults.sgstPct,
+    igstPct: edits.igstPct ?? defaults.igstPct,
+  }
+}
+
+/** Refuses rates that are not 0–100 % with at most two decimals. */
+export function cleanBillRates(raw: unknown): BillRates {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const one = (k: keyof BillRates, label: string) => {
+    const v = Number(r[k])
+    if (r[k] === '' || r[k] == null || !Number.isFinite(v) || v < 0 || v > 100) throw new Error(`${label} must be between 0 and 100 %.`)
+    if (Math.round(v * 100) !== Number((v * 100).toFixed(6))) throw new Error(`${label} may have at most two decimals.`)
+    return Math.round(v * 100) / 100
+  }
+  return { discountPct: one('discountPct', 'Bill discount'), cgstPct: one('cgstPct', 'CGST'), sgstPct: one('sgstPct', 'SGST'), igstPct: one('igstPct', 'IGST') }
+}
+
+/** Rates → the basis-point options of computeBillTotals. */
+export function ratesBp(r: BillRates): { discountBp: number; cgstBp: number; sgstBp: number; igstBp: number } {
+  return { discountBp: toBp(r.discountPct), cgstBp: toBp(r.cgstPct), sgstBp: toBp(r.sgstPct), igstBp: toBp(r.igstPct) }
+}
 
 /** The bill discount a bill of this type gets unless one is typed (walk-in). */
 export function defaultDiscountBp(taxType: TaxType): number {
@@ -80,18 +121,20 @@ export function computeBillTotals(
   lines: TotalsLine[],
   lineDiscPct: number | string,
   taxType: TaxType,
-  opts: { roundOff?: boolean; discountBp?: number } = {},
+  opts: { roundOff?: boolean; discountBp?: number; cgstBp?: number; sgstBp?: number; igstBp?: number } = {},
 ): BillTotalsPaise {
   const R = BILL_RATES_BP
   const discountBp = opts.discountBp ?? defaultDiscountBp(taxType)
-  if (!Number.isInteger(discountBp) || discountBp < 0 || discountBp > 10000) throw new Error('Bill discount must be between 0 and 100 %.')
+  const okBp = (v: number) => Number.isInteger(v) && v >= 0 && v <= 10000
+  if (!okBp(discountBp)) throw new Error('Bill discount must be between 0 and 100 %.')
+  for (const v of [opts.cgstBp, opts.sgstBp, opts.igstBp]) if (v !== undefined && !okBp(v)) throw new Error('GST must be between 0 and 100 %.')
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
   const grossPaise = lines.reduce((s, l) => s + ratePaise(l.mrp, lineDiscPct) * l.qty, 0)
   const discountPaise = pct(grossPaise, discountBp)
   const taxablePaise = grossPaise - discountPaise
-  const cgstBp = taxType === 'intra_state' ? R.cgst : 0
-  const sgstBp = taxType === 'intra_state' ? R.sgst : 0
-  const igstBp = taxType === 'inter_state' ? R.igst : 0
+  const cgstBp = taxType === 'intra_state' ? opts.cgstBp ?? R.cgst : 0
+  const sgstBp = taxType === 'intra_state' ? opts.sgstBp ?? R.sgst : 0
+  const igstBp = taxType === 'inter_state' ? opts.igstBp ?? R.igst : 0
   const cgstPaise = pct(taxablePaise, cgstBp), sgstPaise = pct(taxablePaise, sgstBp), igstPaise = pct(taxablePaise, igstBp)
   const netPaise = taxablePaise + cgstPaise + sgstPaise + igstPaise
   const grandTotalPaise = opts.roundOff === false ? netPaise : Math.floor((netPaise + 50) / 100) * 100

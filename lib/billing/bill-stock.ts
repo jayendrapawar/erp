@@ -11,6 +11,7 @@
 
 import { stampBillLineHsn } from './bill-number'
 import { cleanWalkIn, freezeSaleBill, notInMasterMessage, type TaxType, type WalkIn } from './sale-bill'
+import type { BillRates } from './bill-totals'
 import type { BillTotalsPaise } from './bill-totals'
 import { and, eq, sql } from 'drizzle-orm'
 import { billLines, billScans, directBillDrafts, orders, type BillStockSource, type DraftManualLine } from '@/lib/db/schema'
@@ -357,7 +358,7 @@ export interface GeneratedBill {
  * not taxed, paid at once). One transaction; ~12 statements whatever the number of boxes.
  */
 export async function generateDirectBill(
-  db: Db, actor: Actor, draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn; pickerId?: string } = {},
+  db: Db, actor: Actor, draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn; pickerId?: string; rates?: BillRates } = {},
 ): Promise<GeneratedBill> {
   const walk = bill.walkIn ? cleanWalkIn(bill.walkIn) : null
   const h = cleanHeader(walk ? { ...header, shopkeeperName: walk.name, shopkeeperPhone: walk.phone || null } : header)
@@ -384,6 +385,7 @@ export async function generateDirectBill(
     const frozen = await freezeSaleBill(tx, actor, {
       orderId: order.id, source: 'direct', lines, lineDiscPct: h.lineDiscPct,
       party: walk ? { walkIn: walk } : { retailerId: r!.id, taxType: bill.taxType ?? r!.taxType },
+      rates: bill.rates,
     })
     await stampBillLineHsn(tx, order.id)
     await tx.execute(sql`UPDATE bill_scans SET "orderId" = ${order.id}, "orderNumber" = ${number} WHERE "draftId" = ${draftId} AND status = 'active'`)

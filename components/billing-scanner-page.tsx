@@ -24,7 +24,8 @@ import type { DraftHeader, DraftSummary, GeneratedBill, MasterMatch } from '@/li
 import { DialogKeys } from '@/components/dialog-keys'
 import { askConfirm } from '@/components/confirm-dialog'
 import { BillTypeChoice } from '@/components/bill-type-choice'
-import { computeBillTotals, ratePaise, toBp, type TaxType } from '@/lib/billing/bill-totals'
+import { DEFAULT_BILL_RATES, computeBillTotals, ratePaise, ratesBp, toBp, type BillRates, type TaxType } from '@/lib/billing/bill-totals'
+import { BillRatesFields, resolveRates, type RateEdits } from '@/components/bill-rates-fields'
 import { amountsFromTotals, billTotalRows, formatRs } from '@/lib/billing/bill-amounts'
 
 function newUuid(): string {
@@ -266,13 +267,15 @@ interface Props {
   onBillGenerated?: (data: DirectBillGenerated) => void
   /** Direct Billing: who can be named as the picker (owner, 23 Nov 2026: every Direct bill says who picked it). */
   pickers?: { id: string; name: string | null }[]
+  /** Default bill discount and GST rates (Master → Bill template); a bill may change them. */
+  rateDefaults?: BillRates
   /** Suppress the full-page chrome (header, sign-out) when embedded */
   embedded?: boolean
 }
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pickers = [], embedded }: Props) {
+export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pickers = [], rateDefaults = DEFAULT_BILL_RATES, embedded }: Props) {
 
   // Guard: vendors may briefly be undefined during SSR/hydration
   const safeVendors = vendors ?? []
@@ -284,6 +287,8 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
   const [pickedBy, setPickedBy] = useState('')
   // Bill type (owner, 23 Nov 2026): from the retailer, changeable for this bill.
   const [taxType, setTaxType] = useState<TaxType>('intra_state')
+  // Bill discount / GST typed on this bill (owner, 24 Nov 2026); empty = the defaults.
+  const [rateEdits, setRateEdits] = useState<RateEdits>({})
   // Walk-in customer: name only, without GST, pays at once (cash / UPI), bill discount typed.
   const [walkIn, setWalkIn] = useState(false)
   const [walkName, setWalkName] = useState('')
@@ -411,6 +416,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
     setTouched({})
     chooseVendor(null)
     toggleWalkIn(false)
+    setRateEdits({})
     setPickedBy('')
     setLineDiscPct(30)
     draftIdRef.current = null
@@ -805,7 +811,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
         const header = draftHeader()
         const res = await generateDirectBillFromDraft(id, header, walkIn
           ? { pickerId: pickedBy, walkIn: { name: walkName.trim(), phone: walkPhone.trim(), paidMode: walkPaid as 'cash' | 'upi', discountPct: walkDiscNum } }
-          : { pickerId: pickedBy, taxType })
+          : { pickerId: pickedBy, taxType, ...(rated.changed ? { rates: rated.rates } : {}) })
         onBillGenerated(walkIn
           ? { ...res, shopkeeperName: walkName.trim(), shopkeeperPhone: walkPhone.trim() || null, shopkeeperAddress: null }
           : { ...res, shopkeeperName: header.shopkeeperName, shopkeeperPhone: header.shopkeeperPhone, shopkeeperAddress: header.shopkeeperAddress })
@@ -874,8 +880,9 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
   const walkDiscNum = Math.round(Number(walkDisc) * 100) / 100
   const walkDiscOk = walkDisc.trim() !== '' && Number.isFinite(walkDiscNum) && walkDiscNum >= 0 && walkDiscNum <= 100
   const billTax: TaxType = walkIn ? 'untaxed' : taxType
+  const rated = resolveRates(taxType, rateDefaults, rateEdits)
   const amounts = amountsFromTotals(
-    computeBillTotals(billLines, LINE_DISC_PCT, billTax, walkIn ? { discountBp: toBp(walkDiscOk ? walkDiscNum : 0) } : {}),
+    computeBillTotals(billLines, LINE_DISC_PCT, billTax, walkIn ? { discountBp: toBp(walkDiscOk ? walkDiscNum : 0) } : ratesBp(rated.rates)),
     billTax, walkIn,
   )
   const totalRows = billTotalRows(amounts)
@@ -891,7 +898,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
   const needsPicker = directBill && !pickedBy
   const partyHint = walkIn
     ? (!walkName.trim() ? 'Type the customer\'s name.' : !walkPaid ? 'Choose how the customer paid: cash or UPI.' : !walkDiscOk ? 'Bill discount must be 0 to 100 %.' : '')
-    : (!selectedVendor ? 'Choose the retailer to generate the bill.' : '')
+    : (!selectedVendor ? 'Choose the retailer to generate the bill.' : rated.error)
   const canGenerate = !partyHint && !needsPicker && billLines.length > 0 && !isSaving && pendingScans === 0
   const generateHint = partyHint ? partyHint
     : needsPicker ? 'Choose who picked the goods.'
@@ -1150,6 +1157,9 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
             ) : (
               <div className="mb-3">
                 <BillTypeChoice value={taxType} onChange={setTaxType} partyDefault={selectedVendor?.taxType ?? null} />
+                <div className="mt-2">
+                  <BillRatesFields taxType={taxType} defaults={rateDefaults} edits={rateEdits} onChange={setRateEdits} />
+                </div>
               </div>
             ))}
             <div className="space-y-1.5 text-sm tabular-nums">

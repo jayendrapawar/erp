@@ -22,7 +22,9 @@ import { tablistKeyDown, tabProps, useTabKeys } from '@/lib/shortcuts/tabs'
 import { DialogKeys } from '@/components/dialog-keys'
 import { BillDetailCard } from '@/components/bill-detail-card'
 import { BillTypeChoice } from '@/components/bill-type-choice'
-import { computeBillTotals, type TaxType } from '@/lib/billing/bill-totals'
+import { DEFAULT_BILL_RATES, computeBillTotals, ratesBp, type TaxType } from '@/lib/billing/bill-totals'
+import { BillRatesFields, resolveRates, type RateEdits } from '@/components/bill-rates-fields'
+import { templateRates } from '@/lib/bill-template'
 import { amountsFromLines, formatRs, type BillAmounts } from '@/lib/billing/bill-amounts'
 
 // Two tabs (owner, 23 Nov 2026): Bills (orders to bill, incl. orders the admin sent straight to
@@ -131,7 +133,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   const [scanOrder, setScanOrder] = useState<BillerOrder | null>(null)
   // Bill type of the bill being made (owner, 23 Nov 2026): starts from the retailer, changeable here.
   const [billType, setBillType] = useState<TaxType>('intra_state')
-  useEffect(() => { if (scanOrder) setBillType(scanOrder.taxType ?? 'intra_state') }, [scanOrder?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Bill discount / GST typed on this bill (owner, 24 Nov 2026); empty = the Master defaults.
+  const [rateEdits, setRateEdits] = useState<RateEdits>({})
+  useEffect(() => { if (scanOrder) { setBillType(scanOrder.taxType ?? 'intra_state'); setRateEdits({}) } }, [scanOrder?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const [scanItems, setScanItems] = useState<DetailItem[]>([])
   // scannedMap: itemKey → scanned count
   const [scannedMap, setScannedMap] = useState<Record<string, number>>({})
@@ -848,7 +852,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       // On failure (e.g. a box is already on another bill) the scanner stays open with its scans.
       let billed: Awaited<ReturnType<typeof billOrder>>
       try {
-        billed = await billOrder(orderId, qrsCopy, builtLines, discPct, { taxType: billType, ...(packedForSave ? { packed: packedForSave } : {}) })
+        const rated = resolveRates(billType, billTemplate ? templateRates(billTemplate) : DEFAULT_BILL_RATES, rateEdits)
+        if (rated.error) { setActiveId(null); showMsg('err', rated.error); return }
+        billed = await billOrder(orderId, qrsCopy, builtLines, discPct, { taxType: billType, ...(rated.changed ? { rates: rated.rates } : {}), ...(packedForSave ? { packed: packedForSave } : {}) })
       } catch (e) {
         setActiveId(null)
         showMsg('err', e instanceof Error ? e.message : 'Could not save the bill. Try again.')
@@ -1153,6 +1159,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                 vendors={vendors}
                 articles={articles}
                 pickers={pickers}
+                rateDefaults={billTemplate ? templateRates(billTemplate) : undefined}
                 embedded
                 onBillGenerated={(data) => {
                   const newOrder: BillerOrder = {
@@ -2050,10 +2057,12 @@ Why is it cancelled?`)
             <div className="min-w-[220px] flex-1">
               <BillTypeChoice compact value={billType} onChange={setBillType} partyDefault={scanOrder.taxType ?? null} disabled={isPending} />
             </div>
+            <BillRatesFields compact taxType={billType} defaults={billTemplate ? templateRates(billTemplate) : DEFAULT_BILL_RATES} edits={rateEdits} onChange={setRateEdits} disabled={isPending} />
             {(() => {
               const live = buildScannedLines(scannedQrs, scanItems)
               if (!live.length) return null
-              const t = computeBillTotals(live, typeof lineDiscPct === 'number' ? lineDiscPct : 30, billType)
+              const t = computeBillTotals(live, typeof lineDiscPct === 'number' ? lineDiscPct : 30, billType,
+                ratesBp(resolveRates(billType, billTemplate ? templateRates(billTemplate) : DEFAULT_BILL_RATES, rateEdits).rates))
               return (
                 <p className="ml-auto text-right text-xs text-muted-foreground">
                   {`Net payable · ${t.totalQty} pairs `}

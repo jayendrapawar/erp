@@ -140,4 +140,27 @@ describe('sale bills and the party ledger (integration)', { skip: !harnessEnable
     const got = await h.db.transaction(async (tx) => [await billingPartyFor(tx, byId), await billingPartyFor(tx, byName), await billingPartyFor(tx, none)])
     assert.deepEqual(got.map((g) => [g?.retailerId, g?.taxType]), [['V2', 'inter_state'], ['V1', 'intra_state'], [null, null]])
   })
+
+  test('rates: typed on the bill are saved; else the Master defaults; a bill without GST gets no discount by default', async () => {
+    const savedRates = async (orderId: number) => (await q<{ d: string; c: string; s: string; i: string }>(sql`
+      SELECT "discountPct" d, "cgstPct" c, "sgstPct" s, "igstPct" i FROM sale_bills WHERE "orderId" = ${orderId} AND status = 'active'`))[0]
+    // Typed on the bill.
+    const o1 = await withLines(await order('Om Shoes', 'V1'))
+    const typed = await h.db.transaction((tx) => freezeSaleBill(tx, biller, { orderId: o1, source: 'invoice', lines, lineDiscPct: 30,
+      party: { retailerId: 'V1', taxType: 'intra_state' }, rates: { discountPct: 3, cgstPct: 6, sgstPct: 6, igstPct: 12 } }))
+    assert.deepEqual(await savedRates(o1), { d: '3.00', c: '6.00', s: '6.00', i: '0.00' })
+    assert.equal(typed.totals.cgstPaise, Math.floor((typed.totals.taxablePaise * 600 + 5000) / 10000))
+    await assert.rejects(h.db.transaction((tx) => freezeSaleBill(tx, biller, { orderId: o1, source: 'invoice', lines, lineDiscPct: 30,
+      party: { retailerId: 'V1', taxType: 'intra_state' }, rates: { discountPct: 101, cgstPct: 6, sgstPct: 6, igstPct: 12 } })), /between 0 and 100/)
+    // Master defaults changed (Master → Bill template): used when the bill types none.
+    await h.db.execute(sql`INSERT INTO app_settings (key, value) VALUES ('bill.template', ${JSON.stringify({ discountPct: 4, cgstPct: 2.5, sgstPct: 2.5, igstPct: 5.5 })}::jsonb)`)
+    const o2 = await withLines(await order('Delhi Traders', 'V2'))
+    await freeze(o2, 'V2', 'inter_state')
+    assert.deepEqual(await savedRates(o2), { d: '4.00', c: '0.00', s: '0.00', i: '5.50' })
+    const o3 = await withLines(await order('Small Shop', 'V3'))
+    await freeze(o3, 'V3', 'untaxed')
+    assert.deepEqual(await savedRates(o3), { d: '0.00', c: '0.00', s: '0.00', i: '0.00' })
+    await h.db.execute(sql`DELETE FROM app_settings WHERE key = 'bill.template'`)
+    await healthy()
+  })
 })

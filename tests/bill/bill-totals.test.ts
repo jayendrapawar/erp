@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { bpToPct, computeBillTotals, defaultDiscountBp, ratePaise, toPaise } from '../../lib/billing/bill-totals'
+import { DEFAULT_BILL_RATES, billRatesFor, bpToPct, cleanBillRates, computeBillTotals, defaultDiscountBp, ratePaise, ratesBp, toPaise } from '../../lib/billing/bill-totals'
+import { normalizeBillTemplate } from '../../lib/bill-template'
 import { billTotals } from '../../lib/bill-html'
 import { amountsFromTotals, billTotalRows, formatRs } from '../../lib/billing/bill-amounts'
 import { prefixesClash } from '../../lib/billing/bill-number'
@@ -75,4 +76,23 @@ test('bill number prefixes of the two series must not clash', () => {
   assert.equal(prefixesClash('', 'E'), false)
   assert.equal(prefixesClash('SSP/', 'E'), false)
   assert.equal(prefixesClash('E', 'EX'), false)
+})
+
+test('editable rates: defaults until typed; typed rates change the totals; bad values refused', () => {
+  assert.deepEqual(billRatesFor('intra_state'), DEFAULT_BILL_RATES)
+  assert.equal(billRatesFor('untaxed').discountPct, 0)
+  assert.equal(billRatesFor('untaxed', DEFAULT_BILL_RATES, { discountPct: 2 }).discountPct, 2)
+  const custom = computeBillTotals(lines, 30, 'intra_state', ratesBp({ discountPct: 0, cgstPct: 6, sgstPct: 6, igstPct: 12 }))
+  assert.equal(custom.discountPaise, 0)
+  assert.equal(custom.cgstBp, 600)
+  assert.equal(custom.igstPaise, 0) // IGST only on bills outside the state
+  const same = computeBillTotals(lines, 30, 'intra_state', ratesBp(DEFAULT_BILL_RATES))
+  assert.deepEqual(same, computeBillTotals(lines, 30, 'intra_state')) // the defaults are today's rates
+  assert.deepEqual(cleanBillRates({ discountPct: '4.75', cgstPct: 2.5, sgstPct: 2.5, igstPct: 5 }), DEFAULT_BILL_RATES)
+  assert.throws(() => cleanBillRates({ discountPct: 4.755, cgstPct: 2.5, sgstPct: 2.5, igstPct: 5 }), /two decimals/)
+  assert.throws(() => cleanBillRates({ discountPct: 4.75, cgstPct: -1, sgstPct: 2.5, igstPct: 5 }), /CGST/)
+  assert.throws(() => computeBillTotals(lines, 30, 'inter_state', { igstBp: 10001 }), /GST/)
+  // Master → Bill template keeps the rates; odd values fall back to the defaults.
+  assert.equal(normalizeBillTemplate({ discountPct: '3.5', igstPct: 500 }).discountPct, 3.5)
+  assert.equal(normalizeBillTemplate({ igstPct: 500 }).igstPct, 5)
 })

@@ -15,7 +15,11 @@ import { sql } from 'drizzle-orm'
 import type { Actor, Tx } from '@/lib/db/types'
 import { audit } from '@/lib/audit'
 import { assignBillNo, billSeriesFor } from './bill-number'
-import { bpToPct, computeBillTotals, toBp, type BillTotalsPaise, type TaxType, type TotalsLine } from './bill-totals'
+import {
+  billRatesFor, bpToPct, cleanBillRates, computeBillTotals, ratesBp, toBp, type BillRates, type BillTotalsPaise, type TaxType, type TotalsLine,
+} from './bill-totals'
+import { getSetting } from '@/lib/settings'
+import { SETTING_BILL_TEMPLATE, normalizeBillTemplate, templateRates } from '@/lib/bill-template'
 
 export type { TaxType } from './bill-totals'
 export const TAX_TYPES: readonly TaxType[] = ['intra_state', 'inter_state', 'untaxed']
@@ -44,6 +48,14 @@ export interface FreezeInput {
   lines: TotalsLine[]
   lineDiscPct: number
   party: BillParty
+  /** Bill discount and GST rates typed on the bill (owner, 24 Nov 2026); else the Master defaults. Walk-in: walkIn.discountPct. */
+  rates?: BillRates
+}
+
+/** The default rates (Master → Bill template). 1 query. */
+export async function defaultBillRates(tx: Tx): Promise<BillRates> {
+  const row = await getSetting(tx, SETTING_BILL_TEMPLATE)
+  return templateRates(normalizeBillTemplate(row?.value))
 }
 
 export interface FrozenBill {
@@ -60,7 +72,8 @@ export async function freezeSaleBill(tx: Tx, actor: Actor, p: FreezeInput): Prom
   const walk = 'walkIn' in p.party ? cleanWalkIn(p.party.walkIn) : null
   const taxType: TaxType = walk ? 'untaxed' : (p.party as { taxType: TaxType }).taxType
   const retailerId = walk ? null : (p.party as { retailerId: string }).retailerId
-  const t = computeBillTotals(p.lines, p.lineDiscPct, taxType, { discountBp: walk ? toBp(walk.discountPct) : undefined })
+  const rates = walk ? null : p.rates ? cleanBillRates(p.rates) : billRatesFor(taxType, await defaultBillRates(tx))
+  const t = computeBillTotals(p.lines, p.lineDiscPct, taxType, walk ? { discountBp: toBp(walk.discountPct) } : ratesBp(rates!))
   if (t.grandTotalPaise <= 0) throw new Error('This bill comes to ₹0. Check the MRPs.')
   const billNo = await assignBillNo(tx, p.orderId, billSeriesFor(taxType))
   // Bill row and its ledger entry together (a walk-in bill has no entry: nothing is owed).
@@ -83,7 +96,7 @@ export async function freezeSaleBill(tx: Tx, actor: Actor, p: FreezeInput): Prom
   const saleBillId = Number(row.id)
   await audit(tx, {
     actor, action: 'sale_bill.created', entityType: 'order', entityId: p.orderId,
-    after: { saleBillId, billNo, taxType, retailerId, customerName: walk?.name, grandTotalPaise: t.grandTotalPaise, roundOffPaise: t.roundOffPaise },
+    after: { saleBillId, billNo, taxType, retailerId, customerName: walk?.name, rates: rates ?? { discountPct: walk?.discountPct }, grandTotalPaise: t.grandTotalPaise, roundOffPaise: t.roundOffPaise },
   })
   return { saleBillId, billNo, billDate: row.billDate, taxType, retailerId, totals: t }
 }

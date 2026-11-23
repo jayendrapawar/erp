@@ -102,6 +102,24 @@ export function BillTemplateTab() {
           </div>
         </section>
         <section className="space-y-3 rounded-xl border border-border p-4">
+          <h3 className="text-sm font-semibold">Default discount and GST</h3>
+          <p className="text-xs text-muted-foreground">
+            Every new bill starts with these. The biller can change them on one bill; each bill keeps the rates it was made with.
+            Bills without GST get no bill discount unless one is typed.
+          </p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {([['discountPct', 'Bill discount %'], ['cgstPct', 'CGST %'], ['sgstPct', 'SGST %'], ['igstPct', 'IGST %']] as const).map(([k, label]) => (
+              <label key={k} className="block text-xs font-medium text-muted-foreground">
+                {label}
+                <input type="number" inputMode="decimal" min={0} max={100} step={0.01}
+                  value={Number.isFinite(t[k]) ? t[k] : ''}
+                  onChange={(e) => set(k, e.target.value === '' ? NaN : Number(e.target.value))}
+                  className={`${inputCls} mt-1 text-foreground tabular-nums`} />
+              </label>
+            ))}
+          </div>
+        </section>
+        <section className="space-y-3 rounded-xl border border-border p-4">
           <h3 className="text-sm font-semibold">Bottom of the bill</h3>
           <label className="block text-xs font-medium text-muted-foreground">
             Terms (one per line)
