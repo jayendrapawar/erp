@@ -6,7 +6,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Printer, X } from 'lucide-react'
-import { getBillLines } from '@/app/actions/orders'
+import { getBillsForPrint } from '@/app/actions/orders'
+import type { BillAmounts } from '@/lib/billing/bill-amounts'
 import { buildInvoiceHtml, transliterateToHindi, type MrpLine, type PageSize } from '@/lib/bill-html'
 import type { BillTemplate } from '@/lib/bill-template'
 import { DialogKeys } from '@/components/dialog-keys'
@@ -31,6 +32,7 @@ export function BillPreviewDialog({ bill, template, defaultPageSize, fallbackLin
   onClose: () => void
 }) {
   const [lines, setLines] = useState<MrpLine[] | null>(null)
+  const [amounts, setAmounts] = useState<BillAmounts | undefined>(undefined)
   const [discPct, setDiscPct] = useState(fallbackDiscPct)
   const [error, setError] = useState<string | null>(null)
   const [pageSize, setPageSize] = useState<PageSize>(defaultPageSize)
@@ -41,12 +43,15 @@ export function BillPreviewDialog({ bill, template, defaultPageSize, fallbackLin
 
   useEffect(() => {
     let live = true
-    getBillLines(bill.id)
-      .then((rows) => {
+    // Lines and the saved amounts in one query.
+    getBillsForPrint([bill.id])
+      .then((all) => {
         if (!live) return
-        if (rows.length > 0) {
-          setLines(rows.map((r) => ({ artNumber: r.artNumber, mrp: r.mrp, qty: r.qty, hsn: r.hsn })))
-          if (Number.isFinite(rows[0].lineDiscPct)) setDiscPct(rows[0].lineDiscPct)
+        const b = all[bill.id]
+        if (b && b.lines.length > 0) {
+          setLines(b.lines)
+          if (b.lineDiscPct != null && Number.isFinite(b.lineDiscPct)) setDiscPct(b.lineDiscPct)
+          setAmounts(b.amounts ?? undefined)
         } else {
           setLines(fallbackRef.current ?? [])
         }
@@ -67,8 +72,8 @@ export function BillPreviewDialog({ bill, template, defaultPageSize, fallbackLin
   const html = useMemo(() => (lines && lines.length > 0 ? buildInvoiceHtml({
     vendor: { name: bill.shopkeeperName, nameHindi: hindi, phone: bill.shopkeeperPhone, address: bill.shopkeeperAddress },
     order: { orderNumber: bill.orderNumber, billNo: bill.billNo, billedAt: bill.billedAt },
-    lines, lineDiscPct: discPct, pageSize, template,
-  }) : ''), [lines, discPct, pageSize, template, hindi, bill])
+    lines, lineDiscPct: discPct, pageSize, template, amounts,
+  }) : ''), [lines, discPct, pageSize, template, hindi, bill, amounts])
 
   function print() {
     const w = frame.current?.contentWindow

@@ -9,6 +9,7 @@ import {
   addDraftScan, createDraft, discardDraft, generateDirectBill, listOpenDrafts, loadDraft, recordOrderScans,
   releaseOrderScans, removeDraftScans, saveDraftHeader,
 } from '../../lib/billing/bill-stock'
+import { cancelSaleBill } from '../../lib/billing/sale-bill'
 import { listUnscannedDispatch, stockSummary } from '../../lib/inventory/stock-queries'
 import { listMissingArticles } from '../../lib/catalog/missing-articles'
 import type { Actor } from '../../lib/db/types'
@@ -31,6 +32,7 @@ describe('billing takes stock out (integration)', { skip: !harnessEnabled() && '
 
   before(async () => {
     h = await createHarness()
+    await h.db.execute(sql`INSERT INTO retailers (id, "partyName") VALUES ('V901', 'Test Shop')`) // billing needs a master retailer (migration 0017)
     await h.db.execute(sql`INSERT INTO "user" (id, name, email, role) VALUES ('u-biller','Biller','b@test.local','biller'), ('u-admin','Admin','a@test.local','admin')`)
     const art = await h.db.execute<{ id: number }>(sql`INSERT INTO articles ("artName","artCode",color,"colorCode") VALUES ('PUG-N42','PUGN42G','White','WHWH') RETURNING id`)
     const s = await h.db.execute<{ id: number }>(sql`INSERT INTO article_sizes ("articleId","sizeLabel","sortOrder") VALUES (${art.rows[0].id},'6',1),(${art.rows[0].id},'7',2) RETURNING id`)
@@ -94,10 +96,12 @@ describe('billing takes stock out (integration)', { skip: !harnessEnabled() && '
     assert.equal(await mismatches(), 0)
   })
 
-  test('deleting the bill puts its boxes back and frees them', async () => {
+  test('cancelling the bill puts its boxes back and frees them; a billed order is never deleted', async () => {
+    await assert.rejects(h.db.execute(sql`DELETE FROM orders WHERE id = ${orderId}`)) // sale_bills keeps it (migration 0017)
     await h.db.transaction(async (tx) => {
-      assert.equal(await releaseOrderScans(tx, admin, orderId, 'Direct Bill deleted'), 3)
-      await tx.execute(sql`DELETE FROM orders WHERE id = ${orderId}`)
+      assert.equal(await releaseOrderScans(tx, admin, orderId, 'bill cancelled: test'), 3)
+      assert.ok(await cancelSaleBill(tx, admin, orderId, 'test'))
+      await tx.execute(sql`UPDATE orders SET status = 'cancelled' WHERE id = ${orderId}`)
     })
     assert.deepEqual([await bal('scanned'), await bal('unscanned')], [1, 1])
     assert.equal((await listUnscannedDispatch(h.db)).rows.length, 0)

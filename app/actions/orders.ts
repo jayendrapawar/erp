@@ -1,8 +1,7 @@
 'use server'
 
-import { assignBillNo, stampBillLineHsn } from '@/lib/billing/bill-number'
 import { db } from '@/lib/db'
-import { orders, orderItems, billLines, retailers } from '@/lib/db/schema'
+import { orders, orderItems, retailers } from '@/lib/db/schema'
 import type { OrderStatus } from '@/lib/db/schema'
 import { eq, desc, inArray, sql, and, ilike, gte, lte } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
@@ -10,6 +9,9 @@ import { requireAnyRole } from '@/lib/authz'
 import type { Role } from '@/lib/permissions'
 import type { Tx } from '@/lib/db/types'
 import { releaseOrderScans } from '@/lib/billing/bill-stock'
+import { cancelSaleBill } from '@/lib/billing/sale-bill'
+import { SALE_BILL_AMOUNT_COLUMNS, amountsFromRow, type BillAmounts, type SaleBillAmountRow } from '@/lib/billing/bill-amounts'
+import { audit } from '@/lib/audit'
 import { olderOrders, recentOrders, type OrderScope } from '@/lib/orders/order-list'
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -105,7 +107,9 @@ export async function updateOrder(orderId: number, input: CreateOrderInput) {
       .from(orders).where(eq(orders.id, orderId)).limit(1).for('update')
     if (!order) throw new Error('Order not found')
     if (order.salesmanId !== u.id && !userRoles.includes('admin')) throw new Error('Forbidden')
-    if (!['pending', 'assigned', 'packed', 'billed'].includes(order.status)) throw new Error('Only pending, assigned, packed, or billed orders can be edited')
+    // A billed order has an issued bill (and a ledger entry): the biller sends it back first (owner, 23 Nov 2026).
+    if (order.status === 'billed') throw new Error('This order is billed. Ask the biller to send it back for editing first.')
+    if (!['pending', 'assigned', 'packed'].includes(order.status)) throw new Error('Only pending, assigned or packed orders can be edited')
 
     // Reset order to pending so it re-enters the picker queue
     const statusPatch: Record<string, unknown> = {
@@ -113,13 +117,12 @@ export async function updateOrder(orderId: number, input: CreateOrderInput) {
       notes: input.notes ?? null,
       updatedAt: sql`now()`,
     }
-    if (['packed', 'billed'].includes(order.status)) {
-      // Send back to pending — clear picker/biller assignment so it re-queues
+    if (order.status === 'packed') {
+      // Send back to pending — clear picker assignment so it re-queues
       statusPatch.status = 'pending'
       statusPatch.pickerId = null
       statusPatch.billerId = null
       statusPatch.packedAt = null
-      statusPatch.billedAt = null
     }
     // Header and replacement lines are written together or not at all.
     statusPatch.retailerId = await retailerIdFor(tx, input.shopkeeperName)
@@ -257,28 +260,37 @@ export async function unassignOrder(orderId: number): Promise<{ orderId: number 
 
 // ── Bill lines ────────────────────────────────────────────────────────────────
 
-/** Persist MRP lines for a billed order. Replaces any existing lines. */
-export async function saveBillLines(
-  orderId: number,
-  lines: { artNumber: string; mrp: number; qty: number }[],
-  lineDiscPct: number,
-) {
-  await requireRole('biller', 'admin')
-  // Replace the lines atomically (idempotent re-save).
-  await db.transaction(async (tx) => {
-    await tx.delete(billLines).where(eq(billLines.orderId, orderId))
-    if (lines.length > 0) {
-      await tx.insert(billLines).values(
-        lines.map(l => ({
-          orderId,
-          artNumber:   l.artNumber,
-          mrp:         String(l.mrp),
-          qty:         l.qty,
-          lineDiscPct: String(lineDiscPct),
-        }))
-      )
+export interface PrintableBill {
+  lines: { artNumber: string; mrp: number; qty: number; hsn: string | null }[]
+  lineDiscPct: number | null
+  /** Saved amounts (sale_bills); null for a bill made before migration 0017 that is not backfilled yet. */
+  amounts: BillAmounts | null
+}
+
+/**
+ * Lines and saved amounts of up to 100 bills, for printing / preview: ONE query whatever the number
+ * of bills (was one getBillLines call per bill).
+ */
+export async function getBillsForPrint(orderIds: number[]): Promise<Record<number, PrintableBill>> {
+  await requireRole('biller', 'admin', 'accountant')
+  const ids = [...new Set((Array.isArray(orderIds) ? orderIds : []).filter((x) => Number.isInteger(x) && x > 0))].slice(0, 100)
+  if (!ids.length) return {}
+  const rows = (await db.execute<{ id: number; lines: Array<{ artNumber: string; mrp: string; qty: number; disc: string; hsn: string | null }>; amounts: SaleBillAmountRow | null }>(sql`
+    SELECT o.id,
+      coalesce((SELECT json_agg(json_build_object('artNumber', b."artNumber", 'mrp', b.mrp, 'qty', b.qty, 'disc', b."lineDiscPct",
+          'hsn', coalesce(b.hsn, (SELECT a.hsn FROM articles a WHERE a.hsn <> '' AND upper(btrim(a."artCode")) = upper(btrim(b."artNumber")) LIMIT 1))) ORDER BY b.id)
+        FROM bill_lines b WHERE b."orderId" = o.id), '[]') AS lines,
+      (SELECT row_to_json(x) FROM (SELECT ${sql.raw(SALE_BILL_AMOUNT_COLUMNS)} FROM sale_bills sb WHERE sb."orderId" = o.id AND sb.status = 'active' LIMIT 1) x) AS amounts
+    FROM orders o WHERE o.id IN (SELECT (x)::int FROM json_array_elements_text(${JSON.stringify(ids)}::json) x)`)).rows
+  const out: Record<number, PrintableBill> = {}
+  for (const r of rows) {
+    out[Number(r.id)] = {
+      lines: r.lines.map((l) => ({ artNumber: l.artNumber, mrp: Number(l.mrp), qty: Number(l.qty), hsn: l.hsn || null })),
+      lineDiscPct: r.lines[0] ? Number(r.lines[0].disc) : null,
+      amounts: r.amounts ? amountsFromRow(r.amounts) : null,
     }
-  })
+  }
+  return out
 }
 
 /** Fetch persisted MRP lines for a billed order. */
@@ -390,36 +402,18 @@ export async function getBillerQueue() {
     .orderBy(desc(orders.packedAt))
 }
 
-/** Biller marks an order as billed — moves it to the dispatcher queue */
-export async function markBilled(orderId: number, isEmergency = false) {
-  const u = await requireRole('biller', 'admin')
-  await db.transaction(async (tx) => {
-    await tx.update(orders)
-      .set({
-        status: 'billed',
-        billerId: u.id,
-        billedAt: sql`now()`,
-        isEmergency,
-        updatedAt: sql`now()`,
-      })
-      .where(eq(orders.id, orderId))
-    await assignBillNo(tx, orderId)
-    await stampBillLineHsn(tx, orderId)
-  })
-  revalidatePath('/orders')
-  revalidatePath('/orders/admin')
-  revalidatePath('/orders/biller')
-  revalidatePath('/orders/dispatcher')
-}
+// Billing (order invoices, Direct Bills) and Cancel bill: app/actions/billing.ts.
 
-// Direct Bills (formerly "Emergency Bills") are created from drafts: app/actions/billing.ts.
-
-/** Biller sends order back to salesman for editing (resets to pending) */
+/** Biller sends order back to salesman for editing (resets to pending); its bill is cancelled (ledger reversed). */
 export async function sendBackToEdit(orderId: number) {
   const u = await requireRole('biller', 'admin')
   await db.transaction(async (tx) => {
-    // Boxes billed for this order go back into stock.
+    const [o] = await tx.select({ status: orders.status }).from(orders).where(eq(orders.id, orderId)).for('update')
+    if (!o) throw new Error('Order not found')
+    if (!['packed', 'billed'].includes(o.status)) throw new Error(`Only packed or billed orders can be sent back (this one is ${o.status}).`)
+    // Boxes billed for this order go back into stock; the bill is cancelled and its ledger entry reversed.
     await releaseOrderScans(tx, { id: u.id, name: u.name }, orderId, 'order sent back for editing')
+    await cancelSaleBill(tx, { id: u.id, name: u.name }, orderId, 'sent back for editing')
     await tx.update(orders)
       .set({
         status: 'pending',
@@ -485,9 +479,12 @@ export async function markDelivered(orderId: number) {
 
 // ── Admin actions ─────────────────────────────────────────────────────────────
 
+/** Delete an order that was never billed. A billed one is cancelled instead (Cancel bill keeps the record). */
 export async function deleteOrder(orderId: number) {
   const u = await requireRole('admin')
   await db.transaction(async (tx) => {
+    const [b] = (await tx.execute<{ billNo: string }>(sql`SELECT "billNo" FROM sale_bills WHERE "orderId" = ${orderId} ORDER BY id DESC LIMIT 1`)).rows
+    if (b) throw new Error(`This order has bill ${b.billNo}. Bills are never deleted — use Cancel bill instead.`)
     await releaseOrderScans(tx, { id: u.id, name: u.name }, orderId, 'order deleted')
     await tx.delete(orders).where(eq(orders.id, orderId))
   })
@@ -495,20 +492,6 @@ export async function deleteOrder(orderId: number) {
   revalidatePath('/orders')
   revalidatePath('/orders/admin')
 }
-
-/** Biller can delete a Direct Bill (isEmergency). Its boxes go back into stock first. */
-export async function deleteEmergencyBill(orderId: number) {
-  const u = await requireRole('biller', 'admin')
-  await db.transaction(async (tx) => {
-    await releaseOrderScans(tx, { id: u.id, name: u.name }, orderId, 'Direct Bill deleted')
-    await tx.delete(orders).where(and(eq(orders.id, orderId), eq(orders.isEmergency, true)))
-  })
-  revalidatePath('/inventory')
-  revalidatePath('/orders/biller')
-  revalidatePath('/orders/admin')
-}
-
-
 
 export async function getAllOrders() {
   await requireRole('admin', 'accountant')
@@ -537,21 +520,31 @@ export async function getAllOrders() {
     .limit(2000)
 }
 
-export async function adminUpdateOrderStatus(orderId: number, status: OrderStatus) {
+/**
+ * Admin moves an order to another status. "Billed" is not one of them: only billing makes a bill
+ * (owner, 23 Nov 2026). Moving a billed order back (or cancelling it) cancels its bill and reverses
+ * its ledger entry, and returns its boxes to stock — all in one transaction.
+ */
+export async function adminUpdateOrderStatus(orderId: number, status: OrderStatus, reason?: string) {
   const u = await requireRole('admin')
+  if (status === 'billed') throw new Error('Bill the order from Billing; its status cannot be set to billed by hand.')
   const patch: Record<string, unknown> = { status, updatedAt: sql`now()` }
   if (status === 'packed') patch.packedAt = sql`now()`
-  if (status === 'billed') patch.billedAt = sql`now()`
   if (status === 'dispatched') patch.dispatchedAt = sql`now()`
   if (status === 'delivered') patch.deliveredAt = sql`now()`
   // Clear picker/biller assignment when manually reverting to pending
   if (status === 'pending') { patch.pickerId = null; patch.billerId = null }
   await db.transaction(async (tx) => {
     // Moving an order back before "billed" (or cancelling it) returns its billed boxes to stock.
+    const [o] = await tx.select({ status: orders.status }).from(orders).where(eq(orders.id, orderId)).for('update')
+    if (!o) throw new Error('Order not found')
     if (['pending', 'assigned', 'packed', 'cancelled'].includes(status)) {
-      await releaseOrderScans(tx, { id: u.id, name: u.name }, orderId, `order set to ${status}`)
+      const why = reason?.trim() || `order set to ${status} by admin`
+      await releaseOrderScans(tx, { id: u.id, name: u.name }, orderId, why)
+      await cancelSaleBill(tx, { id: u.id, name: u.name }, orderId, why)
     }
     await tx.update(orders).set(patch).where(eq(orders.id, orderId))
+    await audit(tx, { actor: { id: u.id, name: u.name }, action: 'order.status_set', entityType: 'order', entityId: orderId, before: { status: o.status }, after: { status }, reason: reason?.trim() || undefined })
   })
   revalidatePath('/inventory')
   revalidatePath('/orders')

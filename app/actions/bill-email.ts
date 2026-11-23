@@ -10,7 +10,8 @@ import { audit } from '@/lib/audit'
 import { SETTING_BILL_EMAIL_SENDER, getSenderInfo, saveSender, sendMail, senderFromSetting, type SenderInfo } from '@/lib/bill-email'
 import { SETTING_BILL_TEMPLATE, normalizeBillTemplate, type BillTemplate } from '@/lib/bill-template'
 import { buildBillPdf } from '@/lib/bill-pdf'
-import { billTotals, type MrpLine } from '@/lib/bill-html'
+import type { MrpLine } from '@/lib/bill-html'
+import { SALE_BILL_AMOUNT_COLUMNS, amountsFromLines, amountsFromRow, rupees, type SaleBillAmountRow } from '@/lib/billing/bill-amounts'
 import { parseEmailList } from '@/lib/email-address'
 
 const MAX_BILLS = 20
@@ -96,8 +97,9 @@ export async function mailBills(input: { orderIds: number[]; to: string; remembe
 
   const [{ template, sender, senderError }, billRows] = await Promise.all([
     loadSettings(),
-    db.execute<{ id: number; orderNumber: string; billNo: string | null; shopkeeperName: string; shopkeeperPhone: string | null; shopkeeperAddress: string | null; billedAt: string | null; status: string; retailerId: string | null; lines: Array<{ artNumber: string; mrp: string; qty: number; disc: string; hsn: string | null }> }>(sql`
+    db.execute<{ id: number; orderNumber: string; billNo: string | null; shopkeeperName: string; shopkeeperPhone: string | null; shopkeeperAddress: string | null; billedAt: string | null; status: string; retailerId: string | null; amounts: SaleBillAmountRow | null; lines: Array<{ artNumber: string; mrp: string; qty: number; disc: string; hsn: string | null }> }>(sql`
       SELECT o.id, o."orderNumber", o."billNo", o."shopkeeperName", o."shopkeeperPhone", o."shopkeeperAddress", o."billedAt", o.status, o."retailerId",
+             (SELECT row_to_json(x) FROM (SELECT ${sql.raw(SALE_BILL_AMOUNT_COLUMNS)} FROM sale_bills sb WHERE sb."orderId" = o.id AND sb.status = 'active' LIMIT 1) x) AS amounts,
              coalesce(json_agg(json_build_object('artNumber', b."artNumber", 'mrp', b.mrp, 'qty', b.qty, 'disc', b."lineDiscPct",
                'hsn', coalesce(b.hsn, (SELECT a.hsn FROM articles a WHERE a.hsn <> '' AND upper(btrim(a."artCode")) = upper(btrim(b."artNumber")) LIMIT 1))) ORDER BY b.id)
                       FILTER (WHERE b.id IS NOT NULL), '[]') AS lines
@@ -117,12 +119,12 @@ export async function mailBills(input: { orderIds: number[]; to: string; remembe
   const prepared = await Promise.all(bills.map(async (b) => {
     const lines: MrpLine[] = b.lines.map((l) => ({ artNumber: l.artNumber, mrp: Number(l.mrp), qty: Number(l.qty), hsn: l.hsn }))
     const disc = Number(b.lines[0]?.disc ?? 30)
+    const amounts = b.amounts ? amountsFromRow(b.amounts) : amountsFromLines(lines, disc, 'intra_state')
     const pdf = await buildBillPdf({
       vendor: { name: b.shopkeeperName, phone: b.shopkeeperPhone, address: b.shopkeeperAddress },
-      order: { orderNumber: b.billNo || b.orderNumber, billedAt: b.billedAt }, lines, lineDiscPct: disc, template,
+      order: { orderNumber: b.billNo || b.orderNumber, billedAt: b.billedAt }, lines, lineDiscPct: disc, template, amounts,
     })
-    const T = billTotals(lines, disc, 'city')
-    return { b, no: b.billNo || b.orderNumber, pdf, pairs: T.totalQty, net: T.netAmt }
+    return { b, no: b.billNo || b.orderNumber, pdf, pairs: amounts.totalQty, net: rupees(amounts.grandTotalPaise) }
   }))
 
   const one = prepared.length === 1

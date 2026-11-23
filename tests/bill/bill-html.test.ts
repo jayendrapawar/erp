@@ -43,3 +43,25 @@ test('bill pages like the old ERP: page script, page height per paper size, arti
   assert.ok(a4.includes('<script>') && a4.includes("'Continued on page '"))
   assert.equal((a4.match(/data-art="PUG0"/g) ?? []).length, 10)   // the name to repeat at the top of a page
 })
+
+test('saved amounts print exactly: without GST, round-off, walk-in (migration 0017)', async () => {
+  const { amountsFromLines } = await import('../../lib/billing/bill-amounts')
+  const { computeBillTotals } = await import('../../lib/billing/bill-totals')
+  const base = { vendor: { name: 'Ramesh' }, order: { orderNumber: 'ORD-1', billNo: 'E7' }, lines, lineDiscPct: 30, template: DEFAULT_BILL_TEMPLATE }
+  // Within state, rounded to the rupee: CGST, SGST and a Round off line; words = the rounded total.
+  const t = computeBillTotals(lines, 30, 'intra_state')
+  const taxed = buildInvoiceHtml({ ...base, amounts: { ...amountsFromLines(lines, 30, 'intra_state'), roundOffPaise: t.roundOffPaise, grandTotalPaise: t.grandTotalPaise, frozen: true } })
+  assert.ok(taxed.includes('TAX INVOICE') && taxed.includes('CGST 2.5%') && taxed.includes('Discount 4.75%'))
+  if (t.roundOffPaise !== 0) assert.ok(taxed.includes('Round off'))
+  assert.ok(taxed.includes(`₹${(t.grandTotalPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`))
+  // Without GST: the template's heading, no GST rows, no 4.75 %.
+  const untaxed = buildInvoiceHtml({ ...base, amounts: amountsFromLines(lines, 30, 'untaxed') })
+  assert.ok(!untaxed.includes('TAX INVOICE') && untaxed.includes('>BILL<'))
+  assert.ok(!/CGST|SGST|IGST|Discount 4\.75/.test(untaxed.replace(/<style>[\s\S]*?<\/style>/, '')))
+  // Walk-in: no "M/s."; a party bill keeps it.
+  assert.ok(!buildInvoiceHtml({ ...base, amounts: { ...amountsFromLines(lines, 30, 'untaxed'), walkIn: true } }).includes('M/s. Ramesh'))
+  assert.ok(untaxed.includes('M/s. Ramesh'))
+  // The heading can never be set to "TAX INVOICE" for a bill without GST.
+  assert.equal(normalizeBillTemplate({ untaxedHeading: 'Tax  Invoice' }).untaxedHeading, 'BILL')
+  assert.equal(normalizeBillTemplate({ untaxedHeading: 'ESTIMATE' }).untaxedHeading, 'ESTIMATE')
+})

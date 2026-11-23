@@ -1,11 +1,13 @@
-// The sale bill as a PDF, for sending by email (owner, 21 Nov 2026). Same content and arithmetic as
-// the printed bill (lib/bill-html.ts): shop header, party, lines across pages ("Page x of y",
+// The sale bill as a PDF, for sending by email (owner, 21 Nov 2026). Same content and amounts as
+// the printed bill (lib/bill-html.ts; saved amounts from sale_bills since migration 0017): shop header, party, lines across pages ("Page x of y",
 // "Continued on page n"), totals block at the bottom of the last page (moved to a page of its own when
 // it does not fit), bank details, UPI QR, terms, signatures. Server only (pdf-lib, no browser).
 // Standard PDF fonts: amounts show "Rs." (no ₹ glyph); the retailer's Hindi name is not included.
 
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from 'pdf-lib'
-import { BILL_RATES, amountInWords, billTotals, type MrpLine } from './bill-html'
+import { amountInWords, type MrpLine } from './bill-html'
+import { amountsFromLines, rupees, type BillAmounts } from './billing/bill-amounts'
+import { ratePaise } from './billing/bill-totals'
 import { DEFAULT_UPI_QR } from './bill-default-qr'
 import { normalizeBillTemplate, type BillTemplate } from './bill-template'
 
@@ -15,6 +17,8 @@ export interface BillPdfInput {
   lines: MrpLine[]
   lineDiscPct: number
   template?: BillTemplate
+  /** The bill's saved amounts (sale_bills). Old bills without them are worked out (within state). */
+  amounts?: BillAmounts
 }
 
 const A4 = { w: 595.28, h: 841.89 }
@@ -67,8 +71,10 @@ export async function buildBillPdf(input: BillPdfInput): Promise<Uint8Array> {
     if (img) qr = img.type === 'png' ? await doc.embedPng(img.bytes) : await doc.embedJpg(img.bytes)
   }
 
-  const T = billTotals(input.lines, input.lineDiscPct, 'city')
-  const R = BILL_RATES
+  const A = input.amounts ?? amountsFromLines(input.lines, input.lineDiscPct, 'intra_state')
+  const untaxed = A.taxType === 'untaxed'
+  const net = rupees(A.grandTotalPaise)
+  const pctTxt = (p: number) => String(Number(p.toFixed(2)))
   const when = input.order.billedAt ? new Date(input.order.billedAt) : new Date()
   const p2 = (n: number) => String(n).padStart(2, '0')
   const dateStr = `${p2(when.getDate())}/${p2(when.getMonth() + 1)}/${when.getFullYear()}`
@@ -92,7 +98,7 @@ export async function buildBillPdf(input: BillPdfInput): Promise<Uint8Array> {
     let y = A4.h - M
     if (t.tagline) { center(pg, t.tagline, A4.w / 2, y - 8, 8, bold, GREY); y -= 14 }
     text(pg, t.shopName, M, y - 18, 18, bold)
-    right(pg, 'TAX INVOICE', A4.w - M, y - 12, 11, bold)
+    right(pg, untaxed ? t.untaxedHeading : 'TAX INVOICE', A4.w - M, y - 12, 11, bold)
     right(pg, `Bill No  ${input.order.orderNumber}`, A4.w - M, y - 26, 9, bold)
     right(pg, `Date  ${dateStr}${pages > 1 ? `   Page ${pageNo} of ${pages}` : ''}`, A4.w - M, y - 38, 9)
     const shopLine = [t.address, t.gstin && `GSTIN ${t.gstin}`, t.phone && `Ph ${t.phone}`, t.email].filter(Boolean).join('  -  ')
@@ -102,11 +108,11 @@ export async function buildBillPdf(input: BillPdfInput): Promise<Uint8Array> {
     hline(pg, y, 1.4, INK)
     // party
     text(pg, 'BILL TO', M, y - 12, 7, bold, GREY)
-    text(pg, `M/s. ${input.vendor.name}`, M, y - 25, 11, bold)
+    text(pg, `${A.walkIn ? '' : 'M/s. '}${input.vendor.name}`, M, y - 25, 11, bold)
     const sub = [input.vendor.phone, input.vendor.address].filter(Boolean).join('  -  ')
     if (sub) text(pg, sub.slice(0, 110), M, y - 37, 8, font, GREY)
     right(pg, 'PAIRS', A4.w - M, y - 12, 7, bold, GREY)
-    right(pg, String(T.totalQty), A4.w - M, y - 26, 12, bold)
+    right(pg, String(A.totalQty), A4.w - M, y - 26, 12, bold)
     y -= 44
     hline(pg, y)
     // column headings
@@ -124,7 +130,7 @@ export async function buildBillPdf(input: BillPdfInput): Promise<Uint8Array> {
 
   // Footer block height (bottom of the last page)
   const termsLines = wrap(t.terms, font, 7, W * 0.45)
-  const wordsLines = wrap(amountInWords(T.netAmt), bold, 8.5, W * 0.55 - 12)
+  const wordsLines = wrap(amountInWords(net), bold, 8.5, W * 0.55 - 12)
   const bankRows = t.showBank ? [['Bank', t.bankName], ['A/C No.', t.accountNo], ['IFSC', t.ifsc], ['Branch', t.branch], ['UPI', t.upiId]].filter(([, v]) => v) : []
   const leftH = 14 + wordsLines.length * 11 + 10 + (t.showBank || qr ? Math.max(bankRows.length * 11 + 14, qr ? 70 : 0) : 0)
   const FOOT = Math.max(leftH, 92) + 18 + Math.max(termsLines.length * 9, 30) + (t.footer ? 16 : 0) + 10
@@ -151,7 +157,7 @@ export async function buildBillPdf(input: BillPdfInput): Promise<Uint8Array> {
     let y = drawTop(pg, p + 1, pages.length)
     rows.forEach((l, j) => {
       n++
-      const rate = Math.ceil(l.mrp * (1 - input.lineDiscPct / 100))
+      const rate = ratePaise(l.mrp, input.lineDiscPct) / 100 // exactly the rate the totals use
       y -= ROW
       text(pg, String(n), col.n, y + 4, 8.5, font, GREY)
       if (l.artNumber !== prevArt || j === 0) text(pg, l.artNumber, col.art, y + 4, 9, bold)
@@ -170,9 +176,9 @@ export async function buildBillPdf(input: BillPdfInput): Promise<Uint8Array> {
     y -= 16
     hline(pg, y + 12, 1, INK)
     text(pg, 'Total', col.art, y, 9.5, bold)
-    center(pg, String(T.totalQty), col.qtyC, y, 10, bold)
+    center(pg, String(A.totalQty), col.qtyC, y, 10, bold)
     right(pg, `Disc ${input.lineDiscPct}%`, col.rateR, y, 9, bold)
-    right(pg, money(T.subTotal), col.amtR, y, 9.5, bold)
+    right(pg, money(rupees(A.grossPaise)), col.amtR, y, 9.5, bold)
 
     // Footer block anchored at the bottom
     const fy = M + FOOT - 4
@@ -195,13 +201,14 @@ export async function buildBillPdf(input: BillPdfInput): Promise<Uint8Array> {
     // totals
     let ty = fy
     const row = (label: string, value: string, f: PDFFont = font, color = INK) => { text(pg, label, rightX, ty, 9, f, GREY); right(pg, value, A4.w - M, ty, 9, f, color); ty -= 13 }
-    row('Sub total', money(T.subTotal))
-    row(`Discount ${R.discountPct}%`, `- ${money(T.discAmt)}`, font, rgb(0.7, 0.13, 0.2))
-    row(`CGST ${R.cgstPct}%`, money(T.cgstAmt))
-    row(`SGST ${R.sgstPct}%`, money(T.sgstAmt))
+    row('Sub total', money(rupees(A.grossPaise)))
+    if (A.discountPaise > 0) row(`Discount ${pctTxt(A.discountPct)}%`, `- ${money(rupees(A.discountPaise))}`, font, rgb(0.7, 0.13, 0.2))
+    if (A.taxType === 'intra_state') { row(`CGST ${pctTxt(A.cgstPct)}%`, money(rupees(A.cgstPaise))); row(`SGST ${pctTxt(A.sgstPct)}%`, money(rupees(A.sgstPaise))) }
+    if (A.taxType === 'inter_state') row(`IGST ${pctTxt(A.igstPct)}%`, money(rupees(A.igstPaise)))
+    if (A.roundOffPaise !== 0) row('Round off', `${A.roundOffPaise > 0 ? '+' : '-'} ${money(rupees(Math.abs(A.roundOffPaise)))}`)
     pg.drawRectangle({ x: rightX - 4, y: ty - 8, width: rightW + 4, height: 22, borderColor: INK, borderWidth: 1.2 })
     text(pg, 'Net payable', rightX + 2, ty - 1, 11, bold)
-    right(pg, `Rs. ${money(T.netAmt)}`, A4.w - M - 4, ty - 1, 12, bold)
+    right(pg, `Rs. ${money(net)}`, A4.w - M - 4, ty - 1, 12, bold)
     // terms, signatures, footer
     let sy = M + (t.footer ? 18 : 4) + Math.max(termsLines.length * 9, 30)
     for (const l of termsLines) { text(pg, l, M, sy, 7, font, GREY); sy -= 9 }

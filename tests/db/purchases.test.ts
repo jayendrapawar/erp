@@ -44,6 +44,7 @@ describe('purchases: expected stock, carton receiving (integration)', { skip: !h
 
   before(async () => {
     h = await createHarness()
+    await h.db.execute(sql`INSERT INTO retailers (id, "partyName") VALUES ('V901', 'Shop')`) // billing needs a master retailer
     await h.db.execute(sql`INSERT INTO "user" (id, name, email, role) VALUES ('u-wh','Warehouse','w@test.local','warehouse'), ('u-admin','Admin','a@test.local','admin')`)
     const a = await h.db.execute<{ id: number }>(sql`INSERT INTO articles ("artName","artCode",color,"colorCode") VALUES ('PUG-105','PUG105G','Brown','BRBR') RETURNING id`)
     const s = await h.db.execute<{ id: number; sizeLabel: string }>(sql`INSERT INTO article_sizes ("articleId","sizeLabel","sortOrder")

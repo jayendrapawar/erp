@@ -20,6 +20,7 @@ describe('inventory overview: old, cut size, idle, movers, reorder (integration)
 
   before(async () => {
     h = await createHarness()
+    await h.db.execute(sql`INSERT INTO retailers (id, "partyName") VALUES ('V901', 'Test Shop')`) // billing needs a master retailer
     await h.db.execute(sql`INSERT INTO "user" (id, name, email, role) VALUES ('u-wh','Warehouse','w@test.local','admin')`)
     for (const [name, code, col, seg] of [['PUG-105', 'PUG105G', 'BRBR', 'Gents'], ['PUG-200', 'PUG200G', 'BKBK', 'Gents'], ['PUG-300', 'PUG300G', 'TNTN', null]] as const) {
       const a = await h.db.execute<{ id: number }>(sql`INSERT INTO articles ("artName","artCode",color,"colorCode",segment) VALUES (${name}, ${code}, ${col === 'BRBR' ? 'Brown' : col === 'BKBK' ? 'Black' : 'Tan'}, ${col}, ${seg}) RETURNING id`)

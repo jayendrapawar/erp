@@ -108,6 +108,7 @@ export function BillTemplateTab() {
             <textarea rows={3} value={t.terms} onChange={(e) => set('terms', e.target.value)} className={`${inputCls} mt-1 text-foreground`} />
           </label>
           {text('footer', 'Last line', 'Thank you for your business')}
+          {text('untaxedHeading', 'Heading on bills without GST (instead of TAX INVOICE)', 'BILL')}
           {check('showHindiName', 'Print the retailer name in Hindi too')}
           <label className="flex items-center gap-2 text-sm">
             Default paper

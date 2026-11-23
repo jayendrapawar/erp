@@ -1,8 +1,8 @@
 // Details printed on sale bills, editable by an admin in Master → Bill template (owner, 20 Nov 2026).
 // Stored in app_settings under "bill.template" (migration 0009 table; audited). Client-safe.
 //
-// Discount and tax RATES are not here on purpose: bills do not store their rates yet, so changing
-// them would change the totals of bills already given to customers when they are reprinted.
+// Discount and tax RATES are not here: since migration 0017 every bill stores its own rates and
+// amounts (sale_bills), so a reprint never changes; making rates editable is a separate decision.
 
 export const SETTING_BILL_TEMPLATE = 'bill.template'
 
@@ -28,6 +28,8 @@ export interface BillTemplate {
   terms: string
   footer: string
   defaultPageSize: 'A4' | 'A5'
+  /** Heading on bills without GST (a bill without tax cannot say "TAX INVOICE"; owner to confirm the words). */
+  untaxedHeading: string
 }
 
 export const DEFAULT_BILL_TEMPLATE: BillTemplate = {
@@ -49,11 +51,12 @@ export const DEFAULT_BILL_TEMPLATE: BillTemplate = {
   terms: 'Goods once sold will not be taken back.\nSubject to Surat jurisdiction.',
   footer: 'Thank you for your business',
   defaultPageSize: 'A4',
+  untaxedHeading: 'BILL',
 }
 
 const LIMITS: Partial<Record<keyof BillTemplate, number>> = {
   tagline: 80, shopName: 60, address: 200, gstin: 20, phone: 60, email: 80, bankName: 60, accountNo: 30,
-  ifsc: 20, branch: 60, upiId: 80, terms: 600, footer: 120,
+  ifsc: 20, branch: 60, upiId: 80, terms: 600, footer: 120, untaxedHeading: 40,
 }
 const MAX_QR_CHARS = 400_000
 
@@ -68,6 +71,7 @@ export function normalizeBillTemplate(raw: unknown): BillTemplate {
   if (r.defaultPageSize === 'A4' || r.defaultPageSize === 'A5') out.defaultPageSize = r.defaultPageSize
   if (typeof r.qrImage === 'string' && (r.qrImage === '' || (/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(r.qrImage) && r.qrImage.length <= MAX_QR_CHARS))) out.qrImage = r.qrImage
   if (!out.shopName) out.shopName = DEFAULT_BILL_TEMPLATE.shopName
+  if (!out.untaxedHeading || /tax\s*invoice/i.test(out.untaxedHeading)) out.untaxedHeading = DEFAULT_BILL_TEMPLATE.untaxedHeading
   return out
 }
 

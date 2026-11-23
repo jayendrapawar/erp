@@ -10,6 +10,13 @@ import { sql } from 'drizzle-orm'
 import type { DbOrTx } from '@/lib/db/types'
 
 export const SALE_BILL = 'sale_bill'
+/** Bills without GST (small parties and walk-in) have their own series (owner, 23 Nov 2026; migration 0017). */
+export const SALE_BILL_UNTAXED = 'sale_bill_untaxed'
+export type BillSeries = typeof SALE_BILL | typeof SALE_BILL_UNTAXED
+
+export function billSeriesFor(taxType: string): BillSeries {
+  return taxType === 'untaxed' ? SALE_BILL_UNTAXED : SALE_BILL
+}
 
 export interface BillNumbering { prefix: string; next: number; padding: number; updatedByName: string; updatedAt: string }
 
@@ -17,13 +24,19 @@ export function formatBillNo(prefix: string, n: number, padding: number): string
   return `${prefix}${String(n).padStart(padding, '0')}`
 }
 
-/** The order's bill number: its existing one, or the next from the counter. 1–3 statements. */
-export async function assignBillNo(tx: DbOrTx, orderId: number): Promise<string> {
-  const cur = (await tx.execute<{ billNo: string | null }>(sql`SELECT "billNo" FROM orders WHERE id = ${orderId} FOR UPDATE`)).rows[0]
+/**
+ * The order's bill number: its existing one, or the next from the series' counter. An order billed
+ * again in the other series (taxed ↔ untaxed) takes a new number; the old one stays on its cancelled
+ * sale_bills row. 1–3 statements.
+ */
+export async function assignBillNo(tx: DbOrTx, orderId: number, series: BillSeries = SALE_BILL): Promise<string> {
+  const cur = (await tx.execute<{ billNo: string | null; lastTax: string | null }>(sql`
+    SELECT o."billNo", (SELECT b."taxType" FROM sale_bills b WHERE b."orderId" = o.id ORDER BY b.id DESC LIMIT 1) AS "lastTax"
+    FROM orders o WHERE o.id = ${orderId} FOR UPDATE OF o`)).rows[0]
   if (!cur) throw new Error('Order not found.')
-  if (cur.billNo) return cur.billNo
+  if (cur.billNo && billSeriesFor(cur.lastTax ?? 'intra_state') === series) return cur.billNo
   const seq = (await tx.execute<{ prefix: string; n: string; padding: number }>(sql`
-    UPDATE document_sequences SET next = next + 1 WHERE name = ${SALE_BILL}
+    UPDATE document_sequences SET next = next + 1 WHERE name = ${series}
     RETURNING prefix, next - 1 AS n, padding`)).rows[0]
   if (!seq) throw new Error('Bill numbering is not set up (document_sequences).')
   const billNo = formatBillNo(seq.prefix, Number(seq.n), seq.padding)
@@ -49,9 +62,9 @@ export async function stampBillLineHsn(tx: DbOrTx, orderId: number): Promise<voi
 }
 
 /** Current numbering, for Master → Bill template. 1 query. */
-export async function getBillNumbering(db: DbOrTx): Promise<BillNumbering> {
+export async function getBillNumbering(db: DbOrTx, series: BillSeries = SALE_BILL): Promise<BillNumbering> {
   const r = (await db.execute<{ prefix: string; next: string; padding: number; updatedByName: string; updatedAt: string }>(sql`
-    SELECT prefix, next, padding, "updatedByName", "updatedAt" FROM document_sequences WHERE name = ${SALE_BILL}`)).rows[0]
+    SELECT prefix, next, padding, "updatedByName", "updatedAt" FROM document_sequences WHERE name = ${series}`)).rows[0]
   if (!r) return { prefix: '', next: 1, padding: 0, updatedByName: '', updatedAt: '' }
   return { prefix: r.prefix, next: Number(r.next), padding: r.padding, updatedByName: r.updatedByName, updatedAt: new Date(r.updatedAt).toISOString() }
 }

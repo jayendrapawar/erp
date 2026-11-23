@@ -1,14 +1,16 @@
 'use server'
 
-import { assignBillNo, stampBillLineHsn } from '@/lib/billing/bill-number'
-import { revalidatePath } from 'next/cache'
+import { stampBillLineHsn } from '@/lib/billing/bill-number'
+import { billingPartyFor, cancelSaleBill, freezeSaleBill, isTaxType, notInMasterMessage, type TaxType, type WalkIn } from '@/lib/billing/sale-bill'
+import type { BillTotalsPaise } from '@/lib/billing/bill-totals'
+import { audit } from '@/lib/audit'
 import { and, eq, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { billLines, orders } from '@/lib/db/schema'
 import { requireAnyRole } from '@/lib/authz'
 import { hasPermission } from '@/lib/permissions'
 import {
-  addDraftScan, createDraft, discardDraft, generateDirectBill, listOpenDrafts, loadDraft, recordOrderScans, removeDraftScans, saveDraftHeader,
+  addDraftScan, createDraft, discardDraft, generateDirectBill, listOpenDrafts, loadDraft, recordOrderScans, releaseOrderScans, removeDraftScans, saveDraftHeader,
   type AddScanOutcome, type DraftDetail, type DraftHeader, type DraftSummary, type GeneratedBill, type StockOutCounts,
 } from '@/lib/billing/bill-stock'
 
@@ -58,45 +60,73 @@ export async function discardDirectBillDraft(draftId: number): Promise<void> {
   await discardDraft(db, await biller(), draftId)
 }
 
-export async function generateDirectBillFromDraft(draftId: number, header: Partial<DraftHeader>): Promise<GeneratedBill> {
-  const out = await generateDirectBill(db, await biller(), draftId, header)
-  revalidatePath('/orders/admin')
-  revalidatePath('/inventory')
-  return out
+/** Generate a Direct Bill: a master retailer (bill type from it unless chosen), or a walk-in customer. */
+export async function generateDirectBillFromDraft(draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn } = {}): Promise<GeneratedBill> {
+  const actor = await biller()
+  if (bill.taxType !== undefined && !isTaxType(bill.taxType)) throw new Error('Unknown bill type.')
+  return generateDirectBill(db, actor, draftId, header, bill)
 }
 
 /**
- * Bill an order (Invoices tab): status → billed, bill lines replaced, scanned boxes recorded and
- * taken out of stock. One transaction; refuses if a box is already on another bill.
+ * Bill an order (Invoices tab): status → billed, bill lines replaced, amounts frozen (sale_bills +
+ * the party ledger), scanned boxes recorded and taken out of stock. One transaction; refuses if a box
+ * is already on another bill or the party is not in the retailer master. Billing an already billed
+ * order cancels its earlier bill first (same number unless the series changes).
+ * Statements: ~12 whatever the number of lines or boxes.
  */
 export async function billOrder(
   orderId: number,
   scannedQrs: string[],
   lines: { artNumber: string; mrp: number; qty: number }[],
   lineDiscPct: number,
-): Promise<StockOutCounts & { skipped: number; billNo: string }> {
+  opts: { taxType?: TaxType } = {},
+): Promise<StockOutCounts & { skipped: number; billNo: string; taxType: TaxType; totals: BillTotalsPaise }> {
   const actor = await biller()
-  const out = await db.transaction(async (tx) => {
-    const [o] = await tx.select({ orderNumber: orders.orderNumber, status: orders.status }).from(orders).where(eq(orders.id, orderId)).for('update')
+  if (opts.taxType !== undefined && !isTaxType(opts.taxType)) throw new Error('Unknown bill type.')
+  const pct = Number(lineDiscPct)
+  if (!Number.isFinite(pct) || pct < 0 || pct > 100) throw new Error('Line discount must be between 0 and 100 %.')
+  return db.transaction(async (tx) => {
+    const o = await billingPartyFor(tx, orderId)
     if (!o) throw new Error('Order not found.')
-    if (o.status === 'cancelled' || o.status === 'delivered') throw new Error(`This order is ${o.status}.`)
-    await tx.update(orders).set({ status: 'billed', billerId: actor.id, billedAt: sql`now()`, isEmergency: false, updatedAt: sql`now()` })
+    if (['cancelled', 'dispatched', 'delivered'].includes(o.status)) throw new Error(`This order is ${o.status}.`)
+    if (!o.retailerId || !o.taxType) throw new Error(notInMasterMessage(o.shopkeeperName))
+    if (o.status === 'billed') await cancelSaleBill(tx, actor, orderId, 'billed again')
+    await tx.update(orders).set({ status: 'billed', billerId: actor.id, billedAt: sql`now()`, isEmergency: false, retailerId: o.retailerId, updatedAt: sql`now()` })
       .where(and(eq(orders.id, orderId)))
     await tx.delete(billLines).where(eq(billLines.orderId, orderId))
-    const clean = lines.filter((l) => l.artNumber && Number(l.qty) > 0)
-    if (clean.length) {
-      await tx.insert(billLines).values(clean.map((l) => ({ orderId, artNumber: l.artNumber, mrp: String(Number(l.mrp) || 0), qty: Math.floor(Number(l.qty)), lineDiscPct: String(lineDiscPct) })))
-    }
-    // Official bill number (kept when billed again) and HSN on each line — same transaction.
-    const billNo = await assignBillNo(tx, orderId)
+    const clean = lines
+      .map((l) => ({ artNumber: String(l.artNumber ?? '').trim(), mrp: Math.max(0, Math.round(Number(l.mrp) * 100) / 100 || 0), qty: Math.floor(Number(l.qty)) }))
+      .filter((l) => l.artNumber && l.qty > 0)
+    if (!clean.length) throw new Error('No items on this bill.')
+    await tx.insert(billLines).values(clean.map((l) => ({ orderId, artNumber: l.artNumber, mrp: String(l.mrp), qty: l.qty, lineDiscPct: String(pct) })))
+    // Official bill number, frozen amounts and the ledger entry; HSN on each line — same transaction.
+    const bill = await freezeSaleBill(tx, actor, { orderId, source: 'invoice', lines: clean, lineDiscPct: pct, party: { retailerId: o.retailerId, taxType: opts.taxType ?? o.taxType } })
     await stampBillLineHsn(tx, orderId)
     const counts = await recordOrderScans(tx, actor, orderId, o.orderNumber, Array.isArray(scannedQrs) ? scannedQrs : [])
-    return { ...counts, billNo }
+    return { ...counts, billNo: bill.billNo, taxType: bill.taxType, totals: bill.totals }
   })
-  revalidatePath('/orders')
-  revalidatePath('/orders/admin')
-  revalidatePath('/orders/biller')
-  revalidatePath('/orders/dispatcher')
-  revalidatePath('/inventory')
-  return out
+}
+
+/**
+ * Cancel a bill (replaces deleting it, owner 23 Nov 2026): the order is kept as cancelled with its
+ * bill number, its boxes go back into stock, the frozen bill is marked cancelled and its ledger
+ * entry reversed (money already paid against it becomes advance). Billers cancel billed orders;
+ * admins also dispatched / delivered ones. One transaction, ~8 statements.
+ */
+export async function cancelBill(orderId: number, reason: string): Promise<{ orderId: number; billNo: string | null }> {
+  const u = await requireAnyRole('biller', 'admin')
+  const actor = { id: u.id, name: u.name }
+  const why = String(reason ?? '').trim()
+  if (why.length < 3) throw new Error('Type why the bill is cancelled.')
+  return db.transaction(async (tx) => {
+    const [o] = await tx.select({ status: orders.status, billNo: orders.billNo }).from(orders).where(eq(orders.id, orderId)).for('update')
+    if (!o) throw new Error('Order not found.')
+    const allowed = u.roles.includes('admin') ? ['billed', 'dispatched', 'delivered'] : ['billed']
+    if (!allowed.includes(o.status)) throw new Error(o.status === 'cancelled' ? 'This bill is already cancelled.' : `Only ${allowed.join(' / ')} bills can be cancelled here (this order is ${o.status}).`)
+    await releaseOrderScans(tx, actor, orderId, `bill cancelled: ${why}`)
+    const sb = await cancelSaleBill(tx, actor, orderId, why)
+    await tx.update(orders).set({ status: 'cancelled', updatedAt: sql`now()` }).where(eq(orders.id, orderId))
+    await audit(tx, { actor, action: 'bill.cancelled', entityType: 'order', entityId: orderId, before: { status: o.status }, after: { status: 'cancelled', billNo: sb?.billNo ?? o.billNo }, reason: why })
+    return { orderId, billNo: sb?.billNo ?? o.billNo }
+  })
 }

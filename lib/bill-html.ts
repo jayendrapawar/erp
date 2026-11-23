@@ -12,12 +12,15 @@
  *     Each page is a fixed-height box: the totals block sits at the bottom of the last page, the
  *     spare space is between the lines and the totals (as on the old ERP bill), on A4 and A5.
  *     Without scripts the browser paginates (headings repeat, rows never split).
- *   - Amounts: rate = ceil(MRP × (1 − line discount %)); sub total − 4.75 % discount + GST (fixed
- *     rates; see the note in lib/bill-template.ts).
+ *   - Amounts: the bill's saved amounts (sale_bills, migration 0017: within state CGST + SGST,
+ *     outside state IGST, or without GST; discount, round-off, total). Old bills without saved
+ *     amounts are worked out the same way (lib/billing/bill-totals.ts), without round-off.
  */
 
 import { DEFAULT_UPI_QR } from './bill-default-qr'
 import { DEFAULT_BILL_TEMPLATE, normalizeBillTemplate, type BillTemplate } from './bill-template'
+import { amountsFromLines, rupees, type BillAmounts } from './billing/bill-amounts'
+import { ratePaise } from './billing/bill-totals'
 
 // ─── Public interfaces ────────────────────────────────────────────────────────
 
@@ -55,7 +58,10 @@ export interface BuildInvoiceOptions {
   /** Per-unit column discount %. Default 30. */
   lineDiscPct?: number
   pageSize?:    PageSize   // default: the template's default page size
-  billType?:    BillType   // default city
+  /** Old bills only (no saved amounts): city = CGST + SGST, outside = IGST. Default city. */
+  billType?:    BillType
+  /** The bill's saved amounts (sale_bills). When given, the bill prints exactly these. */
+  amounts?:     BillAmounts
   /** Shop / bank / QR / terms. Default: the shop's standard details. */
   template?:    BillTemplate
 }
@@ -186,11 +192,13 @@ function css(isA5: boolean): string {
 // ─── One bill ─────────────────────────────────────────────────────────────────
 
 function billBody(o: BuildInvoiceOptions, t: BillTemplate): string {
-  const billType = o.billType ?? 'city'
   const isA5 = (o.pageSize ?? t.defaultPageSize) === 'A5'
   const lineDiscPct = o.lineDiscPct ?? 30
-  const T = billTotals(o.lines, lineDiscPct, billType)
-  const R = BILL_RATES
+  const A = o.amounts ?? amountsFromLines(o.lines, lineDiscPct, (o.billType ?? 'city') === 'outside' ? 'inter_state' : 'intra_state')
+  const billType: BillType = A.taxType === 'inter_state' ? 'outside' : 'city'
+  const untaxed = A.taxType === 'untaxed'
+  const net = rupees(A.grandTotalPaise)
+  const pctTxt = (p: number) => String(Number(p.toFixed(2)))
 
   const refDate = o.order.billedAt ? new Date(o.order.billedAt) : new Date()
   const p2 = (n: number) => String(n).padStart(2, '0')
@@ -206,16 +214,18 @@ function billBody(o: BuildInvoiceOptions, t: BillTemplate): string {
   let n = 0
   const rows = [...groups].map(([art, ls]) => ls.map((l, i) => {
     n++
-    const rate = Math.ceil(l.mrp * (1 - lineDiscPct / 100))
+    const rate = ratePaise(l.mrp, lineDiscPct) / 100 // exactly the rate the totals use
     return `<tr data-art="${esc(art)}"${i === 0 && n > 1 ? ' class="group"' : ''}>
       <td class="c">${n}</td><td class="art">${i === 0 ? esc(art) : ''}</td>${isA5 ? '' : `<td class="hsn">${esc(l.hsn ?? '')}</td>`}
       <td class="n">${l.mrp > 0 ? fmt(l.mrp) : '—'}</td><td class="qty">${l.qty}</td>
       <td class="n">${fmt(rate)}</td><td class="n">${fmt(rate * l.qty)}</td></tr>`
   }).join('')).join('')
 
-  const taxRows = billType === 'city'
-    ? `<div><span>CGST ${R.cgstPct}%</span><span>${fmt(T.cgstAmt)}</span></div><div><span>SGST ${R.sgstPct}%</span><span>${fmt(T.sgstAmt)}</span></div>`
-    : `<div><span>IGST ${R.igstPct}%</span><span>${fmt(T.igstAmt)}</span></div>`
+  const taxRows = untaxed ? '' : billType === 'city'
+    ? `<div><span>CGST ${pctTxt(A.cgstPct)}%</span><span>${fmt(rupees(A.cgstPaise))}</span></div><div><span>SGST ${pctTxt(A.sgstPct)}%</span><span>${fmt(rupees(A.sgstPaise))}</span></div>`
+    : `<div><span>IGST ${pctTxt(A.igstPct)}%</span><span>${fmt(rupees(A.igstPaise))}</span></div>`
+  const discRow = A.discountPaise > 0 ? `<div class="disc"><span>Discount ${pctTxt(A.discountPct)}%</span><span>− ${fmt(rupees(A.discountPaise))}</span></div>` : ''
+  const roundRow = A.roundOffPaise !== 0 ? `<div><span>Round off</span><span>${A.roundOffPaise > 0 ? '+' : '−'} ${fmt(rupees(Math.abs(A.roundOffPaise)))}</span></div>` : ''
   const qrSrc = t.qrImage || DEFAULT_UPI_QR
   const pay = (t.showBank || t.showQr) ? `<div class="pay">
       ${t.showBank ? `<div class="bank"><div class="k">Bank details</div>
@@ -230,38 +240,39 @@ function billBody(o: BuildInvoiceOptions, t: BillTemplate): string {
   ${t.tagline ? `<div class="tag">${esc(t.tagline)}</div>` : ''}
   <div class="head">
     <div><div class="shop">${esc(t.shopName)}</div><div class="shop-sub">${shopLine}</div></div>
-    <div class="doc"><div class="doc-title">TAX INVOICE</div>
-      ${billType === 'outside' ? '<div class="doc-badge">OUTSIDE CITY</div>' : ''}
+    <div class="doc"><div class="doc-title">${untaxed ? esc(t.untaxedHeading) : 'TAX INVOICE'}</div>
+      ${A.taxType === 'inter_state' ? '<div class="doc-badge">OUTSIDE CITY</div>' : ''}
       <div><span class="k">Bill No </span><span class="v">${esc(billNo)}</span><span class="pg"></span></div>
       <div><span class="k">Date </span><span class="v">${dateStr}</span></div></div>
   </div>
   <div class="party">
     <div><div class="k">Bill to</div>
-      <div class="party-name">M/s. ${esc(v.name)}${t.showHindiName && v.nameHindi ? ` (${esc(v.nameHindi)})` : ''}</div>
+      <div class="party-name">${A.walkIn ? '' : 'M/s. '}${esc(v.name)}${t.showHindiName && v.nameHindi ? ` (${esc(v.nameHindi)})` : ''}</div>
       <div class="party-sub">${[v.phone, v.area, v.address].filter(Boolean).map(esc).join(' · ') || '&nbsp;'}</div></div>
-    <div style="text-align:right"><div class="k">Pairs</div><div class="party-name">${T.totalQty}</div></div>
+    <div style="text-align:right"><div class="k">Pairs</div><div class="party-name">${A.totalQty}</div></div>
   </div>
   </div>
   <table class="lines">
     <thead><tr><th class="c" style="width:${isA5 ? 22 : 30}px">#</th><th style="text-align:left">Article</th>${isA5 ? '' : '<th style="text-align:left;width:62px">HSN</th>'}
       <th class="n" style="width:${isA5 ? 62 : 80}px">MRP ₹</th><th class="c" style="width:${isA5 ? 34 : 44}px">Qty</th><th class="n" style="width:${isA5 ? 66 : 84}px">Rate ₹</th><th class="n" style="width:${isA5 ? 74 : 96}px">Amount ₹</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot><tr><td></td><td>Total</td>${isA5 ? '' : '<td></td>'}<td></td><td class="c">${T.totalQty}</td><td class="n">Disc ${lineDiscPct}%</td><td class="n">${fmt(T.subTotal)}</td></tr></tfoot>
+    <tfoot><tr><td></td><td>Total</td>${isA5 ? '' : '<td></td>'}<td></td><td class="c">${A.totalQty}</td><td class="n">Disc ${lineDiscPct}%</td><td class="n">${fmt(rupees(A.grossPaise))}</td></tr></tfoot>
   </table>
   <div class="end">
     <div class="grid">
       <div class="left">
-        <div class="words"><div class="k">Amount in words</div><div class="v">${amountInWords(T.netAmt)}</div></div>
+        <div class="words"><div class="k">Amount in words</div><div class="v">${amountInWords(net)}</div></div>
         ${pay}
       </div>
       <div class="sum">
-        <div><span>Sub total</span><span>${fmt(T.subTotal)}</span></div>
-        <div class="disc"><span>Discount ${R.discountPct}%</span><span>− ${fmt(T.discAmt)}</span></div>
+        <div><span>Sub total</span><span>${fmt(rupees(A.grossPaise))}</span></div>
+        ${discRow}
         ${taxRows}
-        <div class="net"><span>Net payable</span><span>₹${fmt(T.netAmt)}</span></div>
+        ${roundRow}
+        <div class="net"><span>Net payable</span><span>₹${fmt(net)}</span></div>
       </div>
     </div>
-    ${billType === 'outside' ? `<div class="transport">${['Transport', 'Vehicle No.', 'Destination state', 'E-way bill no.'].map(x => `<div><div class="k">${x}</div><div class="line"></div></div>`).join('')}</div>` : ''}
+    ${A.taxType === 'inter_state' ? `<div class="transport">${['Transport', 'Vehicle No.', 'Destination state', 'E-way bill no.'].map(x => `<div><div class="k">${x}</div><div class="line"></div></div>`).join('')}</div>` : ''}
     <div class="sign">
       <div class="terms">${esc(t.terms)}</div>
       <div class="sig"><div class="line"></div>Receiver's signature</div>

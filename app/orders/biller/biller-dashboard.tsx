@@ -4,8 +4,8 @@ import { playAlreadyScanned, playScanOk } from '@/lib/scan-sound'
 import { useState, useTransition, useRef, useCallback, useEffect } from 'react'
 import jsQR from 'jsqr'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
-import { getOrderWithItems, getBillLines, deleteEmergencyBill } from '@/app/actions/orders'
-import { billOrder } from '@/app/actions/billing'
+import { getOrderWithItems, getBillLines, getBillsForPrint } from '@/app/actions/orders'
+import { billOrder, cancelBill } from '@/app/actions/billing'
 import { PageNav } from '@/components/page-nav'
 import { parseQr, isValidWarehouseQr, normalizeQr } from '@/lib/qr-parser'
 import { SCAN_INTERVAL_MS } from '@/components/scanner/constants'
@@ -836,20 +836,21 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     const orders = pendingPrintOrders
     setPrintConfigOpen(false)
     // Open the window inside the click: browsers block windows opened after a wait (owner reported
-    // Print not working, 21 Nov 2026). Then load each bill's saved lines (1 query per bill) — the
-    // saved bill is what prints, with its own discount — and fill the window.
+    // Print not working, 21 Nov 2026). Then load every selected bill's saved lines and amounts (ONE
+    // query) — the saved bill is what prints, with its own discount, GST and total — and fill the window.
     const win = openPrintWindow()
     if (!win) return
     try {
-      const saved = await Promise.all(orders.map(o => getBillLines(o.id).catch(() => [])))
-      const bills = orders.map((o, i) => {
-        const rows = saved[i]
-        const lines = rows.length > 0 ? rows.map(r => ({ artNumber: r.artNumber, mrp: r.mrp, qty: r.qty, hsn: r.hsn })) : (mrpLinesMap[o.id] ?? [])
+      const saved = await getBillsForPrint(orders.map(o => o.id))
+      const bills = orders.map((o) => {
+        const s = saved[o.id]
+        const lines = s && s.lines.length > 0 ? s.lines : (mrpLinesMap[o.id] ?? [])
         return {
           vendor: { name: o.shopkeeperName, phone: o.shopkeeperPhone ?? null, address: o.shopkeeperAddress ?? null },
           order:  { orderNumber: o.orderNumber, billNo: o.billNo, billedAt: o.billedAt },
           lines,
-          lineDiscPct: rows[0] && Number.isFinite(rows[0].lineDiscPct) ? rows[0].lineDiscPct : LINE_DISC,
+          lineDiscPct: s?.lineDiscPct ?? LINE_DISC,
+          amounts: s?.amounts ?? undefined,
         }
       })
       const empty = bills.filter(b => b.lines.length === 0).map(b => b.order.orderNumber)
@@ -1585,23 +1586,32 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                 </button>
               )}
 
-              {/* Delete button — only for emergency bills */}
-              {detailOrder.isEmergency && (
+              {/* Cancel bill (bills are never deleted, owner 23 Nov 2026): boxes back to stock, ledger entry reversed */}
+              {detailOrder.status === 'billed' && (
                 <button
                   type="button"
                   disabled={isPending}
                   onClick={() => {
                     const id = detailOrder.id
+                    const reason = window.prompt(`Cancel bill ${detailOrder.billNo ?? detailOrder.orderNumber}? Its boxes go back to stock and the party no longer owes it.
+
+Why is it cancelled?`)
+                    if (reason === null) return
+                    if (reason.trim().length < 3) { window.alert('Type why the bill is cancelled.'); return }
                     setDetailOrder(null)
                     startTransition(async () => {
-                      await deleteEmergencyBill(id)
-                      setOrders(prev => prev.filter(o => o.id !== id))
-                      setMrpLinesMap(prev => { const next = { ...prev }; delete next[id]; return next })
+                      try {
+                        await cancelBill(id, reason)
+                        setOrders(prev => prev.filter(o => o.id !== id))
+                        setMrpLinesMap(prev => { const next = { ...prev }; delete next[id]; return next })
+                      } catch (e) {
+                        window.alert(`Could not cancel the bill: ${e instanceof Error ? e.message : 'network problem'}`)
+                      }
                     })
                   }}
                   className="w-full rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/20 px-4 py-2.5 text-sm font-semibold text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-950/40 disabled:opacity-50 transition-colors"
                 >
-                  {isPending ? 'Deleting…' : 'Delete Direct Bill (boxes go back to stock)'}
+                  {isPending ? 'Cancelling…' : 'Cancel bill (boxes go back to stock)'}
                 </button>
               )}
             </div>

@@ -6,10 +6,12 @@
 //   2. else its size has carton stock (received cartons)   → −1 'carton'    (stockSource 'carton')
 //   3. else its size has hand-counted (unscanned) stock    → −1 'unscanned' (stockSource 'unscanned')
 //   4. else stock is not touched                           → stockSource 'unscanned_dispatch'
-// Deleting a bill / sending it back releases its boxes and reverses their movements.
+// Cancelling a bill / sending it back releases its boxes and reverses their movements.
 // Statements per action do not grow with the number of boxes.
 
-import { assignBillNo, stampBillLineHsn } from './bill-number'
+import { stampBillLineHsn } from './bill-number'
+import { cleanWalkIn, freezeSaleBill, notInMasterMessage, type TaxType, type WalkIn } from './sale-bill'
+import type { BillTotalsPaise } from './bill-totals'
 import { and, eq, sql } from 'drizzle-orm'
 import { billLines, billScans, directBillDrafts, orders, type BillStockSource, type DraftManualLine } from '@/lib/db/schema'
 import type { Actor, Db, DbOrTx, Tx } from '@/lib/db/types'
@@ -342,38 +344,54 @@ function orderNumber(): string {
   return `ORD-${ymd}-${rand}`
 }
 
-export interface GeneratedBill { id: number; orderNumber: string; billNo: string; lines: DraftManualLine[]; stock: StockOutCounts; billedAt: string }
+export interface GeneratedBill {
+  id: number; orderNumber: string; billNo: string; lines: DraftManualLine[]; stock: StockOutCounts; billedAt: string
+  taxType: TaxType; totals: BillTotalsPaise; retailerId: string | null
+}
 
 /**
- * Generate a Direct Bill from an open draft: create the order and its lines, move the boxes onto
- * it and take them out of stock. One transaction; ~10 statements whatever the number of boxes.
+ * Generate a Direct Bill from an open draft: create the order and its lines, freeze the amounts
+ * (sale_bills + ledger entry, lib/billing/sale-bill.ts), move the boxes onto it and take them out of
+ * stock. The party must be in the retailer master, or the bill is for a walk-in customer (name only,
+ * not taxed, paid at once). One transaction; ~12 statements whatever the number of boxes.
  */
-export async function generateDirectBill(db: Db, actor: Actor, draftId: number, header: Partial<DraftHeader>): Promise<GeneratedBill> {
-  const h = cleanHeader(header)
+export async function generateDirectBill(
+  db: Db, actor: Actor, draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn } = {},
+): Promise<GeneratedBill> {
+  const walk = bill.walkIn ? cleanWalkIn(bill.walkIn) : null
+  const h = cleanHeader(walk ? { ...header, shopkeeperName: walk.name, shopkeeperPhone: walk.phone || null } : header)
   if (!h.shopkeeperName) throw new Error('Select a retailer first.')
   return db.transaction(async (tx) => {
     const [d] = await tx.select({ status: directBillDrafts.status }).from(directBillDrafts).where(eq(directBillDrafts.id, draftId)).for('update')
     if (!d || d.status !== 'open') throw new Error('This draft was already generated or discarded.')
+    const r = walk ? null : (await tx.execute<{ id: string; taxType: TaxType }>(sql`
+      SELECT id, "taxType" FROM retailers WHERE lower(btrim("partyName")) = lower(btrim(${h.shopkeeperName})) ORDER BY id LIMIT 1`)).rows[0]
+    if (!walk && !r) throw new Error(notInMasterMessage(h.shopkeeperName))
     const scans = await tx.select({ articleCode: billScans.articleCode, mrp: billScans.mrp }).from(billScans)
       .where(and(eq(billScans.draftId, draftId), eq(billScans.status, 'active')))
     const lines = buildLines(scans, h.manualLines)
     if (!lines.length) throw new Error('No items on this bill yet.')
     const number = orderNumber()
-    const [r] = await tx.execute<{ id: string }>(sql`SELECT id FROM retailers WHERE lower(btrim("partyName")) = lower(btrim(${h.shopkeeperName})) LIMIT 1`).then((x) => x.rows)
     const [order] = await tx.insert(orders).values({
       orderNumber: number, shopkeeperName: h.shopkeeperName, shopkeeperPhone: h.shopkeeperPhone, shopkeeperAddress: h.shopkeeperAddress,
       retailerId: r?.id ?? null, billerId: actor.id, status: 'billed', isEmergency: true, billedAt: sql`now()`,
     }).returning({ id: orders.id, billedAt: orders.billedAt })
     await tx.insert(billLines).values(lines.map((l) => ({ orderId: order.id, artNumber: l.artNumber, mrp: String(l.mrp), qty: l.qty, lineDiscPct: String(h.lineDiscPct) })))
-    // Official bill number and HSN on each line — same transaction (lib/billing/bill-number.ts).
-    const billNo = await assignBillNo(tx, order.id)
+    // Official bill number, frozen amounts, ledger entry; HSN on each line — same transaction.
+    const frozen = await freezeSaleBill(tx, actor, {
+      orderId: order.id, source: 'direct', lines, lineDiscPct: h.lineDiscPct,
+      party: walk ? { walkIn: walk } : { retailerId: r!.id, taxType: bill.taxType ?? r!.taxType },
+    })
     await stampBillLineHsn(tx, order.id)
     await tx.execute(sql`UPDATE bill_scans SET "orderId" = ${order.id}, "orderNumber" = ${number} WHERE "draftId" = ${draftId} AND status = 'active'`)
     const stock = await postOrderScans(tx, actor, order.id, number)
     await tx.update(directBillDrafts).set({ ...h, lineDiscPct: String(h.lineDiscPct), status: 'billed', orderId: order.id, closedAt: sql`now()`, updatedAt: sql`now()` })
       .where(eq(directBillDrafts.id, draftId))
-    await audit(tx, { actor, action: 'direct_bill.generated', entityType: 'order', entityId: order.id, after: { orderNumber: number, billNo, draftId, boxes: scans.length, stock } })
-    return { id: order.id, orderNumber: number, billNo, lines, stock, billedAt: new Date(order.billedAt ?? Date.now()).toISOString() }
+    await audit(tx, { actor, action: 'direct_bill.generated', entityType: 'order', entityId: order.id, after: { orderNumber: number, billNo: frozen.billNo, draftId, boxes: scans.length, stock } })
+    return {
+      id: order.id, orderNumber: number, billNo: frozen.billNo, lines, stock, billedAt: new Date(order.billedAt ?? Date.now()).toISOString(),
+      taxType: frozen.taxType, totals: frozen.totals, retailerId: frozen.retailerId,
+    }
   })
 }
 
