@@ -4,7 +4,7 @@ import { sizeWithCode } from '@/lib/orders/size-label'
 import { useState, useTransition, useRef, useEffect, useMemo, useId, useCallback, forwardRef, useImperativeHandle, Fragment } from 'react'
 import { useAutoRefresh } from '@/lib/use-auto-refresh'
 import { StatusPill, fmt, PageHeader, StatButton, SegTabs, SidePanel, isInProgress, type SegTab } from '../_components/shared'
-import { createOrder, updateOrder, cancelOrder, getOlderSalesmanOrders, getSalesmanOrderWithItems, salesmanAssignPicker } from '@/app/actions/orders'
+import { createOrder, updateOrder, cancelOrder, getOlderSalesmanOrders, getSalesmanOrderWithItems, salesmanAssignPicker, sendToBilling } from '@/app/actions/orders'
 import { PageNav } from '@/components/page-nav'
 import { useShowMore } from '@/components/show-more'
 import { fuzzyFilter } from '@/lib/fuzzy'
@@ -49,7 +49,12 @@ interface Props {
   catalogue: CatalogueData
   sets: OrderSet[]
   pickers: { id: string; name: string | null }[]
+  /** Admin: the picker list also offers "Direct bill" (skip the picker, straight to the biller). */
+  canDirectBill?: boolean
 }
+
+/** Picker choice meaning "no picker: send straight to billing" (owner, 23 Nov 2026). */
+const DIRECT_BILL = '__direct__'
 
 // Alias types that were previously imported from catalogue actions
 type ShopkeeperResult = CatalogueData['vendors'][number]
@@ -725,7 +730,7 @@ const STATUS_CHIPS: { value: StatusFilter; label: string }[] = [
 const matchesStatus = (status: string, f: StatusFilter) =>
   f === 'all' ? true : f === 'in_progress' ? isInProgress(status) : status === f
 
-export function SalesmanDashboard({ orders: recentOrders, userName, userId, embedded, catalogue: serverCatalogue, sets = [], pickers = [] }: Props) {
+export function SalesmanDashboard({ orders: recentOrders, userName, userId, embedded, catalogue: serverCatalogue, sets = [], pickers = [], canDirectBill = false }: Props) {
   // The page sends open orders + the last 60 days (max 2000). "Load older" adds 100 at a time
   // (keyset after the oldest shown); repeats are dropped, so the list never shows an order twice.
   const [older, setOlder] = useState<ExistingOrder[]>([])
@@ -2991,6 +2996,9 @@ ${bills}
                     className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     <option value="">— Skip / No picker —</option>
+                    {canDirectBill && ['pending', 'assigned'].includes(order.status) && (
+                      <option value={DIRECT_BILL}>⚡ Direct bill — no picker, straight to the biller</option>
+                    )}
                     {pickers.map(p => (
                       <option key={p.id} value={p.id}>{p.name ?? p.id}</option>
                     ))}
@@ -3006,12 +3014,23 @@ ${bills}
                 disabled={pickerAssigning}
                 onClick={() => {
                   startPickerAssign(async () => {
-                    // Fire all assignments in parallel (skip blanks)
-                    await Promise.all(
-                      selectedOrdersForAssign
-                        .filter(o => pickerAssignMap[o.id])
-                        .map(o => salesmanAssignPicker(o.id, pickerAssignMap[o.id]))
-                    )
+                    // Fire all assignments in parallel (skip blanks). "Direct bill" sends the order
+                    // straight to the biller (admin only): it skips the picker; the biller scans the
+                    // boxes against the order and what is not received is marked.
+                    try {
+                      await Promise.all(
+                        selectedOrdersForAssign
+                          .filter(o => pickerAssignMap[o.id])
+                          .map(async o => {
+                            if (pickerAssignMap[o.id] !== DIRECT_BILL) return salesmanAssignPicker(o.id, pickerAssignMap[o.id])
+                            const row = await sendToBilling(o.id)
+                            keepSaved(row, o.salesmanName ?? null)
+                          })
+                      )
+                    } catch (e) {
+                      window.alert(`Not all orders were assigned: ${e instanceof Error ? e.message : 'network problem'}`)
+                      return
+                    }
                     setPickerAssignOpen(false)
                     handlePrintOrders(selectedOrdersForAssign, printSettingsSnapshot.pageSize, printSettingsSnapshot.orientation)
                   })

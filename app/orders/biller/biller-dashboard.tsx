@@ -21,8 +21,11 @@ import { useListKeys } from '@/lib/shortcuts/list'
 import { tablistKeyDown, tabProps, useTabKeys } from '@/lib/shortcuts/tabs'
 import { DialogKeys } from '@/components/dialog-keys'
 
+// Two tabs (owner, 23 Nov 2026): Bills (orders to bill, incl. orders the admin sent straight to
+// billing) and Receipts. A bill without an order opens from the Direct bill button in the corner
+// (view 'emergency', kept mounted so its scans survive switching back and forth).
 const BILLER_TABS: { value: BillerTab; label: string }[] = [
-  { value: 'verify', label: 'Invoices' }, { value: 'emergency', label: 'Direct Billing' }, { value: 'generated', label: 'Receipts' },
+  { value: 'verify', label: 'Bills' }, { value: 'generated', label: 'Receipts' },
 ]
 
 type BillerTab = 'verify' | 'emergency' | 'generated'
@@ -298,6 +301,47 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     scanMsgTimer.current = setTimeout(() => setScanMsg(null), 3000)
   }
 
+  // ── Direct bill from an order: extra boxes (not ordered / more than ordered) are billed too ──
+  const scanDirect = !!scanOrder?.isEmergency
+  const scanDirectRef = useRef(false)
+  scanDirectRef.current = scanDirect
+  function addExtraScan(raw: string, art: string, size: string, why: string) {
+    setScannedQrs(prev => [...prev, raw])
+    // key "extra:…": Undo removes the box without touching the per-line counts.
+    setScanHistory(prev => [...prev, { type: 'qr', key: `extra:${art}|${size}`, raw, label: `${art} / SZ(${size}) — extra` }])
+    playScanOk()
+    showMsg('warn', `${art} Sz ${size} — ${why}; billed as an extra`)
+  }
+
+  /** Order vs scanned for a Direct bill: pairs received per order line, short lines, extra boxes. */
+  function directDiff() {
+    const groups = new Map<string, DetailItem[]>()
+    for (const i of scanItems) { const k = itemKey(i.artNumber, i.sizeNumber, i.artCode); groups.set(k, [...(groups.get(k) ?? []), i]) }
+    const packed: { itemId: number; qty: number }[] = []
+    const short: { label: string; ordered: number; got: number }[] = []
+    for (const [k, items] of groups) {
+      let left = scannedMap[k] ?? 0
+      const ordered = items.reduce((t, i) => t + i.quantityOrdered, 0)
+      const got = Math.min(left, ordered)
+      for (const i of items) { const q = Math.min(left, i.quantityOrdered); left -= q; packed.push({ itemId: i.id, qty: q }) }
+      if (got < ordered) short.push({ label: `${items[0].artNumber} size ${items[0].sizeNumber ?? '—'}`, ordered, got })
+    }
+    const extraMap = new Map<string, number>()
+    for (const a of scanHistory) {
+      if (a.type !== 'qr' || !a.key.startsWith('extra:')) continue
+      const label = a.key.slice(6).replace('|', ' size ')
+      extraMap.set(label, (extraMap.get(label) ?? 0) + 1)
+    }
+    return { packed, short, extra: [...extraMap].map(([label, qty]) => ({ label, qty })) }
+  }
+  const [directDiffShown, setDirectDiffShown] = useState<ReturnType<typeof directDiff> | null>(null)
+  /** Save a Direct bill: when it differs from the order, ask first (keep the changes or adjust). */
+  function handleDirectSave() {
+    const d = directDiff()
+    if (d.short.length || d.extra.length) setDirectDiffShown(d)
+    else handleSaveBill()
+  }
+
   // ── handle a decoded QR string ───────────────────────────────────────────────
   function handleQrDecode(raw: string) {
     const devSuffix = showDevTrackingRef.current ? ` (${raw})` : ''
@@ -327,6 +371,11 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     })
 
     if (candidates.length === 0) {
+      if (scanDirectRef.current) {
+        if (scannedQrsRef.current.some(q => normalizeQr(q) === parsed.normalized)) { showMsg('warn', `${art} Sz ${size} — Duplicate QR, already scanned` + devSuffix); playAlreadyScanned(); return }
+        addExtraScan(raw, art, size, 'not in this order')
+        return
+      }
       showMsg('warn', `${art} Sz ${size} — Not in this order` + devSuffix)
       return
     }
@@ -357,6 +406,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     const current    = scannedMapRef.current[sharedKey] ?? 0
     const totalCap   = candidates.reduce((sum, i) => sum + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0)
 
+    if (current >= totalCap && scanDirectRef.current) { addExtraScan(raw, art, size, `more than ordered (${totalCap})`); return }
     if (current >= totalCap) {
       showMsg('warn', `${art} Size : ${size} — Already fully scanned (${totalCap} pkd)` + devSuffix)
       return
@@ -512,7 +562,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     if (!isSameOrder || scanItems.length === 0) {
       try {
         const data = await getOrderWithItems(order.id)
-        setScanItems(data.items as DetailItem[])
+        const items = data.items as DetailItem[]
+        // Direct bill from an order (no picker): scans count against the ORDERED pairs.
+        setScanItems(order.isEmergency ? items.map(i => ({ ...i, quantityPacked: i.quantityOrdered, status: 'packed' })) : items)
       } catch {
         setScanItems([])
       }
@@ -710,6 +762,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     const mrpKey = (art: string, mrp: number) => `${art}__${mrp.toFixed(2)}`
 
     const qrsCopy  = [...scannedQrs]
+    // Direct bill from an order: pairs received per order line (scans fill lines in order).
+    const packedForSave = scanOrder.isEmergency ? directDiff().packed : null
     const mrpMap   = new Map<string, MrpLine>()
 
     // ── QR scans → resolve canonical article name from DB order items ──────────
@@ -777,7 +831,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       // On failure (e.g. a box is already on another bill) the scanner stays open with its scans.
       let billed: Awaited<ReturnType<typeof billOrder>>
       try {
-        billed = await billOrder(orderId, qrsCopy, builtLines, discPct)
+        billed = await billOrder(orderId, qrsCopy, builtLines, discPct, packedForSave ? { packed: packedForSave } : {})
       } catch (e) {
         setActiveId(null)
         showMsg('err', e instanceof Error ? e.message : 'Could not save the bill. Try again.')
@@ -991,10 +1045,16 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
           <StatCard label="My Bills"  value={counts.myBills} color="text-blue-600 dark:text-blue-400" />
         </div>
 
-        {/* ── Tabs ── */}
-        <div role="tablist" aria-label="Biller" onKeyDown={tablistKeyDown} className="flex rounded-xl border border-border bg-muted/40 p-1 mb-4 gap-1">
-          {/* Invoices */}
-          {(['verify', 'emergency', 'generated'] as BillerTab[]).map(tab => (
+        {/* ── Tabs + Direct bill (corner) ── */}
+        {activeTab === 'emergency' ? (
+          <div className="mb-4 flex items-center justify-between gap-2">
+            <button type="button" onClick={() => switchTab('verify')} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted">← Bills</button>
+            <p className="text-sm font-bold">⚡ Direct bill <span className="font-normal text-muted-foreground">(no order)</span></p>
+          </div>
+        ) : (
+        <div className="mb-4 flex items-stretch gap-2">
+        <div role="tablist" aria-label="Biller" onKeyDown={tablistKeyDown} className="flex flex-1 rounded-xl border border-border bg-muted/40 p-1 gap-1">
+          {(['verify', 'generated'] as BillerTab[]).map(tab => (
             <button
               key={tab}
               type="button"
@@ -1006,23 +1066,30 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              {tab === 'verify' ? 'Invoices' : tab === 'emergency' ? 'Direct Billing' : 'Receipts'}
-              {tab !== 'emergency' && (
+              {tab === 'verify' ? 'Bills' : 'Receipts'}
+              {
                 <span className={`inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums ${
                   activeTab === tab ? 'bg-primary-foreground/25 text-primary-foreground' : 'bg-muted-foreground/20 text-muted-foreground'
                 }`}>
                   {tab === 'verify' ? counts.packed : counts.billed}
                 </span>
-              )}
+              }
             </button>
           ))}
         </div>
+          <button type="button" onClick={() => switchTab('emergency')} title="Direct bill — a bill without an order"
+            aria-label="Direct bill (a bill without an order)"
+            className="shrink-0 inline-flex items-center gap-1 rounded-xl border border-border bg-card px-3 text-xs font-semibold hover:bg-muted">
+            <span aria-hidden>⚡</span><span className="hidden sm:inline">Direct bill</span>
+          </button>
+        </div>
+        )}
 
-        {/* ── Verify Orders tab ── */}
+        {/* ── Bills tab (orders to bill) ── */}
         {activeTab === 'verify' && (
           <div ref={verifyListRef} className="space-y-3">
             {verifyOrders.length === 0 && (
-              <div className="text-center py-12 text-muted-foreground text-sm">No orders to verify 🎉</div>
+              <div className="text-center py-12 text-muted-foreground text-sm">No orders to bill 🎉</div>
             )}
             {verifyOrders.map(order => {
               const isProcessing = isPending && activeId === order.id
@@ -1038,11 +1105,14 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                       <button type="button" data-row-open onClick={e => { e.stopPropagation(); handleViewOrder(order) }} className="rounded text-left font-medium text-sm hover:underline">{order.shopkeeperName}</button>
                       <p className="font-mono text-xs text-muted-foreground mt-0.5">{order.orderNumber}</p>
                     </div>
-                    <StatusPill status={order.status} />
+                    <div className="flex items-center gap-1.5">
+                      {order.isEmergency && <DirectBillBadge />}
+                      <StatusPill status={order.status} />
+                    </div>
                   </div>
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-xs text-muted-foreground">Packed: {fmt(order.packedAt)}</p>
+                      <p className="text-xs text-muted-foreground">{order.isEmergency ? 'Sent to billing' : 'Packed'}: {fmt(order.packedAt)}</p>
                     </div>
                     <div onClick={e => e.stopPropagation()}>
                       <button
@@ -1051,7 +1121,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                         disabled={isProcessing}
                         className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
                       >
-                        {isProcessing ? '…' : 'Scan Items'}
+                        {isProcessing ? '…' : order.isEmergency ? 'Direct bill' : 'Scan Items'}
                       </button>
                     </div>
                   </div>
@@ -1197,11 +1267,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5">
                               <button type="button" data-row-open onClick={e => { e.stopPropagation(); setPreviewOrder(order) }} className="min-w-0 truncate rounded text-left text-sm font-medium text-foreground leading-snug hover:underline">{order.shopkeeperName}</button>
-                              {order.isEmergency && (
-                                <span className="shrink-0 inline-flex items-center rounded-full bg-red-100 dark:bg-red-900/30 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-red-700 dark:text-red-400">
-                                  Direct Bill
-                                </span>
-                              )}
+                              {order.isEmergency && <DirectBillBadge />}
                             </div>
                             <div className="flex items-center gap-2 mt-0.5">
                               {order.billNo && <span className="text-[11px] font-bold text-foreground">{`Bill ${order.billNo}`}</span>}
@@ -2059,21 +2125,56 @@ Why is it cancelled?`)
             </div>
             <button
               type="button"
-              onClick={handleSaveBill}
-              disabled={!allVerified || isPending}
+              onClick={scanDirect ? handleDirectSave : handleSaveBill}
+              disabled={(scanDirect ? scannedQrs.length === 0 && Object.keys(manualEntries).length === 0 : !allVerified) || isPending}
               className={`w-full rounded-xl py-3.5 text-sm font-semibold transition-all shadow-sm ${
-                allVerified
+                allVerified || (scanDirect && scannedQrs.length + Object.keys(manualEntries).length > 0)
                   ? 'bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white'
                   : 'bg-muted text-muted-foreground cursor-not-allowed'
               }`}
             >
               {isPending
                 ? 'Saving…'
+                : scanDirect
+                ? (allVerified ? '✓ Save Direct bill' : 'Save Direct bill (check differences)')
                 : allVerified
                 ? '✓ Save Bill'
                 : `Scan all items to enable Save (${Object.values(scannedMap).reduce((a, b) => a + b, 0)} / ${scanItems.filter(i => i.status !== 'out_of_stock').reduce((s, i) => s + i.quantityPacked, 0)})`
               }
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Direct bill differs from the order: keep the changes or adjust ── */}
+      {directDiffShown && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-4" role="dialog" aria-modal="true" aria-labelledby="direct-diff-title">
+          <DialogKeys onClose={() => setDirectDiffShown(null)} />
+          <div className="w-full max-w-md rounded-2xl border border-border bg-background p-5 shadow-lg">
+            <h2 id="direct-diff-title" className="text-base font-bold">⚠ The bill is different from the order</h2>
+            <div className="mt-3 max-h-[50vh] space-y-3 overflow-y-auto text-sm">
+              {directDiffShown.short.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Not received (marked on the order)</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {directDiffShown.short.map(x => <li key={x.label} className="flex justify-between gap-3"><span>{x.label}</span><span className="tabular-nums text-red-600 dark:text-red-400">{x.got} of {x.ordered}</span></li>)}
+                  </ul>
+                </div>
+              )}
+              {directDiffShown.extra.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Not ordered / more than ordered (billed)</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {directDiffShown.extra.map(x => <li key={x.label} className="flex justify-between gap-3"><span>{x.label}</span><span className="tabular-nums text-amber-700 dark:text-amber-400">+{x.qty}</span></li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+            <p className="mt-3 text-xs text-muted-foreground">Keep: the bill has exactly what was scanned. Adjust: go back and scan more or undo.</p>
+            <div className="mt-4 flex gap-2">
+              <button type="button" onClick={() => setDirectDiffShown(null)} className="flex-1 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold hover:bg-muted">Adjust</button>
+              <button type="button" autoFocus onClick={() => { setDirectDiffShown(null); handleSaveBill() }} className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">Keep these changes</button>
+            </div>
           </div>
         </div>
       )}
@@ -2332,5 +2433,14 @@ Why is it cancelled?`)
       )}
 
     </div>
+  )
+}
+
+/** Small mark for a bill made without the picker (Direct bill). */
+function DirectBillBadge() {
+  return (
+    <span title="Direct bill (no picker)" className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+      ⚡ Direct
+    </span>
   )
 }

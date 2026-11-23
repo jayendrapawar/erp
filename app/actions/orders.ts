@@ -123,6 +123,7 @@ export async function updateOrder(orderId: number, input: CreateOrderInput) {
       statusPatch.pickerId = null
       statusPatch.billerId = null
       statusPatch.packedAt = null
+      statusPatch.isEmergency = false // back into the picker flow
     }
     // Header and replacement lines are written together or not at all.
     statusPatch.retailerId = await retailerIdFor(tx, input.shopkeeperName)
@@ -421,6 +422,7 @@ export async function sendBackToEdit(orderId: number) {
         billerId: null,
         packedAt: null,
         billedAt: null,
+        isEmergency: false, // back to the salesman and picker
         updatedAt: sql`now()`,
       })
       .where(eq(orders.id, orderId))
@@ -534,6 +536,7 @@ export async function adminUpdateOrderStatus(orderId: number, status: OrderStatu
   if (status === 'delivered') patch.deliveredAt = sql`now()`
   // Clear picker/biller assignment when manually reverting to pending
   if (status === 'pending') { patch.pickerId = null; patch.billerId = null }
+  if (status === 'pending' || status === 'assigned') patch.isEmergency = false
   await db.transaction(async (tx) => {
     // Moving an order back before "billed" (or cancelling it) returns its billed boxes to stock.
     const [o] = await tx.select({ status: orders.status }).from(orders).where(eq(orders.id, orderId)).for('update')
@@ -551,6 +554,25 @@ export async function adminUpdateOrderStatus(orderId: number, status: OrderStatu
   revalidatePath('/orders/admin')
   revalidatePath('/orders/picker')
   revalidatePath('/orders/biller')
+}
+
+/**
+ * Admin sends an order straight to billing (owner, 23 Nov 2026; Orders → Salesman → Assign picker →
+ * "Direct bill"): it skips the picker and waits on the
+ * biller's Bills tab as a Direct bill (isEmergency + packed). The biller scans the boxes against the
+ * ordered pairs; what is not received is marked on the order when it is billed. One statement + audit.
+ */
+export async function sendToBilling(orderId: number) {
+  const u = await requireRole('admin')
+  return db.transaction(async (tx) => {
+    const [row] = await tx.update(orders)
+      .set({ status: 'packed', isEmergency: true, pickerId: null, packedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(and(eq(orders.id, orderId), inArray(orders.status, ['pending', 'assigned'])))
+      .returning(LIST_ROW)
+    if (!row) throw new Error('Only pending or assigned orders can be sent straight to billing (it may have been packed already). Reload and check.')
+    await audit(tx, { actor: { id: u.id, name: u.name }, action: 'order.sent_to_billing', entityType: 'order', entityId: orderId, after: { status: 'packed', direct: true } })
+    return row
+  })
 }
 
 export async function salesmanAssignPicker(orderId: number, pickerId: string) {

@@ -4,6 +4,7 @@ import { stampBillLineHsn } from '@/lib/billing/bill-number'
 import { billingPartyFor, cancelSaleBill, freezeSaleBill, isTaxType, notInMasterMessage, type TaxType, type WalkIn } from '@/lib/billing/sale-bill'
 import type { BillTotalsPaise } from '@/lib/billing/bill-totals'
 import { audit } from '@/lib/audit'
+import { recordReceivedPairs } from '@/lib/billing/received-pairs'
 import { and, eq, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { billLines, orders } from '@/lib/db/schema'
@@ -72,6 +73,10 @@ export async function generateDirectBillFromDraft(draftId: number, header: Parti
  * the party ledger), scanned boxes recorded and taken out of stock. One transaction; refuses if a box
  * is already on another bill or the party is not in the retailer master. Billing an already billed
  * order cancels its earlier bill first (same number unless the series changes).
+ *
+ * Direct bill from an order (owner, 23 Nov 2026): an order the admin sent straight to billing
+ * (isEmergency, no picker) is billed as scanned; `packed` gives the pairs received per order line,
+ * saved on the order (0 = out of stock), so what was not received stays marked on the order.
  * Statements: ~12 whatever the number of lines or boxes.
  */
 export async function billOrder(
@@ -79,7 +84,7 @@ export async function billOrder(
   scannedQrs: string[],
   lines: { artNumber: string; mrp: number; qty: number }[],
   lineDiscPct: number,
-  opts: { taxType?: TaxType } = {},
+  opts: { taxType?: TaxType; packed?: { itemId: number; qty: number }[] } = {},
 ): Promise<StockOutCounts & { skipped: number; billNo: string; taxType: TaxType; totals: BillTotalsPaise }> {
   const actor = await biller()
   if (opts.taxType !== undefined && !isTaxType(opts.taxType)) throw new Error('Unknown bill type.')
@@ -90,9 +95,13 @@ export async function billOrder(
     if (!o) throw new Error('Order not found.')
     if (['cancelled', 'dispatched', 'delivered'].includes(o.status)) throw new Error(`This order is ${o.status}.`)
     if (!o.retailerId || !o.taxType) throw new Error(notInMasterMessage(o.shopkeeperName))
+    if (opts.packed && !o.isEmergency) throw new Error('Only orders sent straight to billing are billed as scanned.')
     if (o.status === 'billed') await cancelSaleBill(tx, actor, orderId, 'billed again')
-    await tx.update(orders).set({ status: 'billed', billerId: actor.id, billedAt: sql`now()`, isEmergency: false, retailerId: o.retailerId, updatedAt: sql`now()` })
+    // isEmergency is kept: true = billed without the picker (Direct bill icon on Receipts).
+    await tx.update(orders).set({ status: 'billed', billerId: actor.id, billedAt: sql`now()`, retailerId: o.retailerId, updatedAt: sql`now()` })
       .where(and(eq(orders.id, orderId)))
+    // Pairs received per order line; what was not received stays marked on the order.
+    if (opts.packed?.length) await recordReceivedPairs(tx, actor, orderId, opts.packed)
     await tx.delete(billLines).where(eq(billLines.orderId, orderId))
     const clean = lines
       .map((l) => ({ artNumber: String(l.artNumber ?? '').trim(), mrp: Math.max(0, Math.round(Number(l.mrp) * 100) / 100 || 0), qty: Math.floor(Number(l.qty)) }))

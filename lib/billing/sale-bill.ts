@@ -134,9 +134,9 @@ export async function cancelSaleBill(tx: Tx, actor: Actor, orderId: number, reas
 }
 
 /** The party an order is billed to: its retailer, else an exact name match. 1 query (caller locks the order). */
-export async function billingPartyFor(tx: Tx, orderId: number): Promise<{ orderNumber: string; status: string; shopkeeperName: string; retailerId: string | null; taxType: TaxType | null } | null> {
-  const r = (await tx.execute<{ orderNumber: string; status: string; shopkeeperName: string; retailerId: string | null; taxType: TaxType | null }>(sql`
-    SELECT o."orderNumber", o.status, o."shopkeeperName", r.id AS "retailerId", r."taxType"
+export async function billingPartyFor(tx: Tx, orderId: number): Promise<{ orderNumber: string; status: string; shopkeeperName: string; isEmergency: boolean; retailerId: string | null; taxType: TaxType | null } | null> {
+  const r = (await tx.execute<{ orderNumber: string; status: string; shopkeeperName: string; isEmergency: boolean; retailerId: string | null; taxType: TaxType | null }>(sql`
+    SELECT o."orderNumber", o.status, o."shopkeeperName", o."isEmergency", r.id AS "retailerId", r."taxType"
     FROM orders o
     LEFT JOIN LATERAL (
       SELECT x.id, x."taxType" FROM retailers x
