@@ -1,5 +1,5 @@
 import { requirePageUser } from '@/lib/authz'
-import { retailerColumns } from '@/lib/retailer-columns'
+import { retailerColumns, toBillingVendor } from '@/lib/retailer-columns'
 import { redirect } from 'next/navigation'
 import { db } from '@/lib/db'
 import { vendors } from '@/lib/db/schema'
@@ -83,13 +83,7 @@ export default async function OrdersPage() {
       ...promises,
     ])
 
-    const billingVendors: BillingVendor[] = vendorRows.map(v => ({
-      id:      v.id,
-      name:    v.partyName,
-      code:    v.area   || null,
-      phone:   v.phone  || null,
-      address: [v.address, v.city].filter(Boolean).join(', ') || null,
-    }))
+    const billingVendors: BillingVendor[] = vendorRows.map(toBillingVendor)
 
     return (
       <MultiRoleOrdersHub

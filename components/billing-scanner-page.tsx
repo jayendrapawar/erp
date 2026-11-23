@@ -23,6 +23,9 @@ import {
 import type { DraftHeader, DraftSummary, GeneratedBill, MasterMatch } from '@/lib/billing/bill-stock'
 import { DialogKeys } from '@/components/dialog-keys'
 import { askConfirm } from '@/components/confirm-dialog'
+import { BillTypeChoice } from '@/components/bill-type-choice'
+import { computeBillTotals, ratePaise, toBp, type TaxType } from '@/lib/billing/bill-totals'
+import { amountsFromTotals, billTotalRows, formatRs } from '@/lib/billing/bill-amounts'
 
 function newUuid(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
@@ -41,6 +44,8 @@ export interface BillingVendor {
   code: string | null   // area
   phone: string | null
   address: string | null
+  /** Bill type in the retailer master (the bill's default). */
+  taxType: TaxType
 }
 
 // ── Bill line ──────────────────────────────────────────────────────────────────
@@ -277,6 +282,24 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
   const [selectedVendor, setSelectedVendor] = useState<BillingVendor | null>(null)
   // Direct Billing: who picked the goods (kept on this screen only; chosen again for a resumed draft).
   const [pickedBy, setPickedBy] = useState('')
+  // Bill type (owner, 23 Nov 2026): from the retailer, changeable for this bill.
+  const [taxType, setTaxType] = useState<TaxType>('intra_state')
+  // Walk-in customer: name only, without GST, pays at once (cash / UPI), bill discount typed.
+  const [walkIn, setWalkIn] = useState(false)
+  const [walkName, setWalkName] = useState('')
+  const [walkPhone, setWalkPhone] = useState('')
+  const [walkPaid, setWalkPaid] = useState<'cash' | 'upi' | ''>('')
+  const [walkDisc, setWalkDisc] = useState('0')
+  function chooseVendor(v: BillingVendor | null) {
+    setSelectedVendor(v)
+    setSkQuery(v?.name ?? '')
+    setTaxType(v?.taxType ?? 'intra_state')
+  }
+  function toggleWalkIn(on: boolean) {
+    setWalkIn(on)
+    if (on) chooseVendor(null)
+    else { setWalkName(''); setWalkPhone(''); setWalkPaid(''); setWalkDisc('0') }
+  }
 
   const skResults = useMemo<BillingVendor[]>(() => {
     if (!skQuery.trim()) return safeVendors.slice(0, 20)
@@ -386,8 +409,8 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
     articleNotedRef.current = new Set()
     commitLines([])
     setTouched({})
-    setSelectedVendor(null)
-    setSkQuery('')
+    chooseVendor(null)
+    toggleWalkIn(false)
     setPickedBy('')
     setLineDiscPct(30)
     draftIdRef.current = null
@@ -423,9 +446,9 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
       setTouched(ranks)
       commitLines(lines)
       const v = safeVendors.find((x) => x.name === d.shopkeeperName)
-        ?? (d.shopkeeperName ? { id: `draft-${id}`, name: d.shopkeeperName, code: null, phone: d.shopkeeperPhone, address: d.shopkeeperAddress } : null)
-      setSelectedVendor(v)
-      setSkQuery(v?.name ?? '')
+        ?? (d.shopkeeperName ? { id: `draft-${id}`, name: d.shopkeeperName, code: null, phone: d.shopkeeperPhone, address: d.shopkeeperAddress, taxType: 'intra_state' as const } : null)
+      if (v) toggleWalkIn(false)
+      chooseVendor(v)
       setLineDiscPct(d.lineDiscPct)
       showSuccess(`Draft resumed: ${d.scans.length} boxes`)
     } catch (e) {
@@ -767,7 +790,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
   useEffect(() => { if (!onBillGenerated) getBillTemplate().then(setBillTemplate).catch(() => {}) }, [onBillGenerated])
 
   async function handlePrint() {
-    if (!selectedVendor) { showError('Please select a vendor first.'); return }
+    if (!selectedVendor && !walkIn) { showError('Please select a vendor first.'); return }
     if (billLines.length === 0) { showError('No items scanned yet.'); return }
 
     // Build MrpLine[] from billLines (each BillLine already has artNumber + mrp + qty)
@@ -780,8 +803,12 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
       try {
         const id = await ensureDraft()
         const header = draftHeader()
-        const res = await generateDirectBillFromDraft(id, header, { pickerId: pickedBy })
-        onBillGenerated({ ...res, shopkeeperName: header.shopkeeperName, shopkeeperPhone: header.shopkeeperPhone, shopkeeperAddress: header.shopkeeperAddress })
+        const res = await generateDirectBillFromDraft(id, header, walkIn
+          ? { pickerId: pickedBy, walkIn: { name: walkName.trim(), phone: walkPhone.trim(), paidMode: walkPaid as 'cash' | 'upi', discountPct: walkDiscNum } }
+          : { pickerId: pickedBy, taxType })
+        onBillGenerated(walkIn
+          ? { ...res, shopkeeperName: walkName.trim(), shopkeeperPhone: walkPhone.trim() || null, shopkeeperAddress: null }
+          : { ...res, shopkeeperName: header.shopkeeperName, shopkeeperPhone: header.shopkeeperPhone, shopkeeperAddress: header.shopkeeperAddress })
         resetLocal()
         if (res.stock.unscanned_dispatch > 0) showWarning(`Bill ${res.orderNumber} saved. ${res.stock.unscanned_dispatch} box(es) went out as Unscanned dispatch.`)
       } catch (e) {
@@ -793,6 +820,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
     }
 
     // Standalone /billing page — open print window directly
+    if (!selectedVendor) return
     const html = buildInvoiceHtml({
       vendor: {
         name:    selectedVendor.name,
@@ -811,11 +839,6 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
     win.document.write(html); win.document.close(); win.focus()
     win.onload = () => win.print()
   }
-
-  // ── Fixed charges ─────────────────────────────────────────────────────────
-  const DISC_PCT = 4.75
-  const CGST_PCT = 2.50
-  const SGST_PCT = 2.50
 
   // Per-unit column discount — user-configurable via the Bill tab input
   const [lineDiscPct, setLineDiscPct] = useState<number | ''>(30)
@@ -847,13 +870,15 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
   }, [headerKey])
 
   const totalQty   = billLines.reduce((s, l) => s + l.qty, 0)
-  // Sub Total uses the discounted rate (same formula as printed invoice)
-  const subTotal   = billLines.reduce((s, l) => s + Math.ceil(l.mrp * (1 - LINE_DISC_PCT / 100)) * l.qty, 0)
-  const discAmt    = Math.round(subTotal * DISC_PCT / 100 * 100) / 100
-  const afterDisc  = subTotal - discAmt
-  const cgstAmt    = Math.round(afterDisc * CGST_PCT / 100 * 100) / 100
-  const sgstAmt    = Math.round(afterDisc * SGST_PCT / 100 * 100) / 100
-  const netAmt     = Math.round((afterDisc + cgstAmt + sgstAmt) * 100) / 100
+  // Same arithmetic as the saved and printed bill (lib/billing/bill-totals.ts), for the chosen bill type.
+  const walkDiscNum = Math.round(Number(walkDisc) * 100) / 100
+  const walkDiscOk = walkDisc.trim() !== '' && Number.isFinite(walkDiscNum) && walkDiscNum >= 0 && walkDiscNum <= 100
+  const billTax: TaxType = walkIn ? 'untaxed' : taxType
+  const amounts = amountsFromTotals(
+    computeBillTotals(billLines, LINE_DISC_PCT, billTax, walkIn ? { discountBp: toBp(walkDiscOk ? walkDiscNum : 0) } : {}),
+    billTax, walkIn,
+  )
+  const totalRows = billTotalRows(amounts)
 
   const otherDrafts = drafts.filter(d => d.id !== draftId)
 
@@ -864,8 +889,11 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
   // Undo stays available while the last added box is still on the bill (also after a warning).
   const canUndo = !!lastAdded && billLines.some(l => l.boxCodes.includes(lastAdded.raw))
   const needsPicker = directBill && !pickedBy
-  const canGenerate = !!selectedVendor && !needsPicker && billLines.length > 0 && !isSaving && pendingScans === 0
-  const generateHint = !selectedVendor ? 'Choose the retailer to generate the bill.'
+  const partyHint = walkIn
+    ? (!walkName.trim() ? 'Type the customer\'s name.' : !walkPaid ? 'Choose how the customer paid: cash or UPI.' : !walkDiscOk ? 'Bill discount must be 0 to 100 %.' : '')
+    : (!selectedVendor ? 'Choose the retailer to generate the bill.' : '')
+  const canGenerate = !partyHint && !needsPicker && billLines.length > 0 && !isSaving && pendingScans === 0
+  const generateHint = partyHint ? partyHint
     : needsPicker ? 'Choose who picked the goods.'
     : billLines.length === 0 ? 'Scan boxes to start the bill.'
     : pendingScans > 0 ? 'Saving scans…' : ''
@@ -890,7 +918,18 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
         <section aria-label="Retailer and scanning" className="rounded-2xl border border-border bg-card p-3">
           <div className="flex flex-wrap items-stretch gap-2">
             <div className="min-w-0 flex-[1_1_240px]">
-              {!selectedVendor ? (
+              {walkIn ? (
+                <div className="grid h-12 grid-cols-[1fr_8rem] gap-2">
+                  <label className="sr-only" htmlFor="walk-name">Customer name</label>
+                  <input id="walk-name" value={walkName} onChange={e => setWalkName(e.target.value)} maxLength={200} autoComplete="off" autoFocus
+                    placeholder="Walk-in customer — name"
+                    className={`h-12 min-w-0 rounded-xl border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring ${walkName.trim() ? 'border-border' : 'border-amber-400'}`} />
+                  <label className="sr-only" htmlFor="walk-phone">Phone (optional)</label>
+                  <input id="walk-phone" value={walkPhone} onChange={e => setWalkPhone(e.target.value)} maxLength={40} inputMode="tel" autoComplete="off"
+                    placeholder="Phone (optional)"
+                    className="h-12 min-w-0 rounded-xl border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+              ) : !selectedVendor ? (
                 <SearchCombobox<BillingVendor>
                   id="vendor-search"
                   label="Retailer"
@@ -900,8 +939,8 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
                   placeholder="Retailer — type name, area or phone…"
                   inputValue={skQuery}
                   onInputChange={setSkQuery}
-                  onSelect={v => { setSelectedVendor(v); setSkQuery(v.name); focusScan() }}
-                  onClear={() => { setSelectedVendor(null); setSkQuery('') }}
+                  onSelect={v => { chooseVendor(v); focusScan() }}
+                  onClear={() => chooseVendor(null)}
                   results={skResults}
                   loading={false}
                   getKey={v => v.id}
@@ -919,10 +958,18 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
                     <span className="block truncate text-sm font-semibold text-foreground" data-no-translate>{selectedVendor.name}</span>
                     <span className="block truncate text-xs text-muted-foreground">{[selectedVendor.code, selectedVendor.phone].filter(Boolean).join(' · ') || selectedVendor.address || ''}</span>
                   </span>
-                  <button type="button" onClick={() => { setSelectedVendor(null); setSkQuery('') }} className="shrink-0 rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-semibold hover:bg-muted">Change</button>
+                  <button type="button" onClick={() => chooseVendor(null)} className="shrink-0 rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-semibold hover:bg-muted">Change</button>
                 </div>
               )}
             </div>
+
+            {directBill && (
+              <button type="button" aria-pressed={walkIn} onClick={() => toggleWalkIn(!walkIn)}
+                title="Walk-in customer: name only, without GST, pays now"
+                className={`h-12 shrink-0 rounded-xl border px-3 text-sm font-semibold ${walkIn ? 'border-amber-500 bg-amber-500/15 text-amber-800 dark:text-amber-200' : 'border-border hover:bg-muted'}`}>
+                {walkIn ? '✓ Walk-in' : 'Walk-in'}
+              </button>
+            )}
 
             {directBill && (
               <div className="min-w-0 flex-[0_1_200px]">
@@ -1036,7 +1083,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
                   </thead>
                   <tbody>
                     {recentLines.map((line, n) => {
-                      const rate = Math.ceil(line.mrp * (1 - LINE_DISC_PCT / 100))
+                      const rate = ratePaise(line.mrp, LINE_DISC_PCT) / 100
                       const isLast = lastAdded?.key === line.key
                       return (
                         <tr key={line.key} className={`border-b border-border/50 ${isLast ? 'bg-primary/10' : ''}`}>
@@ -1081,15 +1128,41 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
                   className="h-8 w-16 rounded-lg border border-input bg-background px-1.5 text-center text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
               </label>
             </div>
+            {directBill && (walkIn ? (
+              <div className="mb-3 space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-2.5 dark:border-amber-800 dark:bg-amber-950/30">
+                <p className="text-xs font-semibold text-amber-900 dark:text-amber-200">Walk-in · without GST · paid now</p>
+                <div className="flex items-center gap-2">
+                  <div role="radiogroup" aria-label="Paid by" className="flex flex-1 gap-1">
+                    {(['cash', 'upi'] as const).map(m => (
+                      <button key={m} type="button" role="radio" aria-checked={walkPaid === m} onClick={() => setWalkPaid(m)}
+                        className={`h-8 flex-1 rounded-lg border text-xs font-semibold ${walkPaid === m ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:bg-muted'}`}>
+                        {m === 'cash' ? 'Cash' : 'UPI'}
+                      </button>
+                    ))}
+                  </div>
+                  <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                    Bill disc %
+                    <input type="number" min="0" max="100" step="0.5" value={walkDisc} onChange={e => setWalkDisc(e.target.value)}
+                      className={`h-8 w-14 rounded-lg border bg-background px-1 text-center text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring ${walkDiscOk ? 'border-input' : 'border-red-500'}`} />
+                  </label>
+                </div>
+              </div>
+            ) : (
+              <div className="mb-3">
+                <BillTypeChoice value={taxType} onChange={setTaxType} partyDefault={selectedVendor?.taxType ?? null} />
+              </div>
+            ))}
             <div className="space-y-1.5 text-sm tabular-nums">
-              <div className="flex justify-between text-muted-foreground"><span>{`Sub total (${totalQty} boxes)`}</span><span className="text-foreground">₹{subTotal.toFixed(2)}</span></div>
-              <div className="flex justify-between text-muted-foreground"><span>{`Discount (${DISC_PCT}%)`}</span><span className="text-red-600 dark:text-red-400">− ₹{discAmt.toFixed(2)}</span></div>
-              <div className="flex justify-between text-muted-foreground"><span>{`CGST (${CGST_PCT}%)`}</span><span className="text-foreground">₹{cgstAmt.toFixed(2)}</span></div>
-              <div className="flex justify-between text-muted-foreground"><span>{`SGST (${SGST_PCT}%)`}</span><span className="text-foreground">₹{sgstAmt.toFixed(2)}</span></div>
+              {totalRows.map(r => (
+                <div key={r.key} className="flex justify-between text-muted-foreground">
+                  <span>{r.label}</span>
+                  <span className={r.tone === 'minus' ? 'text-red-600 dark:text-red-400' : 'text-foreground'}>{r.value}</span>
+                </div>
+              ))}
             </div>
             <div className="mt-3 flex items-baseline justify-between rounded-xl border-2 border-foreground/80 px-3 py-2.5">
               <span className="text-sm font-bold">Net payable</span>
-              <span className="font-display text-2xl font-bold tabular-nums">₹{netAmt.toFixed(2)}</span>
+              <span className="font-display text-2xl font-bold tabular-nums">{formatRs(amounts.grandTotalPaise)}</span>
             </div>
             <div className="mt-3 hidden lg:block">
               {generateHint && <p className="mb-2 text-xs text-amber-700 dark:text-amber-400">{generateHint}</p>}
@@ -1111,7 +1184,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
           <div className="mx-auto flex max-w-3xl items-center gap-3">
             <div className="min-w-0 flex-1">
               <p className="text-[11px] text-muted-foreground">{`Net payable · ${totalQty} box(es)`}</p>
-              <p className="font-display text-lg font-bold tabular-nums text-foreground">₹{netAmt.toFixed(2)}</p>
+              <p className="font-display text-lg font-bold tabular-nums text-foreground">{formatRs(amounts.grandTotalPaise)}</p>
               {generateHint && <p className="truncate text-[11px] text-amber-700 dark:text-amber-400">{generateHint}</p>}
             </div>
             <button type="button" onClick={() => { void handlePrint() }} disabled={!canGenerate}

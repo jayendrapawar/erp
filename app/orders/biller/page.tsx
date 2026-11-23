@@ -1,5 +1,5 @@
 import { requirePageUser } from '@/lib/authz'
-import { retailerColumns } from '@/lib/retailer-columns'
+import { retailerColumns, toBillingVendor } from '@/lib/retailer-columns'
 import { db } from '@/lib/db'
 import { vendors } from '@/lib/db/schema'
 import { eq, asc } from 'drizzle-orm'
@@ -23,13 +23,7 @@ export default async function BillerPage() {
     listPickerChoices(db),
   ])
 
-  const billingVendors: BillingVendor[] = vendorRows.map(v => ({
-    id:      v.id,
-    name:    v.partyName,
-    code:    v.area   || null,
-    phone:   v.phone  || null,
-    address: [v.address, v.city].filter(Boolean).join(', ') || null,
-  }))
+  const billingVendors: BillingVendor[] = vendorRows.map(toBillingVendor)
 
   const articleNumbers = catalogue.articles.map(a => a.artNumber)
   return <BillerDashboard orders={billerOrders} currentBillerId={currentBillerId} vendors={billingVendors} articles={articleNumbers} pickers={pickers} />

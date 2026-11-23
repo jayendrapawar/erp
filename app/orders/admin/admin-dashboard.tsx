@@ -7,7 +7,9 @@ import { useUrlFilters } from '@/lib/use-url-filters'
 import { useListKeys } from '@/lib/shortcuts/list'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
-import { adminAssignPicker, adminUnassignPicker, getOrderWithItems, getPickerAssignments, deleteOrder, getBillLines } from '@/app/actions/orders'
+import { adminAssignPicker, adminUnassignPicker, getOrderWithItems, getPickerAssignments, deleteOrder, getBillsForPrint } from '@/app/actions/orders'
+import { BillDetailCard } from '@/components/bill-detail-card'
+import { amountsFromLines, type BillAmounts } from '@/lib/billing/bill-amounts'
 import { DialogKeys } from '@/components/dialog-keys'
 
 interface MrpLine {
@@ -153,6 +155,8 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
   const [detailOrder, setDetailOrder] = useState<OrderRow | null>(null)
   const [detailItems, setDetailItems] = useState<DetailItem[]>([])
   const [detailBillLines, setDetailBillLines] = useState<MrpLine[]>([])
+  // The bill's saved amounts and line discount (getBillsForPrint: the same query the printed bill uses).
+  const [detailBill, setDetailBill] = useState<{ lineDiscPct: number; amounts: BillAmounts } | null>(null)
   const [detailBillLinesLoading, setDetailBillLinesLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState('')
@@ -175,6 +179,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
     setDetailOrder(order)
     setDetailItems([])
     setDetailBillLines([])
+    setDetailBill(null)
     setDetailError('')
     setDetailLoading(true)
     try {
@@ -190,8 +195,11 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
     if (['billed', 'dispatched', 'delivered'].includes(order.status)) {
       setDetailBillLinesLoading(true)
       try {
-        const rows = await getBillLines(order.id)
-        setDetailBillLines(rows)
+        const bill = (await getBillsForPrint([order.id]))[order.id]
+        const lines = bill?.lines ?? []
+        const disc = bill?.lineDiscPct ?? 30
+        setDetailBillLines(lines)
+        if (lines.length) setDetailBill({ lineDiscPct: disc, amounts: bill?.amounts ?? amountsFromLines(lines, disc, 'intra_state') })
       } catch {
         setDetailBillLines([])
       } finally {
@@ -525,95 +533,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                     )
                   }
 
-                  const LINE_DISC_PCT = (detailBillLines[0] as { lineDiscPct?: number }).lineDiscPct ?? 30
-                  const DISC_PCT = 4.75
-                  const CGST_PCT = 2.50
-                  const SGST_PCT = 2.50
-
-                  const totalQty  = detailBillLines.reduce((s, l) => s + l.qty, 0)
-                  const subTotal  = detailBillLines.reduce((s, l) => s + Math.ceil(l.mrp * (1 - LINE_DISC_PCT / 100)) * l.qty, 0)
-                  const discAmt   = Math.round(subTotal * DISC_PCT / 100 * 100) / 100
-                  const afterDisc = subTotal - discAmt
-                  const cgstAmt   = Math.round(afterDisc * CGST_PCT / 100 * 100) / 100
-                  const sgstAmt   = Math.round(afterDisc * SGST_PCT / 100 * 100) / 100
-                  const netAmt    = Math.round((afterDisc + cgstAmt + sgstAmt) * 100) / 100
-                  const fmtRs     = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-
-                  // group by artNumber for display
-                  const artGroupMap = new Map<string, typeof detailBillLines>()
-                  for (const l of detailBillLines) {
-                    if (!artGroupMap.has(l.artNumber)) artGroupMap.set(l.artNumber, [])
-                    artGroupMap.get(l.artNumber)!.push(l)
-                  }
-
-                  return (
-                    <div className="rounded-xl border border-border bg-card overflow-hidden">
-                      {/* Header */}
-                      <div className="px-4 py-3 bg-muted/30 border-b border-border flex items-center justify-between">
-                        <p className="text-sm font-semibold text-foreground">Bill Items</p>
-                        <span className="text-xs text-muted-foreground tabular-nums">
-                          {detailBillLines.length} line{detailBillLines.length !== 1 ? 's' : ''} · {totalQty} box{totalQty !== 1 ? 'es' : ''} · {fmtRs(subTotal)}
-                        </span>
-                      </div>
-
-                      {/* Discount % */}
-                      <div className="px-4 py-2 border-b border-border bg-muted/10 flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">Disc %</span>
-                        <span className="text-xs font-bold text-foreground tabular-nums">{LINE_DISC_PCT}</span>
-                      </div>
-
-                      {/* Line items table */}
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs border-collapse">
-                          <thead className="bg-muted/20 border-b border-border">
-                            <tr>
-                              <th className="text-left px-4 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Article</th>
-                              <th className="text-right px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">MRP</th>
-                              <th className="text-right px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Disc {LINE_DISC_PCT}%</th>
-                              <th className="text-center px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Qty</th>
-                              <th className="text-right px-4 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Amt</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {Array.from(artGroupMap.entries()).map(([artNumber, artLines]) =>
-                              artLines.map((l, li) => {
-                                const rate = Math.ceil(l.mrp * (1 - LINE_DISC_PCT / 100))
-                                const amt  = rate * l.qty
-                                return (
-                                  <tr key={`${artNumber}-${li}`} className="odd:bg-card even:bg-muted/10">
-                                    <td className="px-4 py-2 font-semibold text-foreground">{li === 0 ? artNumber : ''}</td>
-                                    <td className="px-3 py-2 text-right text-muted-foreground tabular-nums">{fmtRs(l.mrp)}</td>
-                                    <td className="px-3 py-2 text-right tabular-nums">{fmtRs(rate)}</td>
-                                    <td className="px-3 py-2 text-center font-bold tabular-nums">{l.qty}</td>
-                                    <td className="px-4 py-2 text-right font-semibold tabular-nums">{fmtRs(amt)}</td>
-                                  </tr>
-                                )
-                              })
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-
-                      {/* Totals */}
-                      <div className="border-t border-border divide-y divide-border/60">
-                        {[
-                          { label: `Sub Total (${totalQty} boxes)`, value: fmtRs(subTotal), cls: 'font-semibold text-foreground' },
-                          { label: `Discount (${DISC_PCT}%)`,       value: `− ${fmtRs(discAmt)}`, cls: 'text-red-600 dark:text-red-400' },
-                          { label: `CGST (${CGST_PCT}%)`,           value: `+ ${fmtRs(cgstAmt)}`, cls: 'text-muted-foreground' },
-                          { label: `SGST (${SGST_PCT}%)`,           value: `+ ${fmtRs(sgstAmt)}`, cls: 'text-muted-foreground' },
-                        ].map(row => (
-                          <div key={row.label} className="flex items-center justify-between px-4 py-2 text-xs">
-                            <span className="text-muted-foreground">{row.label}</span>
-                            <span className={`tabular-nums ${row.cls}`}>{row.value}</span>
-                          </div>
-                        ))}
-                        <div className="flex items-center justify-between px-4 py-3 bg-muted/20">
-                          <span className="text-sm font-bold text-foreground">Net Payable</span>
-                          <span className="text-sm font-extrabold tabular-nums text-foreground">{fmtRs(netAmt)}</span>
-                        </div>
-                      </div>
-                    </div>
-                  )
+                  return detailBill && <BillDetailCard lines={detailBillLines} lineDiscPct={detailBill.lineDiscPct} amounts={detailBill.amounts} />
                 })()}
 
                 {/* Delete order — hidden for read-only roles (e.g. accountant) */}

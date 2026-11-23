@@ -20,6 +20,10 @@ import { useShortcut } from '@/lib/shortcuts'
 import { useListKeys } from '@/lib/shortcuts/list'
 import { tablistKeyDown, tabProps, useTabKeys } from '@/lib/shortcuts/tabs'
 import { DialogKeys } from '@/components/dialog-keys'
+import { BillDetailCard } from '@/components/bill-detail-card'
+import { BillTypeChoice } from '@/components/bill-type-choice'
+import { computeBillTotals, type TaxType } from '@/lib/billing/bill-totals'
+import { amountsFromLines, formatRs, type BillAmounts } from '@/lib/billing/bill-amounts'
 
 // Two tabs (owner, 23 Nov 2026): Bills (orders to bill, incl. orders the admin sent straight to
 // billing) and Receipts. A bill without an order opens from the Direct bill button in the corner
@@ -44,6 +48,8 @@ interface BillerOrder {
   billerId: string | null
   salesmanId: string | null
   isEmergency: boolean
+  /** The retailer's bill type (the bill's default; getBillerQueue). */
+  taxType?: TaxType | null
 }
 
 interface Props {
@@ -117,11 +123,15 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState('')
   // DB-fetched bill lines for detail panel (fallback when mrpLinesMap has no entry)
-  const [detailBillLines, setDetailBillLines] = useState<{ artNumber: string; mrp: number; qty: number; lineDiscPct: number }[] | null>(null)
+  // The billed order's lines and SAVED amounts (getBillsForPrint — the same numbers the printed bill shows).
+  const [detailBill, setDetailBill] = useState<{ lines: MrpLine[]; lineDiscPct: number; amounts: BillAmounts } | null>(null)
   const [detailBillLinesLoading, setDetailBillLinesLoading] = useState(false)
 
   // ── Scanner modal ────────────────────────────────────────────────────────────
   const [scanOrder, setScanOrder] = useState<BillerOrder | null>(null)
+  // Bill type of the bill being made (owner, 23 Nov 2026): starts from the retailer, changeable here.
+  const [billType, setBillType] = useState<TaxType>('intra_state')
+  useEffect(() => { if (scanOrder) setBillType(scanOrder.taxType ?? 'intra_state') }, [scanOrder?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const [scanItems, setScanItems] = useState<DetailItem[]>([])
   // scannedMap: itemKey → scanned count
   const [scannedMap, setScannedMap] = useState<Record<string, number>>({})
@@ -306,7 +316,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   // ── Direct bill from an order: extra boxes (not ordered / more than ordered) are billed too ──
   const scanDirect = !!scanOrder?.isEmergency
   const scanDirectRef = useRef(false)
-  scanDirectRef.current = scanDirect
+  useEffect(() => { scanDirectRef.current = scanDirect }, [scanDirect])
   function addExtraScan(raw: string, art: string, size: string, why: string) {
     setScannedQrs(prev => [...prev, raw])
     // key "extra:…": Undo removes the box without touching the per-line counts.
@@ -752,10 +762,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     }
   }
 
-  // ── save bill ────────────────────────────────────────────────────────────────
-  function handleSaveBill() {
-    if (!scanOrder) return
-    const orderId  = scanOrder.id
+  /** The bill lines the scans and manual entries make (canonical article names, one line per article + MRP). */
+  function buildScannedLines(qrs: string[], items: DetailItem[]): MrpLine[] {
     // Build MrpLine[] from scannedQrs before clearing scanner state.
     // Use the canonical article name from scanItems (matched via articlesMatch)
     // so that QR code variants (e.g. "SF0204G") are normalised to the registered
@@ -763,16 +771,13 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     // Stable map key: canonical-article-name + MRP rounded to 2dp (avoids float string mismatches)
     const mrpKey = (art: string, mrp: number) => `${art}__${mrp.toFixed(2)}`
 
-    const qrsCopy  = [...scannedQrs]
-    // Direct bill from an order: pairs received per order line (scans fill lines in order).
-    const packedForSave = scanOrder.isEmergency ? directDiff().packed : null
     const mrpMap   = new Map<string, MrpLine>()
 
     // ── QR scans → resolve canonical article name from DB order items ──────────
-    for (const raw of qrsCopy) {
+    for (const raw of qrs) {
       if (!isValidWarehouseQr(raw)) continue
       const p = parseQr(raw)
-      const canonicalItem = scanItemsRef.current.find(i =>
+      const canonicalItem = items.find(i =>
         articlesMatch(i.artNumber.toUpperCase(), p.articleCode.toUpperCase())
       )
       const artName = canonicalItem ? canonicalItem.artNumber.toUpperCase() : p.articleCode.toUpperCase()
@@ -812,7 +817,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       )
       if (existing) {
         // Keep the DB canonical name (prefer the one that has a dash or matches scanItems)
-        const canonicalItem = scanItemsRef.current.find(i =>
+        const canonicalItem = items.find(i =>
           articlesMatch(i.artNumber.toUpperCase(), existing.artNumber) ||
           articlesMatch(i.artNumber.toUpperCase(), line.artNumber)
         )
@@ -823,7 +828,17 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       }
     }
 
-    const builtLines = merged
+    return merged
+  }
+
+  // ── save bill ────────────────────────────────────────────────────────────────
+  function handleSaveBill() {
+    if (!scanOrder) return
+    const orderId  = scanOrder.id
+    const qrsCopy  = [...scannedQrs]
+    // Direct bill from an order: pairs received per order line (scans fill lines in order).
+    const packedForSave = scanOrder.isEmergency ? directDiff().packed : null
+    const builtLines = buildScannedLines(qrsCopy, scanItemsRef.current)
     setMrpLinesMap(prev => ({ ...prev, [orderId]: builtLines }))
 
     const discPct = typeof lineDiscPct === 'number' ? lineDiscPct : 30
@@ -833,7 +848,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       // On failure (e.g. a box is already on another bill) the scanner stays open with its scans.
       let billed: Awaited<ReturnType<typeof billOrder>>
       try {
-        billed = await billOrder(orderId, qrsCopy, builtLines, discPct, packedForSave ? { packed: packedForSave } : {})
+        billed = await billOrder(orderId, qrsCopy, builtLines, discPct, { taxType: billType, ...(packedForSave ? { packed: packedForSave } : {}) })
       } catch (e) {
         setActiveId(null)
         showMsg('err', e instanceof Error ? e.message : 'Could not save the bill. Try again.')
@@ -930,34 +945,29 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     setDetailOrder(order)
     setDetailItems([])
     setDetailError('')
-    setDetailBillLines(null)
+    setDetailBill(null)
     setDetailLoading(true)
-    try {
-      const { items } = await getOrderWithItems(order.id)
-      setDetailItems(items as DetailItem[])
-    } catch (e: unknown) {
-      setDetailError(e instanceof Error ? e.message : 'Failed to load order details.')
-    } finally {
-      setDetailLoading(false)
-    }
-    // Fetch bill lines from DB if not already in session mrpLinesMap
-    if (order.status === 'billed' && !mrpLinesMap[order.id]) {
-      setDetailBillLinesLoading(true)
+    const billed = order.status === 'billed'
+    setDetailBillLinesLoading(billed)
+    // The order's items and (billed) its saved bill, side by side.
+    const items = getOrderWithItems(order.id)
+      .then(({ items }) => setDetailItems(items as DetailItem[]))
+      .catch((e: unknown) => setDetailError(e instanceof Error ? e.message : 'Failed to load order details.'))
+      .finally(() => setDetailLoading(false))
+    if (billed) {
       try {
-        const rows = await getBillLines(order.id)
-        if (rows.length > 0) {
+        const bill = (await getBillsForPrint([order.id]))[order.id]
+        if (bill && bill.lines.length > 0) {
+          const disc = bill.lineDiscPct ?? 30
           // Cache into mrpLinesMap so print/mail also picks it up
-          setMrpLinesMap(prev => ({ ...prev, [order.id]: rows }))
-          setDetailBillLines(rows)
-        } else {
-          setDetailBillLines([])
+          setMrpLinesMap(prev => ({ ...prev, [order.id]: bill.lines }))
+          setDetailBill({ lines: bill.lines, lineDiscPct: disc, amounts: bill.amounts ?? amountsFromLines(bill.lines, disc, 'intra_state') })
         }
-      } catch {
-        setDetailBillLines([])
-      } finally {
+      } catch { /* shown as "Bill data not available" */ } finally {
         setDetailBillLinesLoading(false)
       }
     }
+    await items
   }
 
   // ── scan validation ──────────────────────────────────────────────────────────
@@ -1019,7 +1029,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
   // ── Derived lists ────────────────────────────────────────────────────────────
   const verifyOrders = orders.filter(o => o.status === 'packed')
+  // Newest bill first (owner, 24 Nov 2026).
   const billedOrders = orders.filter(o => o.status === 'billed')
+    .sort((a, b) => (b.billedAt ? new Date(b.billedAt).getTime() : 0) - (a.billedAt ? new Date(a.billedAt).getTime() : 0) || b.id - a.id)
 
   const counts = {
     total:   orders.length,
@@ -1503,7 +1515,6 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
               {/* ── Bill Details ── shown when billed */}
               {detailOrder.status === 'billed' && (() => {
-                const lines = mrpLinesMap[detailOrder.id] ?? []
 
                 // Still loading from DB
                 if (detailBillLinesLoading) return (
@@ -1521,8 +1532,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   </div>
                 )
 
-                // No lines in session cache or DB
-                if (lines.length === 0) return (
+                // No saved bill lines
+                if (!detailBill) return (
                   <div className="rounded-xl border border-border bg-card overflow-hidden">
                     <div className="px-4 py-3 bg-muted/30 border-b border-border">
                       <p className="text-sm font-semibold text-foreground">Bill Items</p>
@@ -1533,97 +1544,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   </div>
                 )
 
-                // Use lineDiscPct stored in DB lines if available, else fall back to current UI value
-                const LINE_DISC_PCT = (lines[0] as { lineDiscPct?: number }).lineDiscPct
-                  ?? (typeof lineDiscPct === 'number' ? lineDiscPct : 30)
-                const DISC_PCT = 4.75
-                const CGST_PCT = 2.50
-                const SGST_PCT = 2.50
-
-                const totalQty  = lines.reduce((s, l) => s + l.qty, 0)
-                const subTotal  = lines.reduce((s, l) => s + Math.ceil(l.mrp * (1 - LINE_DISC_PCT / 100)) * l.qty, 0)
-                const discAmt   = Math.round(subTotal * DISC_PCT / 100 * 100) / 100
-                const afterDisc = subTotal - discAmt
-                const cgstAmt   = Math.round(afterDisc * CGST_PCT / 100 * 100) / 100
-                const sgstAmt   = Math.round(afterDisc * SGST_PCT / 100 * 100) / 100
-                const netAmt    = Math.round((afterDisc + cgstAmt + sgstAmt) * 100) / 100
-                const fmtRs     = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-
-                // group by artNumber for display
-                const artGroupMap = new Map<string, typeof lines>()
-                for (const l of lines) {
-                  if (!artGroupMap.has(l.artNumber)) artGroupMap.set(l.artNumber, [])
-                  artGroupMap.get(l.artNumber)!.push(l)
-                }
-
-                return (
-                  <div className="rounded-xl border border-border bg-card overflow-hidden">
-                    {/* Header */}
-                    <div className="px-4 py-3 bg-muted/30 border-b border-border flex items-center justify-between">
-                      <p className="text-sm font-semibold text-foreground">Bill Items</p>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {lines.length} line{lines.length !== 1 ? 's' : ''} · {totalQty} box{totalQty !== 1 ? 'es' : ''} · {fmtRs(subTotal)}
-                      </span>
-                    </div>
-
-                    {/* Discount % badge */}
-                    <div className="px-4 py-2 border-b border-border bg-muted/10 flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground">Disc %</span>
-                      <span className="text-xs font-bold text-foreground tabular-nums">{LINE_DISC_PCT}</span>
-                    </div>
-
-                    {/* Line items table */}
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs border-collapse">
-                        <thead className="bg-muted/20 border-b border-border">
-                          <tr>
-                            <th className="text-left px-4 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Article</th>
-                            <th className="text-right px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">MRP</th>
-                            <th className="text-right px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Disc {LINE_DISC_PCT}%</th>
-                            <th className="text-center px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Qty</th>
-                            <th className="text-right px-4 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Amt</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {Array.from(artGroupMap.entries()).map(([artNumber, artLines]) =>
-                            artLines.map((l, li) => {
-                              const rate = Math.ceil(l.mrp * (1 - LINE_DISC_PCT / 100))
-                              const amt  = rate * l.qty
-                              return (
-                                <tr key={`${artNumber}-${li}`} className="odd:bg-card even:bg-muted/10">
-                                  <td className="px-4 py-2 font-semibold text-foreground">{li === 0 ? artNumber : ''}</td>
-                                  <td className="px-3 py-2 text-right text-muted-foreground tabular-nums">{fmtRs(l.mrp)}</td>
-                                  <td className="px-3 py-2 text-right tabular-nums">{fmtRs(rate)}</td>
-                                  <td className="px-3 py-2 text-center font-bold tabular-nums">{l.qty}</td>
-                                  <td className="px-4 py-2 text-right font-semibold tabular-nums">{fmtRs(amt)}</td>
-                                </tr>
-                              )
-                            })
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {/* Totals */}
-                    <div className="border-t border-border divide-y divide-border/60">
-                      {[
-                        { label: `Sub Total (${totalQty} boxes)`, value: fmtRs(subTotal), cls: 'font-semibold text-foreground' },
-                        { label: `Discount (${DISC_PCT}%)`,       value: `− ${fmtRs(discAmt)}`, cls: 'text-red-600 dark:text-red-400' },
-                        { label: `CGST (${CGST_PCT}%)`,           value: `+ ${fmtRs(cgstAmt)}`, cls: 'text-muted-foreground' },
-                        { label: `SGST (${SGST_PCT}%)`,           value: `+ ${fmtRs(sgstAmt)}`, cls: 'text-muted-foreground' },
-                      ].map(row => (
-                        <div key={row.label} className="flex items-center justify-between px-4 py-2 text-xs">
-                          <span className="text-muted-foreground">{row.label}</span>
-                          <span className={`tabular-nums ${row.cls}`}>{row.value}</span>
-                        </div>
-                      ))}
-                      <div className="flex items-center justify-between px-4 py-3 bg-muted/20">
-                        <span className="text-sm font-bold text-foreground">Net Payable</span>
-                        <span className="text-sm font-extrabold tabular-nums text-foreground">{fmtRs(netAmt)}</span>
-                      </div>
-                    </div>
-                  </div>
-                )
+                return <BillDetailCard lines={detailBill.lines} lineDiscPct={detailBill.lineDiscPct} amounts={detailBill.amounts} />
               })()}
 
               {detailOrder.status === 'packed' && (
@@ -2109,8 +2030,9 @@ Why is it cancelled?`)
 
           {/* ── Sticky bottom Save Bill button ── */}
           <div className="shrink-0 bg-background/95 backdrop-blur-sm border-t border-border px-4 py-3 safe-area-inset-bottom">
-            {/* Disc % input — mirrors billing-scanner */}
-            <div className="flex items-center gap-2 mb-2">
+            {/* Disc %, bill type and the bill's total — same arithmetic as the saved bill */}
+            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="flex items-center gap-2">
               <label htmlFor="biller-line-disc" className="text-[11px] text-muted-foreground whitespace-nowrap">Disc %</label>
               <input
                 id="biller-line-disc"
@@ -2124,7 +2046,21 @@ Why is it cancelled?`)
                 onBlur={() => { if (lineDiscPct === '') setLineDiscPct(30) }}
                 className="w-16 h-7 rounded-lg border border-input bg-background px-2 text-xs text-center focus:outline-none focus:ring-1 focus:ring-ring"
               />
-              <span className="text-[11px] text-muted-foreground">line discount applied at print time</span>
+            </div>
+            <div className="min-w-[220px] flex-1">
+              <BillTypeChoice compact value={billType} onChange={setBillType} partyDefault={scanOrder.taxType ?? null} disabled={isPending} />
+            </div>
+            {(() => {
+              const live = buildScannedLines(scannedQrs, scanItems)
+              if (!live.length) return null
+              const t = computeBillTotals(live, typeof lineDiscPct === 'number' ? lineDiscPct : 30, billType)
+              return (
+                <p className="ml-auto text-right text-xs text-muted-foreground">
+                  {`Net payable · ${t.totalQty} pairs `}
+                  <b className="text-base tabular-nums text-foreground">{formatRs(t.grandTotalPaise)}</b>
+                </p>
+              )
+            })()}
             </div>
             <button
               type="button"

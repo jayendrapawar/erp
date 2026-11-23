@@ -3,7 +3,7 @@
 // the backfill) is worked out from its lines with the same arithmetic and no round-off, so it prints
 // what it always printed.
 
-import { computeBillTotals, type TaxType, type TotalsLine } from './bill-totals'
+import { computeBillTotals, type BillTotalsPaise, type TaxType, type TotalsLine } from './bill-totals'
 
 export interface BillAmounts {
   taxType: TaxType
@@ -72,4 +72,41 @@ export const TAX_TYPE_LABEL: Record<TaxType, string> = {
   intra_state: 'Within state (CGST + SGST)',
   inter_state: 'Outside state (IGST)',
   untaxed: 'Without GST',
+}
+
+/** Short names for the bill type buttons. */
+export const TAX_TYPE_SHORT: Record<TaxType, string> = { intra_state: 'Within state', inter_state: 'Outside state', untaxed: 'Without GST' }
+
+/** Totals just worked out on a screen (before saving) in the same shape as a saved bill. */
+export function amountsFromTotals(t: BillTotalsPaise, taxType: TaxType, walkIn = false): BillAmounts {
+  return {
+    taxType, walkIn, totalQty: t.totalQty, grossPaise: t.grossPaise,
+    discountPct: t.discountBp / 100, discountPaise: t.discountPaise, taxablePaise: t.taxablePaise,
+    cgstPct: t.cgstBp / 100, cgstPaise: t.cgstPaise, sgstPct: t.sgstBp / 100, sgstPaise: t.sgstPaise, igstPct: t.igstBp / 100, igstPaise: t.igstPaise,
+    roundOffPaise: t.roundOffPaise, grandTotalPaise: t.grandTotalPaise, frozen: false,
+  }
+}
+
+/** ₹1,234.50 from paise. */
+export function formatRs(paise: number): string {
+  return `₹${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+const pctText = (p: number) => `${Number(p.toFixed(2))}%`
+
+export interface TotalRow { key: string; label: string; value: string; tone: 'plain' | 'minus' | 'muted' }
+
+/**
+ * The totals rows every screen shows, in print order: sub total, bill discount, GST (only the taxes
+ * this bill has), round off. Net payable is `formatRs(a.grandTotalPaise)`.
+ */
+export function billTotalRows(a: BillAmounts, unit = 'boxes'): TotalRow[] {
+  const rows: TotalRow[] = [{ key: 'gross', label: `Sub total (${a.totalQty} ${unit})`, value: formatRs(a.grossPaise), tone: 'plain' }]
+  if (a.discountPaise > 0 || a.discountPct > 0) rows.push({ key: 'disc', label: `Discount (${pctText(a.discountPct)})`, value: `− ${formatRs(a.discountPaise)}`, tone: 'minus' })
+  if (a.cgstPct > 0) rows.push({ key: 'cgst', label: `CGST (${pctText(a.cgstPct)})`, value: `+ ${formatRs(a.cgstPaise)}`, tone: 'muted' })
+  if (a.sgstPct > 0) rows.push({ key: 'sgst', label: `SGST (${pctText(a.sgstPct)})`, value: `+ ${formatRs(a.sgstPaise)}`, tone: 'muted' })
+  if (a.igstPct > 0) rows.push({ key: 'igst', label: `IGST (${pctText(a.igstPct)})`, value: `+ ${formatRs(a.igstPaise)}`, tone: 'muted' })
+  if (a.taxType === 'untaxed') rows.push({ key: 'nogst', label: 'GST', value: 'none', tone: 'muted' })
+  if (a.roundOffPaise !== 0) rows.push({ key: 'round', label: 'Round off', value: `${a.roundOffPaise > 0 ? '+' : '−'} ${formatRs(Math.abs(a.roundOffPaise))}`, tone: 'muted' })
+  return rows
 }

@@ -127,7 +127,8 @@ export function BillTemplateTab() {
           <button type="button" onClick={() => saved && setT(saved)} disabled={!dirty || busy} className="rounded-lg border border-border px-4 py-2.5 text-sm disabled:opacity-50">Undo changes</button>
           <button type="button" onClick={async () => { if (await askConfirm({ message: 'Put back the standard shop details? Your changes on this page are lost.', confirmLabel: 'Put back', destructive: true })) setT({ ...DEFAULT_BILL_TEMPLATE }) }} className="rounded-lg border border-border px-3 py-2.5 text-xs">Standard</button>
         </div>
-        <BillNumberSettings />
+        <BillNumberSettings series="sale_bill" />
+        <BillNumberSettings series="sale_bill_untaxed" />
         <BillEmailSettings />
       </div>
 

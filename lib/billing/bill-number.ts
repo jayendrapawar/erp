@@ -20,6 +20,16 @@ export function billSeriesFor(taxType: string): BillSeries {
 
 export interface BillNumbering { prefix: string; next: number; padding: number; updatedByName: string; updatedAt: string }
 
+/**
+ * True when a bill number of one series could read as a number of the other (prefix "E" + 123 and
+ * prefix "E1" + 23 both give "E123"), so the two series must not use these prefixes together.
+ */
+export function prefixesClash(a: string, b: string): boolean {
+  const A = a.toUpperCase(), B = b.toUpperCase()
+  const covers = (x: string, y: string) => x.startsWith(y) && /^[0-9]*$/.test(x.slice(y.length))
+  return covers(A, B) || covers(B, A)
+}
+
 export function formatBillNo(prefix: string, n: number, padding: number): string {
   return `${prefix}${String(n).padStart(padding, '0')}`
 }

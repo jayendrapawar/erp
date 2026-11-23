@@ -2,6 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { bpToPct, computeBillTotals, defaultDiscountBp, ratePaise, toPaise } from '../../lib/billing/bill-totals'
 import { billTotals } from '../../lib/bill-html'
+import { amountsFromTotals, billTotalRows, formatRs } from '../../lib/billing/bill-amounts'
+import { prefixesClash } from '../../lib/billing/bill-number'
 
 // The one real Direct Bill on dev (22 Nov 2026): 31 pairs, MRP lines at 30 % line discount.
 const lines = [{ mrp: '339.50', qty: 20 }, { mrp: '239.50', qty: 6 }, { mrp: '160.00', qty: 5 }]
@@ -50,4 +52,27 @@ test('old bills keep their amounts: round-off can be turned off', () => {
   const t = computeBillTotals(lines, 30, 'intra_state', { roundOff: false })
   assert.equal(t.roundOffPaise, 0)
   assert.equal(t.grandTotalPaise, t.netPaise)
+})
+
+test('screen totals rows: only the taxes the bill has, round off when not zero', () => {
+  const rows = (tax: 'intra_state' | 'inter_state' | 'untaxed', opts = {}) =>
+    billTotalRows(amountsFromTotals(computeBillTotals(lines, 30, tax, opts), tax)).map((r) => r.key)
+  assert.deepEqual(rows('intra_state').filter((k) => k !== 'round'), ['gross', 'disc', 'cgst', 'sgst'])
+  assert.deepEqual(rows('inter_state').filter((k) => k !== 'round'), ['gross', 'disc', 'igst'])
+  assert.deepEqual(rows('untaxed').filter((k) => k !== 'round'), ['gross', 'nogst']) // no 4.75 %, no GST
+  assert.deepEqual(rows('untaxed', { discountBp: 1000 }).filter((k) => k !== 'round'), ['gross', 'disc', 'nogst']) // walk-in typed discount
+  const a = amountsFromTotals(computeBillTotals(lines, 30, 'intra_state'), 'intra_state')
+  const round = billTotalRows(a).find((r) => r.key === 'round')
+  assert.equal(Boolean(round), a.roundOffPaise !== 0)
+  assert.equal(formatRs(123456), '₹1,234.56')
+})
+
+test('bill number prefixes of the two series must not clash', () => {
+  assert.equal(prefixesClash('E', 'E'), true)
+  assert.equal(prefixesClash('e', 'E'), true)
+  assert.equal(prefixesClash('E', 'E1'), true) // E + 123 = E1 + 23
+  assert.equal(prefixesClash('', '26'), true) // 26123 could be either
+  assert.equal(prefixesClash('', 'E'), false)
+  assert.equal(prefixesClash('SSP/', 'E'), false)
+  assert.equal(prefixesClash('E', 'EX'), false)
 })

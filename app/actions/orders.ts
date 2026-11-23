@@ -9,7 +9,7 @@ import { requireAnyRole } from '@/lib/authz'
 import type { Role } from '@/lib/permissions'
 import type { Tx } from '@/lib/db/types'
 import { releaseOrderScans } from '@/lib/billing/bill-stock'
-import { cancelSaleBill } from '@/lib/billing/sale-bill'
+import { cancelSaleBill, type TaxType } from '@/lib/billing/sale-bill'
 import { SALE_BILL_AMOUNT_COLUMNS, amountsFromRow, type BillAmounts, type SaleBillAmountRow } from '@/lib/billing/bill-amounts'
 import { audit } from '@/lib/audit'
 import { olderOrders, recentOrders, type OrderScope } from '@/lib/orders/order-list'
@@ -399,6 +399,10 @@ export async function getBillerQueue() {
       billerId: orders.billerId,
       salesmanId: orders.salesmanId,
       isEmergency: orders.isEmergency,
+      // The bill type to start from: the order's retailer, else the exact name match (as billing does).
+      taxType: sql<TaxType | null>`(SELECT x."taxType" FROM retailers x
+        WHERE x.id = ${orders.retailerId} OR (${orders.retailerId} IS NULL AND lower(btrim(x."partyName")) = lower(btrim(${orders.shopkeeperName})))
+        ORDER BY (x.id = ${orders.retailerId}) DESC NULLS LAST LIMIT 1)`,
     })
     .from(orders)
     .where(inArray(orders.status, ['packed', 'billed']))
