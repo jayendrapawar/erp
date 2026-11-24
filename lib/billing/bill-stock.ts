@@ -22,6 +22,7 @@ import { readBoxLabel, type BoxLabel } from './box-label'
 import { normalizeArticleValue } from '@/lib/article-utils'
 import { mainLocationId } from '@/lib/inventory/ledger'
 import { assertPickerChoice } from '@/lib/orders/pickers'
+import { nextOrderNumber } from '@/lib/orders/order-number'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const NORM = (col: unknown) => sql`upper(regexp_replace(btrim(${col}), '\\s+', ' ', 'g'))`
@@ -311,12 +312,6 @@ function buildLines(scans: { articleCode: string | null; mrp: string | null }[],
   return [...m.values()]
 }
 
-function orderNumber(): string {
-  const d = new Date()
-  const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-  const rand = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('')
-  return `ORD-${ymd}-${rand}`
-}
 
 export interface GeneratedBill {
   id: number; orderNumber: string; billNo: string; lines: DraftManualLine[]; stock: StockOutCounts; billedAt: string
@@ -347,7 +342,7 @@ export async function generateDirectBill(
       .where(and(eq(billScans.draftId, draftId), eq(billScans.status, 'active')))
     const lines = buildLines(scans, h.manualLines)
     if (!lines.length) throw new Error('No items on this bill yet.')
-    const number = orderNumber()
+    const number = await nextOrderNumber(tx) // ORD-1, ORD-2 … (lib/orders/order-number.ts)
     const [order] = await tx.insert(orders).values({
       orderNumber: number, shopkeeperName: h.shopkeeperName, shopkeeperPhone: h.shopkeeperPhone, shopkeeperAddress: h.shopkeeperAddress,
       retailerId: r?.id ?? null, billerId: actor.id, pickerId, status: 'billed', isEmergency: true, billedAt: sql`now()`,

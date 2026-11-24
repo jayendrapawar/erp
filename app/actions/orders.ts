@@ -13,6 +13,7 @@ import { cancelSaleBill, type TaxType } from '@/lib/billing/sale-bill'
 import { SALE_BILL_AMOUNT_COLUMNS, amountsFromRow, type BillAmounts, type SaleBillAmountRow } from '@/lib/billing/bill-amounts'
 import { audit } from '@/lib/audit'
 import { olderOrders, recentOrders, type OrderScope } from '@/lib/orders/order-list'
+import { nextOrderNumber } from '@/lib/orders/order-number'
 import { assertPickerChoice } from '@/lib/orders/pickers'
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -30,14 +31,7 @@ async function retailerIdFor(tx: Tx, name: string): Promise<string | null> {
   return r?.id ?? null
 }
 
-// ── Order-number generator ────────────────────────────────────────────────────
-
-function genOrderNumber() {
-  const d = new Date()
-  const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-  const rand = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('')
-  return `ORD-${ymd}-${rand}`
-}
+// Order numbers ORD-1, ORD-2 …: lib/orders/order-number.ts (owner, 24 Nov 2026).
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -66,7 +60,7 @@ export async function createOrder(input: CreateOrderInput) {
   // Header and lines are written together or not at all.
   const order = await db.transaction(async (tx) => {
     const [created] = await tx.insert(orders).values({
-      orderNumber: genOrderNumber(),
+      orderNumber: await nextOrderNumber(tx),
       shopkeeperName: input.shopkeeperName,
       retailerId: await retailerIdFor(tx, input.shopkeeperName),
       salesmanId: u.id,
@@ -399,6 +393,8 @@ export async function getBillerQueue() {
       billerId: orders.billerId,
       salesmanId: orders.salesmanId,
       isEmergency: orders.isEmergency,
+      // Pairs on the bill (owner, 24 Nov 2026: shown on every bill in the list). Billed orders only.
+      billedPairs: sql<number | null>`CASE WHEN ${orders.status} = 'billed' THEN (SELECT coalesce(sum(bl.qty), 0)::int FROM bill_lines bl WHERE bl."orderId" = ${orders.id}) END`,
       // The bill type to start from: the order's retailer, else the exact name match (as billing does).
       taxType: sql<TaxType | null>`(SELECT x."taxType" FROM retailers x
         WHERE x.id = ${orders.retailerId} OR (${orders.retailerId} IS NULL AND lower(btrim(x."partyName")) = lower(btrim(${orders.shopkeeperName})))

@@ -1040,7 +1040,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   // ── Derived lists ────────────────────────────────────────────────────────────
   const verifyOrders = orders.filter(o => o.status === 'packed')
   // Newest bill first (owner, 24 Nov 2026).
+  // Newest bill first (owner, 24 Nov 2026).
   const billedOrders = orders.filter(o => o.status === 'billed')
+    .sort((a, b) => (b.billedAt ? new Date(b.billedAt).getTime() : 0) - (a.billedAt ? new Date(a.billedAt).getTime() : 0) || b.id - a.id)
     .sort((a, b) => (b.billedAt ? new Date(b.billedAt).getTime() : 0) - (a.billedAt ? new Date(a.billedAt).getTime() : 0) || b.id - a.id)
 
   const counts = {
@@ -1259,9 +1261,10 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                       const checked = printSelectedIds.has(order.id)
                       const loading = printLoadingIds.has(order.id)
                       // For emergency bills: use qty from mrpLinesMap (no orderItems); for normal bills: use packed qty from printItemsMap
-                      const pairs = order.isEmergency
+                      // Pairs on the bill, shown on every row (owner, 24 Nov 2026); the bill lines are the record.
+                      const pairs = order.billedPairs ?? (order.isEmergency
                         ? (mrpLinesMap[order.id]?.reduce((s, l) => s + l.qty, 0) ?? null)
-                        : (printItemsMap[order.id]?.reduce((s, i) => s + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0) ?? null)
+                        : (printItemsMap[order.id]?.reduce((s, i) => s + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0) ?? null))
 
                       return (
                         <div
@@ -1312,9 +1315,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
                               </svg>
                             )}
-                            {checked && !loading && pairs !== null && (
-                              <span className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-400">
-                                {pairs} {order.isEmergency ? 'boxes' : 'pairs'}
+                            {!loading && pairs !== null && (
+                              <span className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-blue-700 dark:text-blue-400">
+                                {`${pairs} ${pairs === 1 ? 'pair' : 'pairs'}`}
                               </span>
                             )}
                             {/* No status label: every bill in Receipts is billed (owner, 24 Nov 2026). */}

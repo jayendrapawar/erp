@@ -5,18 +5,13 @@
 import { sql } from 'drizzle-orm'
 import type { Db } from '@/lib/db/types'
 import { audit } from '@/lib/audit'
+import { nextOrderNumber } from '@/lib/orders/order-number'
 
 const MAX_LINES = 300
 const MAX_QTY = 999
 
 export interface ShopLine { itemId: number; size: string; qty: number }
 
-function orderNumber(): string {
-  const d = new Date()
-  const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-  const rand = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('')
-  return `ORD-${ymd}-${rand}`
-}
 
 export async function placeShopOrderFor(db: Db, s: { retailerId: string; pinSetAt: number }, input: { lines: ShopLine[]; notes?: string }): Promise<{ orderId: number; orderNumber: string; pairs: number }> {
   const lines = (input.lines ?? [])
@@ -51,7 +46,7 @@ export async function placeShopOrderFor(db: Db, s: { retailerId: string; pinSetA
       const k = `${l.itemId}|${l.size}`
       merged.set(k, { ...l, qty: (merged.get(k)?.qty ?? 0) + l.qty })
     }
-    const number = orderNumber()
+    const number = await nextOrderNumber(tx) // ORD-1, ORD-2 … (lib/orders/order-number.ts)
     const [o] = (await tx.execute<{ id: number }>(sql`
       INSERT INTO orders ("orderNumber", "shopkeeperName", "shopkeeperPhone", "shopkeeperAddress", "retailerId", status, source, notes)
       VALUES (${number}, ${r.partyName}, ${r.phone || null}, ${[r.address, r.city].filter(Boolean).join(', ') || null}, ${r.id},

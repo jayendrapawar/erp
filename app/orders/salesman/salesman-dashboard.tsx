@@ -1,7 +1,8 @@
 'use client'
 
 import { sizeWithCode } from '@/lib/orders/size-label'
-import { pickListHtml } from '@/lib/orders/pick-list-print'
+import { columnsFor, pickListHtml } from '@/lib/orders/pick-list-print'
+import { PaperEstimate } from '@/components/orders/paper-estimate'
 import { useState, useTransition, useRef, useEffect, useMemo, useId, useCallback, forwardRef, useImperativeHandle, Fragment } from 'react'
 import { useAutoRefresh } from '@/lib/use-auto-refresh'
 import { StatusPill, fmt, PageHeader, StatButton, SegTabs, SidePanel, isInProgress, type SegTab } from '../_components/shared'
@@ -2744,6 +2745,13 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
                 </button>
               </div>
 
+              {/* Pages per paper for these orders, before printing; least paper preselected (owner, 24 Nov 2026). */}
+              <PaperEstimate ordersKey={selectedOrders.map(o => o.id).join(',')} pageSize={printPageSize} orientation={printOrientation}
+                onPick={(s, o) => { setPrintPageSize(s); setPrintOrientation(o) }}
+                orders={selectedOrders.map(o => ({ orderNumber: o.orderNumber, shopkeeperName: o.shopkeeperName, orderedAt: o.orderedAt, salesman: o.salesmanName ?? userName,
+                  address: o.shopkeeperAddress || vendorAddressMap.get(o.shopkeeperName.toUpperCase()) || '',
+                  items: (printItemsMap[o.id] ?? []).map(it => ({ artNumber: it.artNumber, colorNumber: it.colorNumber ?? null, sizeNumber: it.sizeNumber ?? null, quantityOrdered: it.quantityOrdered })) }))} />
+
               <div className="px-4 py-4 space-y-4">
 
                 {/* Page size */}
@@ -2783,8 +2791,8 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Orientation</p>
                   <div className="grid grid-cols-2 gap-2">
                     {([
-                      { value: 'portrait',  label: 'Portrait',  sub: '1 bill / row',  w: 24, h: 32 },
-                      { value: 'landscape', label: 'Landscape', sub: '2 bills / row', w: 32, h: 24 },
+                      { value: 'portrait',  label: 'Portrait',  sub: `${columnsFor(printPageSize, 'portrait')} columns`,  w: 24, h: 32 },
+                      { value: 'landscape', label: 'Landscape', sub: `${columnsFor(printPageSize, 'landscape')} columns`, w: 32, h: 24 },
                     ] as const).map(({ value, label, sub, w, h }) => (
                       <button key={value} type="button"
                         onClick={() => setPrintOrientation(value)}
