@@ -5,7 +5,7 @@
 // blockers cannot stop it. Loads the bill's saved lines and discount: 1 query.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Printer, X } from 'lucide-react'
+import { Ban, Pencil, Printer, X } from 'lucide-react'
 import { getBillsForPrint } from '@/app/actions/orders'
 import type { BillAmounts } from '@/lib/billing/bill-amounts'
 import { buildInvoiceHtml, transliterateToHindi, type MrpLine, type PageSize } from '@/lib/bill-html'
@@ -22,7 +22,7 @@ export interface PreviewBill {
   billedAt: Date | null
 }
 
-export function BillPreviewDialog({ bill, template, defaultPageSize, fallbackLines, fallbackDiscPct, onClose }: {
+export function BillPreviewDialog({ bill, template, defaultPageSize, fallbackLines, fallbackDiscPct, onClose, onEdit, onCancelBill }: {
   bill: PreviewBill
   template?: BillTemplate
   defaultPageSize: PageSize
@@ -30,6 +30,10 @@ export function BillPreviewDialog({ bill, template, defaultPageSize, fallbackLin
   fallbackLines?: MrpLine[]
   fallbackDiscPct: number
   onClose: () => void
+  /** Edit bill by scanning boxes on / off (Receipts, 24 Nov 2026). */
+  onEdit?: () => void
+  /** Cancel bill with a reason (boxes back to stock). */
+  onCancelBill?: () => void
 }) {
   const [lines, setLines] = useState<MrpLine[] | null>(null)
   const [amounts, setAmounts] = useState<BillAmounts | undefined>(undefined)
@@ -98,6 +102,18 @@ export function BillPreviewDialog({ bill, template, defaultPageSize, fallbackLin
             </button>
           ))}
         </div>
+        {onEdit && (
+          <button type="button" onClick={onEdit} aria-label="Edit this bill" title="Edit bill (scan boxes on / off)"
+            className="flex h-10 items-center gap-2 rounded-lg border border-border px-3.5 text-sm font-semibold text-foreground hover:bg-muted">
+            <Pencil className="h-4 w-4" aria-hidden /><span className="hidden sm:inline">Edit</span>
+          </button>
+        )}
+        {onCancelBill && (
+          <button type="button" onClick={onCancelBill} aria-label="Cancel this bill" title="Cancel bill (boxes go back to stock)"
+            className="flex h-10 items-center gap-2 rounded-lg border border-red-300 px-3.5 text-sm font-semibold text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/40">
+            <Ban className="h-4 w-4" aria-hidden /><span className="hidden sm:inline">Cancel bill</span>
+          </button>
+        )}
         <button type="button" onClick={print} disabled={!html} aria-label="Print this bill" title="Print"
           className="flex h-10 items-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
           <Printer className="h-4 w-4" aria-hidden /><span className="hidden sm:inline">Print</span>

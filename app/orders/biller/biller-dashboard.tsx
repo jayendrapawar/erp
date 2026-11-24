@@ -953,6 +953,27 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     if (selectedOrders.length) setMailOrderIds(selectedOrders.map(o => o.id))
   }
 
+  // Cancel bill (bills are never deleted, owner 23 Nov 2026): asks why, then 1 server call.
+  // Returns false when the biller backs out, so the caller keeps its panel open.
+  function confirmCancelBill(order: BillerOrder): boolean {
+    const id = order.id
+    const reason = window.prompt(`Cancel bill ${order.billNo ?? order.orderNumber}? Its boxes go back to stock and the party no longer owes it.
+
+Why is it cancelled?`)
+    if (reason === null) return false
+    if (reason.trim().length < 3) { window.alert('Type why the bill is cancelled.'); return false }
+    startTransition(async () => {
+      try {
+        await cancelBill(id, reason)
+        setOrders(prev => prev.filter(o => o.id !== id))
+        setMrpLinesMap(prev => { const next = { ...prev }; delete next[id]; return next })
+      } catch (e) {
+        window.alert(`Could not cancel the bill: ${e instanceof Error ? e.message : 'network problem'}`)
+      }
+    })
+    return true
+  }
+
   // ── detail panel ─────────────────────────────────────────────────────────────
   async function handleViewOrder(order: BillerOrder) {
     setDetailOrder(order)
@@ -1610,24 +1631,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                 <button
                   type="button"
                   disabled={isPending}
-                  onClick={() => {
-                    const id = detailOrder.id
-                    const reason = window.prompt(`Cancel bill ${detailOrder.billNo ?? detailOrder.orderNumber}? Its boxes go back to stock and the party no longer owes it.
-
-Why is it cancelled?`)
-                    if (reason === null) return
-                    if (reason.trim().length < 3) { window.alert('Type why the bill is cancelled.'); return }
-                    setDetailOrder(null)
-                    startTransition(async () => {
-                      try {
-                        await cancelBill(id, reason)
-                        setOrders(prev => prev.filter(o => o.id !== id))
-                        setMrpLinesMap(prev => { const next = { ...prev }; delete next[id]; return next })
-                      } catch (e) {
-                        window.alert(`Could not cancel the bill: ${e instanceof Error ? e.message : 'network problem'}`)
-                      }
-                    })
-                  }}
+                  onClick={() => { if (confirmCancelBill(detailOrder)) setDetailOrder(null) }}
                   className="w-full rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/20 px-4 py-2.5 text-sm font-semibold text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-950/40 disabled:opacity-50 transition-colors"
                 >
                   {isPending ? 'Cancelling…' : 'Cancel bill (boxes go back to stock)'}
@@ -1648,7 +1652,8 @@ Why is it cancelled?`)
             setMrpLinesMap(prev => ({ ...prev, [o.id]: r.lines.map(l => ({ artNumber: l.artNumber, mrp: l.mrp, qty: l.qty, hsn: l.hsn ?? null })) }))
             setOrders(prev => prev.map(x => x.id === o.id ? { ...x, billNo: r.billNo, billedPairs: r.totals.totalQty } : x))
             setEditBillOrder(null)
-            handleViewOrder({ ...o, billNo: r.billNo })
+            // Show the edited bill as it prints (reloads its saved lines and amounts: 1 query).
+            setPreviewOrder({ ...o, billNo: r.billNo, billedPairs: r.totals.totalQty })
           }}
         />
       )}
@@ -2327,6 +2332,8 @@ Why is it cancelled?`)
           fallbackLines={mrpLinesMap[previewOrder.id]}
           fallbackDiscPct={lineDiscPct === '' ? 30 : Number(lineDiscPct)}
           onClose={() => setPreviewOrder(null)}
+          onEdit={previewOrder.status === 'billed' ? () => { const o = previewOrder; setPreviewOrder(null); setEditBillOrder(o) } : undefined}
+          onCancelBill={previewOrder.status === 'billed' ? () => { if (confirmCancelBill(previewOrder)) setPreviewOrder(null) } : undefined}
         />
       )}
 
