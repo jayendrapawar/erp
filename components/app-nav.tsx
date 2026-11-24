@@ -9,6 +9,7 @@ import { GoToKeys } from './go-to-keys'
 import { ConfirmHost } from './confirm-dialog'
 import { FormKeys } from './form-keys'
 import { ArrowNav } from './arrow-nav'
+import { FocusScroll } from './focus-scroll'
 
 /**
  * Wraps every page (root layout): shares the signed-in user's name and role with the profile menu,
@@ -33,6 +34,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
       {u && <GoToKeys targets={goToTargets(sections, u.roles)} />}
       {u && <FormKeys />}
       {u && <ArrowNav />}
+      {u && <FocusScroll />}
       <ConfirmHost />
     </SessionUserProvider>
   )

@@ -34,6 +34,7 @@ registry below, so it is always current.
 |---|---|
 | `↑ ↓ ← →` | Move to the nearest button, link or box in that direction (owner, 24 Nov 2026). Inside a dialog they stay in the dialog; ↑ ↓ stay in the menu or in the page, ← → move between them. Lists, tab bars, search lists, the size matrix and menus use the arrows first, then hand over at their ends. Text boxes: ← → move the caret until its ends; text areas: ↑ leaves from the first line, ↓ from the last; dropdowns: ↑ ↓ change the value, ← → leave; number boxes: ↑ ↓ change it; date boxes keep all arrows (Esc, then an arrow, to leave). Also on the scanner / billing screens (scanners never send arrows) |
 | `Enter` | Press / select the focused button or link; ticks a focused checkbox; opens a focused dropdown |
+| (cursor moves) | The page scrolls with it: the focused control stays fully in view with some room, clear of fixed bars at the bottom (New Order pairs / Save draft / Create Order, biller Mail bar) and sticky headers (`components/focus-scroll.tsx`; computers only) |
 | `Esc` | Leave the focused button or box (closes a dialog, a menu or a search list first); the next arrow carries on from there |
 | `Ctrl K` | Jump to… a page or tab; `> ` actions on this page; `# ` find an order / bill number, retailer or article code |
 | `?` | This list (also the **?** button in the sidebar) |
