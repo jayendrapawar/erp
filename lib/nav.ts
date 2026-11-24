@@ -64,7 +64,6 @@ export function sidebarSections(roles: readonly Role[]): SideSection[] {
   const sections: SideSection[] = [
     { title: null, links: [{ href: '/home', label: 'Home', icon: 'home' }] },
     { title: 'Daily work', links: [
-      ...(can('scan.record') ? [{ href: '/scanner', label: 'Scanner', icon: 'scanner' as NavIcon }] : []),
       ...(orders ? [orders] : []),
     ] },
     { title: 'Stock', links: [
@@ -72,6 +71,9 @@ export function sidebarSections(roles: readonly Role[]): SideSection[] {
         { href: '/inventory#overview', label: 'Overview' }, { href: '/inventory#stock', label: 'Stock' },
         { href: '/inventory#movements', label: 'Movements' }, { href: '/inventory#dispatch', label: 'Unscanned dispatch' },
       ] }] : []),
+      // Scanner sits with Inventory (owner 23 Nov 2026). A top-level link, not an Inventory sub-item:
+      // sub-items are hash tabs of /inventory, and this keeps it reachable when the sidebar is collapsed.
+      ...(can('scan.record') ? [{ href: '/scanner', label: 'Scanner', icon: 'scanner' as NavIcon }] : []),
       ...(can('purchases.view') ? [{ href: '/purchases', label: 'Purchases', icon: 'purchases' as NavIcon, children: [
         { href: '/purchases#bills', label: 'Bills' }, { href: '/purchases#receive', label: 'Receive' },
         { href: '/purchases#expected', label: 'Expected stock' }, { href: '/purchases#unexpected', label: 'Unexpected' },
