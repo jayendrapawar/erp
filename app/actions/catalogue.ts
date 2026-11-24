@@ -5,6 +5,7 @@ import { articles, articleColors, articleSizes } from '@/lib/db/schema'
 import { and, asc, eq, sql } from 'drizzle-orm'
 import { searchVendors, getVendors } from '@/app/actions/vendors'
 import { fuzzyScore } from '@/lib/fuzzy'
+import { getCatalogueVersion } from '@/lib/catalog/version'
 
 import { requirePermission } from '@/lib/authz'
 
@@ -169,12 +170,17 @@ export interface CatalogueVendor {
 }
 
 export interface CatalogueData {
+  /** lib/catalog/version.ts: changes whenever an article, colour, size or retailer changes. */
+  version: string
   vendors: CatalogueVendor[]
   articles: ArticleDetail[]
 }
 
+/** 5 queries: the version (alongside the permission check), then 4 in parallel. */
 export async function loadCatalogue(): Promise<CatalogueData> {
-  await requireAuth()
+  // The version is read BEFORE the lists: a change committed in between makes the list newer than
+  // its label (the next check downloads it again, harmless), never older (it would stay stale).
+  const [, version] = await Promise.all([requireAuth(), getCatalogueVersion(db)])
 
   // All vendors (active) and all article data in parallel
   const [vendorRows, artRows, colorRows, sizeRows] = await Promise.all([
@@ -208,6 +214,6 @@ export async function loadCatalogue(): Promise<CatalogueData> {
       address: [v.address, v.city].filter(Boolean).join(', ') || null,
     }))
 
-  return { vendors, articles: Array.from(artDetailMap.values()) }
+  return { version, vendors, articles: Array.from(artDetailMap.values()) }
 }
 

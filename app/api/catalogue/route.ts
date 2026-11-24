@@ -3,23 +3,17 @@ import { loadCatalogue } from '@/app/actions/catalogue'
 import { AuthError } from '@/lib/authz'
 
 // GET /api/catalogue
-// Returns the full catalogue (vendors + articles) as JSON.
-// Used by:
-//   1. The SW stale-while-revalidate strategy — response is cached in
-//      `shayona-catalogue-v4` with a 30-min TTL.
-//   2. The useCatalogueCache client hook — reads from Cache API or fetches here.
-//
-// Cache-Control: revalidate every 5 min at the CDN/browser level; SW adds
-// its own 30-min stale-while-revalidate on top.
+// Returns the full catalogue (version + vendors + articles) as JSON, for the admin Orders hub
+// (lib/use-catalogue-cache.ts). That hook keeps the one saved copy and asks here only when the
+// catalogue version changed, so this answer is never cached anywhere else (browser HTTP cache and
+// service worker used to serve copies up to 30 min old after a Master edit; 24 Nov 2026).
 export async function GET() {
   try {
     const catalogue = await loadCatalogue() // checks the signed-in user's permission
 
     return NextResponse.json(catalogue, {
-      headers: {
-        // Contains retailer phone numbers and addresses: browser-only cache, never a shared/CDN cache.
-        'Cache-Control': 'private, max-age=300, stale-while-revalidate=1800',
-      },
+      // Contains retailer phone numbers and addresses: never a shared/CDN cache either.
+      headers: { 'Cache-Control': 'private, no-store' },
     })
   } catch (err) {
     if (err instanceof AuthError) {

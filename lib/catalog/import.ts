@@ -18,6 +18,7 @@ import { sql } from 'drizzle-orm'
 import type { Actor, Db, DbOrTx } from '@/lib/db/types'
 import { resolvePendingScans } from '@/lib/inventory/scan-service'
 import { normaliseSizeLabel } from './sizes'
+import { bumpCatalogueVersion } from './version'
 import { colourKey, hasSparxCodeOutsideScope, isSparxScope, normCode, type CatalogIssue, type VariantSpec, type WorkbookModel } from './sparx-workbook'
 
 // ── Current state ──────────────────────────────────────────────────────────
@@ -527,6 +528,7 @@ export async function applyCatalogImport(db: Db, actor: Actor, model: WorkbookMo
     }
 
     await tx.execute(sql`UPDATE catalog_import_batches SET summary = ${J({ ...counts, scansResolved, stats: model.stats })}::jsonb WHERE id = ${batchId}`)
+    await bumpCatalogueVersion(tx) // Orders screens download the list again
     return { batchId, noop: false, counts, scansResolved }
   })
 }

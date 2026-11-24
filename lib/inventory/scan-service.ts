@@ -22,6 +22,7 @@ import { audit } from '@/lib/audit'
 import { normalizeArticleValue } from '@/lib/article-utils'
 import { flattenFields, parseQr, type QrParseResult } from '@/lib/qr/parser'
 import { mainLocationId, postMovement, reverseMovement } from './ledger'
+import { bumpCatalogueVersion } from '@/lib/catalog/version'
 
 const NORM = (col: unknown) => sql`upper(regexp_replace(btrim(${col}), '\\s+', ' ', 'g'))`
 
@@ -367,6 +368,7 @@ async function deactivateArticleCreatedByScan(db: DbOrTx, actor: Actor, ev: Scan
     throw new ArticleRemovalError('ARTICLE_IN_USE', 'Other scans, stock or orders use this article. Undo the scan only, or correct the article in Master.')
   }
   await db.update(articles).set({ active: false }).where(eq(articles.id, articleId))
+  await bumpCatalogueVersion(db) // Orders screens download the list again
   await audit(db, { actor, action: 'article.deactivated', entityType: 'article', entityId: articleId, before: art, after: { active: false }, reason: `Removed with the scan that created it: ${reason}` })
   return { articleId, artCode: art.artCode, colorCode: art.colorCode }
 }

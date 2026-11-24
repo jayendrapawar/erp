@@ -86,9 +86,9 @@ interface Props {
 /** One tab's data as GET /api/orders/admin-tab returns it (Orders speed, 22 Nov 2026). */
 type TabData = {
   overview: Props['overview']
-  salesman: { salesmanOrders: SalesmanOrder[]; sets: OrderSet[]; pickers_list: { id: string; name: string | null }[] }
+  salesman: { salesmanOrders: SalesmanOrder[]; sets: OrderSet[]; pickers_list: { id: string; name: string | null }[]; catalogueVersion: string }
   picker: { pickerQueue: QueueItem[] }
-  biller: { billerOrders: any[]; billingVendors: BillingVendor[]; pickers: { id: string; name: string | null }[] }
+  biller: { billerOrders: any[]; billingVendors: BillingVendor[]; pickers: { id: string; name: string | null }[]; catalogueVersion: string }
   dispatcher: { dispatchOrders: DispatchOrder[] }
   procurement: { procurementRows: ProcurementRow[] }
 }
@@ -98,11 +98,12 @@ type TabName = keyof TabData
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/
 const revive = (_k: string, v: unknown) => (typeof v === 'string' && ISO.test(v) ? new Date(v) : v)
 
-const EMPTY_CATALOGUE: CatalogueData = { vendors: [], articles: [] }
-
-/** Reference data only where it is used: the catalogue (browser cache + /api/catalogue) for Salesman and Biller. */
-function WithCatalogue({ children }: { children: (c: CatalogueData) => React.ReactNode }) {
-  const catalogue = useCatalogueCache(EMPTY_CATALOGUE)
+/**
+ * Reference data only where it is used: the catalogue for Salesman and Biller, from the browser's
+ * copy, downloaded again only when `version` (sent with the tab's data) changed.
+ */
+function WithCatalogue({ version, children }: { version: string; children: (c: CatalogueData) => React.ReactNode }) {
+  const catalogue = useCatalogueCache(version)
   return <>{children(catalogue)}</>
 }
 
@@ -355,7 +356,7 @@ export function AdminHub({
 
         <AutoRefreshContext.Provider value={refreshOpenTab}>
         {activeTab === 'salesman' && tabBody('salesman', d => (
-          <WithCatalogue>{catalogue => (
+          <WithCatalogue version={d.catalogueVersion}>{catalogue => (
             <SalesmanDashboard orders={d.salesmanOrders} userName={adminName} userId={adminId} embedded catalogue={catalogue} sets={d.sets} pickers={d.pickers_list} canDirectBill={userRoles.includes('admin')} />
           )}</WithCatalogue>
         ))}
@@ -373,7 +374,7 @@ export function AdminHub({
         {showBiller && (data.biller || activeTab === 'biller') && (
           <div className={activeTab === 'biller' ? '' : 'hidden'}>
             {tabBody('biller', d => (
-              <WithCatalogue>{catalogue => (
+              <WithCatalogue version={d.catalogueVersion}>{catalogue => (
                 <BillerDashboard orders={d.billerOrders} currentBillerId={adminId} vendors={d.billingVendors} articles={catalogue.articles.map(a => a.artNumber)} pickers={d.pickers} embedded />
               )}</WithCatalogue>
             ))}

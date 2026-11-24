@@ -17,6 +17,7 @@ import { DIVISIONS, SEGMENTS } from '@/lib/catalog/assortments'
 import { divisionForArticleCode } from '@/lib/qr-config'
 import { listMissingArticles, type MissingArticle } from '@/lib/catalog/missing-articles'
 import { applyArticleUpload, csvToCells, parseArticleSheet, planArticleUpload, summarise, xlsxToCells, type UploadSummary } from '@/lib/catalog/article-upload'
+import { bumpCatalogueVersion } from '@/lib/catalog/version'
 
 export type Article = typeof articles.$inferSelect
 
@@ -243,6 +244,7 @@ export async function saveArticle(
       await ensureCatalogArticle(tx, articleId, clean.artCode, clean.artName, 'manual')
       // Scans that were waiting for this code/colour/size are posted now.
       if (clean.artCode && clean.colorCode) await resolvePendingScans(tx, actorOf(u), clean.artCode, clean.colorCode)
+      await bumpCatalogueVersion(tx)
     })
   } catch (error) { friendlyUniqueError(error) }
 
@@ -272,6 +274,7 @@ export async function deleteArticle(id: number): Promise<Article[]> {
       await tx.delete(articles).where(eq(articles.id, id))
       await audit(tx, { actor: actorOf(u), action: 'article.deleted', entityType: 'article', entityId: id, before: art })
     }
+    await bumpCatalogueVersion(tx)
   })
   revalidatePath('/master'); revalidateShopCatalogue()
   return db.select().from(articles).orderBy(asc(articles.artName))
@@ -336,7 +339,9 @@ export async function addSizeToArticleFromScans(articleCode: string, colourCode:
     const current = await tx.select({ sizeLabel: articleSizes.sizeLabel }).from(articleSizes).where(and(eq(articleSizes.articleId, art.id), eq(articleSizes.active, true)))
     await syncSizes(tx, art.id, [...current.map((c) => c.sizeLabel), size])
     await audit(tx, { actor: actorOf(u), action: 'article.size_added', entityType: 'article', entityId: art.id, after: { size }, reason: 'Size seen on scanned boxes' })
-    return resolvePendingScans(tx, actorOf(u), code, colour)
+    const resolved = await resolvePendingScans(tx, actorOf(u), code, colour)
+    await bumpCatalogueVersion(tx)
+    return resolved
   })
   revalidatePath('/master'); revalidateShopCatalogue()
   return { resolved: out.resolved }
@@ -495,6 +500,7 @@ async function linkOrCreateArticleOnce(input: LinkInput): Promise<LinkResult> {
       await tx.execute(sql`UPDATE articles SET segment = coalesce(segment, ${segment}), division = coalesce(nullif(btrim(division), ''), ${division})
         WHERE ${NORM(articles.artCode)} = ${artCode} AND (segment IS NULL OR nullif(btrim(division), '') IS NULL)`)
       await resolvePendingScans(tx, actor, artCode, colorCode)
+      await bumpCatalogueVersion(tx)
       return articleId!
     })
     revalidatePath('/master'); revalidateShopCatalogue()

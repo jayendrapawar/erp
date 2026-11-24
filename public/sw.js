@@ -7,7 +7,8 @@
  *     (v5, 21 Nov 2026: the old 5 s timeout served old pages and old orders / stock whenever the
  *     database was waking up. Page data for in-app navigation (RSC) is never saved.)
  *   - Images / icons / manifest                → CacheFirst
- *   - Catalogue API route (/api/catalogue)     → StaleWhileRevalidate (30 min TTL)
+ *   - Catalogue API route (/api/catalogue)     → not touched: the page keeps its own copy and asks
+ *     only when the catalogue changed (24 Nov 2026; the old 30 min copy here hid Master edits)
  *   - Server Actions (POST)                    → NetworkOnly (never cache mutations)
  *   - Everything else                          → Network; saved copy only when offline
  */
@@ -16,7 +17,8 @@ const CACHE_VERSION  = 'v5'
 const CACHE_NAME     = `shayona-${CACHE_VERSION}`
 const STATIC_CACHE   = `shayona-static-${CACHE_VERSION}`
 const PAGES_CACHE    = `shayona-pages-${CACHE_VERSION}`
-const CAT_CACHE      = `shayona-catalogue-${CACHE_VERSION}`
+// Owned by the page (lib/use-catalogue-cache.ts), not by this worker: kept when the worker updates.
+const ORDER_CATALOGUE_CACHE = 'shayona-order-catalogue-v1'
 
 // Pages to pre-cache on install (must be navigable without live DB)
 const PRECACHE_URLS = [
@@ -52,7 +54,7 @@ self.addEventListener('install', (event) => {
 
 // ── Activate: evict all old caches ───────────────────────────────────────────
 self.addEventListener('activate', (event) => {
-  const valid = new Set([CACHE_NAME, STATIC_CACHE, PAGES_CACHE, CAT_CACHE])
+  const valid = new Set([CACHE_NAME, STATIC_CACHE, PAGES_CACHE, ORDER_CATALOGUE_CACHE])
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(keys.filter((k) => !valid.has(k)).map((k) => caches.delete(k))))
@@ -84,11 +86,8 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // Catalogue API — stale-while-revalidate, 30 min TTL
-  if (url.pathname === '/api/catalogue') {
-    event.respondWith(staleWhileRevalidate(request, CAT_CACHE, 30 * 60 * 1000))
-    return
-  }
+  // Catalogue API — straight to the server (the page keeps the copy)
+  if (url.pathname === '/api/catalogue') return
 
   // Pages and their data — always from the server; the saved copy only when there is no connection
   const isHtmlPage =
@@ -151,44 +150,4 @@ async function networkFirst(request, cacheName) {
       headers: { 'Content-Type': 'text/plain' },
     })
   }
-}
-
-/**
- * Stale-while-revalidate with TTL.
- * Returns cached response immediately if within TTL, while fetching a fresh
- * copy in the background. If cache is stale or missing, waits for network.
- */
-async function staleWhileRevalidate(request, cacheName, ttlMs) {
-  const cache  = await caches.open(cacheName)
-  const cached = await cache.match(request)
-
-  const fetchAndStore = fetch(request).then((response) => {
-    if (response.ok) {
-      const clone = response.clone()
-      // Stamp the cached-at time in a custom header via a wrapper Response
-      clone.headers // can't mutate; store timestamp separately via a meta key
-      cache.put(request, response.clone())
-      cache.put(request.url + '__ts', new Response(String(Date.now())))
-    }
-    return response
-  }).catch(() => null)
-
-  if (cached) {
-    const tsResponse = await cache.match(request.url + '__ts')
-    const ts = tsResponse ? Number(await tsResponse.text()) : 0
-    if (Date.now() - ts < ttlMs) {
-      // Fresh enough — return cached immediately, revalidate in background
-      fetchAndStore // fire and forget
-      return cached
-    }
-  }
-
-  // Stale or missing — wait for network
-  const fresh = await fetchAndStore
-  if (fresh) return fresh
-  if (cached) return cached  // network failed, serve stale rather than error
-  return new Response('Catalogue unavailable offline', {
-    status: 503,
-    headers: { 'Content-Type': 'text/plain' },
-  })
 }

@@ -10,6 +10,7 @@ import { requirePermission } from '@/lib/authz'
 import { audit } from '@/lib/audit'
 import { fuzzyScore } from '@/lib/fuzzy'
 import { retailerColumns } from '@/lib/retailer-columns'
+import { bumpCatalogueVersion } from '@/lib/catalog/version'
 
 /** A retailer as pages see it: never the shop PIN hash (migration 0015). */
 // Credit terms / bill type (migration 0017) join the master screen in the payments step; until then
@@ -57,6 +58,7 @@ export async function importVendors(
     await db.transaction(async (tx) => {
       const values = newRows.map((row) => ({ ...row, id: `V${String(next++).padStart(3, '0')}` }))
       for (let i = 0; i < values.length; i += 500) await tx.insert(vendors).values(values.slice(i, i + 500))
+      await bumpCatalogueVersion(tx) // retailers are in the Orders catalogue
       await audit(tx, { actor: { id: u.id, name: u.name }, action: 'retailer.imported', entityType: 'retailer_import', entityId: new Date().toISOString(), after: { rows: rows.length, imported: newRows.length } })
     })
   }
@@ -105,6 +107,7 @@ export async function saveVendor(
         updatedAt:  sql`now()`,
       },
     })
+  await bumpCatalogueVersion(db) // retailers are in the Orders catalogue
   await audit(db, { actor: { id: u.id, name: u.name }, action: before ? 'retailer.updated' : 'retailer.created', entityType: 'retailer', entityId: id, before: before ?? undefined, after: input })
   return db.select(retailerColumns).from(vendors).orderBy(asc(vendors.partyName))
 }

@@ -19,6 +19,7 @@ import { normalizeArticleName, normalizeArticleValue, parseSizeText } from '@/li
 import { resolvePendingScans } from '@/lib/inventory/scan-service'
 import { expandSizeRange, normaliseSizeLabel, sizeSortOrders, sortSizes } from './sizes'
 import { SEGMENTS } from './assortments'
+import { bumpCatalogueVersion } from './version'
 
 export { ARTICLE_UPLOAD_COLUMNS, articleTemplateCsv } from './article-upload-columns'
 
@@ -318,6 +319,7 @@ export async function applyArticleUpload(db: DbOrTx, actor: Actor, plan: UploadP
            AND ("articleCode" || '|' || "colourCode") IN (SELECT json_array_elements_text(${keys}::json))`)).rows
       for (const w of waiting) resolvedScans += (await resolvePendingScans(tx, actor, w.code, w.colour)).resolved
     }
+    await bumpCatalogueVersion(tx) // Orders screens download the list again
     return { resolvedScans }
   })
 }

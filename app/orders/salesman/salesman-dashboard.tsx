@@ -11,7 +11,6 @@ import { PageNav } from '@/components/page-nav'
 import { useShowMore } from '@/components/show-more'
 import { fuzzyFilter } from '@/lib/fuzzy'
 import type { ArticleDetail, CatalogueData } from '@/app/actions/catalogue'
-import { useCatalogueCache } from '@/lib/use-catalogue-cache'
 import { useShortcut, useShortcutHelp, type ShortcutHelp } from '@/lib/shortcuts'
 import { useListKeys } from '@/lib/shortcuts/list'
 import { openKeyboardHelp } from '@/components/keyboard-help'
@@ -786,9 +785,9 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
       setOlderState('error')
     }
   }, [recentOrders, older])
-  // Use cache-first catalogue: returns serverCatalogue immediately on first render,
-  // then silently hydrates from Cache API / re-fetches in background
-  const catalogue = useCatalogueCache(serverCatalogue)
+  // The catalogue as given: loaded on the server by the page, or by the admin hub from its browser
+  // copy (lib/use-catalogue-cache.ts). Never swapped here for an older saved copy (24 Nov 2026).
+  const catalogue = serverCatalogue
 
   const [view, setView] = useState<View>('new')
   // Keyboard: ↑↓ / j k orders, Enter opens, / search, n New order (lib/shortcuts/list.ts).

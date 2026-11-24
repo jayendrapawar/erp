@@ -1,6 +1,8 @@
 // Admin Orders hub: the data of ONE tab (server only). The page loads only Overview; the other tabs
 // come from GET /api/orders/admin-tab?tab=… when opened (Orders speed, 22 Nov 2026). Queries per tab:
-// overview 4, salesman 4, picker 1, biller 2, dispatcher 2, procurement 1 (in parallel).
+// overview 4, salesman 5, picker 1, biller 4, dispatcher 2, procurement 1 (in parallel). Salesman
+// and Biller include the catalogue version (1 tiny query) so the browser's catalogue copy is
+// downloaded again only after a Master change (lib/use-catalogue-cache.ts).
 
 import { asc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
@@ -14,6 +16,7 @@ import {
 import { getUsersByRole } from '@/app/actions/users'
 import { getSets } from '@/app/actions/sets'
 import { listPickerChoices } from '@/lib/orders/pickers'
+import { getCatalogueVersion } from '@/lib/catalog/version'
 
 export const ADMIN_TABS = ['overview', 'salesman', 'picker', 'biller', 'dispatcher', 'procurement'] as const
 export type AdminTab = (typeof ADMIN_TABS)[number]
@@ -38,18 +41,19 @@ export async function loadOverview() {
 }
 
 async function loadSalesman() {
-  const [salesmanOrders, sets, pickers] = await Promise.all([getAllSalesmanOrders(), getSets(), pickerChoices()])
-  return { salesmanOrders, sets, pickers_list: pickers.map((p) => ({ id: p.id, name: p.name ?? null })) }
+  const [salesmanOrders, sets, pickers, catalogueVersion] = await Promise.all([getAllSalesmanOrders(), getSets(), pickerChoices(), getCatalogueVersion(db)])
+  return { salesmanOrders, sets, pickers_list: pickers.map((p) => ({ id: p.id, name: p.name ?? null })), catalogueVersion }
 }
 
 async function loadBiller() {
-  const [billerOrders, vendorRows, pickers] = await Promise.all([
+  const [billerOrders, vendorRows, pickers, catalogueVersion] = await Promise.all([
     getBillerQueue(),
     db.select(retailerColumns).from(vendors).where(eq(vendors.status, 'active')).orderBy(asc(vendors.partyName)),
     listPickerChoices(db), // Direct bill: who picked it
+    getCatalogueVersion(db),
   ])
   const billingVendors: BillingVendor[] = vendorRows.map(toBillingVendor)
-  return { billerOrders, billingVendors, pickers }
+  return { billerOrders, billingVendors, pickers, catalogueVersion }
 }
 
 async function loadDispatcher() {

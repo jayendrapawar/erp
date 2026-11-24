@@ -1,78 +1,74 @@
 'use client'
 
 /**
- * useCatalogueCache
+ * useCatalogueCache — the article + retailer list for the admin Orders hub (Salesman, Biller tabs).
  *
- * Stale-while-revalidate catalogue caching using the Cache API.
+ * The list is large, so the browser keeps one copy (Cache API) and downloads it again only when the
+ * catalogue version changed (lib/catalog/version.ts). The version comes with the tab's own data
+ * (1 tiny query), so a Master edit shows the next time the tab loads: opening it, or the 30 s
+ * refresh while it is open. (24 Nov 2026: before, a 30 min browser copy, a 5–30 min HTTP cache and
+ * a 30 min service-worker copy all hid Master edits.)
  *
- * Flow on every mount:
- *   1. Read the cached response from Cache API (shayona-catalogue-v4).
- *      If it exists → return it IMMEDIATELY (zero network latency).
- *   2. In parallel, fetch /api/catalogue from the server.
- *   3. When the fresh response arrives, update the cache and merge into state.
- *
- * This means:
- *   - First visit:   shows server-rendered catalogue (already fast via page props).
- *   - Second visit:  catalogue is available from Cache API before the page even
- *                    finishes loading — instant search from the first keystroke.
- *   - Offline:       last cached catalogue is served indefinitely.
- *
- * The hook merges incoming `serverCatalogue` (from page props) with whatever it
- * finds in cache — whichever arrives first wins, and the fresher one replaces it.
+ * Pages that load the catalogue on the server (/orders, /orders/salesman, /orders/biller) pass it
+ * straight to the dashboards and do not use this.
  */
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import type { CatalogueData } from '@/app/actions/catalogue'
+import { asSavedCatalogue, isCatalogue, needsDownload, type SavedCatalogue } from '@/lib/catalog/catalogue-copy'
 
-const CACHE_NAME    = 'shayona-catalogue-v4'
-const CACHE_KEY     = '/api/catalogue'
-const TTL_MS        = 30 * 60 * 1000   // 30 minutes — don't re-fetch if cache is this fresh
-const TS_KEY        = CACHE_KEY + '__ts'
+// Change the name when CatalogueData changes shape (public/sw.js keeps this one cache).
+const CACHE_NAME = 'shayona-order-catalogue-v1'
+const CACHE_KEY = '/__order-catalogue'
+const EMPTY: CatalogueData = { version: '', vendors: [], articles: [] }
 
-export function useCatalogueCache(serverCatalogue: CatalogueData): CatalogueData {
-  // Start with what the server already gave us (never null/loading)
-  const [catalogue, setCatalogue] = useState<CatalogueData>(serverCatalogue)
-  const revalidated = useRef(false)
+// Shared by every user of the hook on the page: one read of the saved copy, one download at a time.
+let memory: SavedCatalogue | null = null
+let download: Promise<SavedCatalogue | null> | null = null
+
+async function readSaved(): Promise<SavedCatalogue | null> {
+  try {
+    const res = await (await caches.open(CACHE_NAME)).match(CACHE_KEY)
+    return res ? asSavedCatalogue(await res.json()) : null
+  } catch { return null } // storage unavailable or corrupt: download instead
+}
+
+function downloadCatalogue(): Promise<SavedCatalogue | null> {
+  download ??= (async () => {
+    try {
+      const res = await fetch('/api/catalogue', { cache: 'no-store' })
+      if (!res.ok) return null
+      const data: unknown = await res.json()
+      if (!isCatalogue(data)) return null
+      const saved: SavedCatalogue = { version: data.version, savedAt: Date.now(), data }
+      try {
+        await (await caches.open(CACHE_NAME)).put(CACHE_KEY, new Response(JSON.stringify(saved), { headers: { 'Content-Type': 'application/json' } }))
+      } catch { /* not saved (private window, storage full): this visit only */ }
+      return saved
+    } catch { return null } // offline: keep showing the saved copy
+    finally { download = null }
+  })()
+  return download
+}
+
+/** `version`: the current catalogue version from the server (with the tab's data). */
+export function useCatalogueCache(version: string | undefined): CatalogueData {
+  const [catalogue, setCatalogue] = useState<CatalogueData>(memory?.data ?? EMPTY)
 
   useEffect(() => {
-    if (revalidated.current) return
-    revalidated.current = true
-
-    if (typeof caches === 'undefined') return   // SSR guard
-
+    // Without the Cache API (plain-http address) readSaved finds nothing and the list is downloaded each time.
+    let live = true
     ;(async () => {
-      const cache = await caches.open(CACHE_NAME)
-
-      // ── 1. Return cached copy immediately if present ──────────────────────
-      const cachedResponse = await cache.match(CACHE_KEY)
-      if (cachedResponse) {
-        try {
-          const data: CatalogueData = await cachedResponse.json()
-          setCatalogue(data)
-        } catch { /* corrupt cache — will be overwritten below */ }
-      }
-
-      // ── 2. Check age — skip re-fetch if still fresh ───────────────────────
-      const tsResp = await cache.match(TS_KEY)
-      const ts = tsResp ? Number(await tsResp.text()) : 0
-      if (Date.now() - ts < TTL_MS) return   // fresh enough, no network call
-
-      // ── 3. Fetch fresh in background ──────────────────────────────────────
-      try {
-        const response = await fetch(CACHE_KEY)
-        if (!response.ok) return
-
-        const data: CatalogueData = await response.clone().json()
-
-        // Update cache
-        await cache.put(CACHE_KEY, response)
-        await cache.put(TS_KEY, new Response(String(Date.now())))
-
-        // Update UI with fresh data
-        setCatalogue(data)
-      } catch { /* network offline — cached version is already in state */ }
+      if (!memory) memory = await readSaved()
+      if (memory && live) setCatalogue(memory.data)
+      if (!needsDownload(memory, version, Date.now())) return
+      const fresh = await downloadCatalogue()
+      if (!fresh) return
+      memory = fresh
+      if (live) setCatalogue(fresh.data)
     })()
-  }, [])   // run once per mount — serverCatalogue intentionally excluded
+    return () => { live = false }
+  }, [version])
 
   return catalogue
 }
