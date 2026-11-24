@@ -139,16 +139,11 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
   const listId = useId()
-  // Focus placed by the page (cursor ready for typing) must not pop the list open; the list
-  // opens on typing, ↑/↓ or a click.
-  const quietFocus = useRef(false)
 
   useImperativeHandle(ref, () => ({
     focus: () => {
-      quietFocus.current = true
       inputRef.current?.focus()
       inputRef.current?.select()
-      quietFocus.current = false
     },
   }))
 
@@ -229,8 +224,7 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
           autoComplete="off"
           disabled={disabled}
           onChange={e => { onInputChange(e.target.value); setOpen(true) }}
-          onFocus={() => { if (!quietFocus.current) setOpen(true) }}
-          onClick={() => setOpen(true)}
+          onFocus={() => setOpen(true)}
           onKeyDown={handleKey}
           className="w-full rounded-xl border border-border bg-background pl-9 pr-9 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         />
@@ -291,11 +285,10 @@ interface OrderItemsCardProps {
 }
 
 function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItemsCardProps) {
-  // Group lines by artNumber, most recently added first (owner, 24 Nov 2026): the article just added
-  // is on top, its newest colour first. Display only — the saved order keeps the entry order.
+  // Group lines by artNumber preserving insertion order
   const groups: { artNumber: string; lines: OrderLine[] }[] = []
   const seen = new Map<string, OrderLine[]>()
-  for (const line of [...lines].reverse()) {
+  for (const line of lines) {
     if (!seen.has(line.artNumber)) {
       const group: OrderLine[] = []
       seen.set(line.artNumber, group)
@@ -410,7 +403,7 @@ export interface SizeMatrixHandle { focus: () => void }
 const NEW_ORDER_KEYS: ShortcutHelp[] = [
   { keys: 'enter', label: 'Go to the next step: vendor → article → colour → sizes' },
   { keys: 'enter', label: 'On sizes: next size; after the last size, go to Next Article / Add to Order' },
-  { keys: ['arrowleft', 'arrowright'], label: 'On the buttons: switch between Next Article and Add to Order (Enter presses, ↑ back to sizes)' },
+  { keys: ['arrowleft', 'arrowright'], label: 'On the buttons: switch between Next Article and Add to Order (Enter presses, ↑ or Esc back to sizes)' },
   { keys: ['arrowup', 'arrowdown'], label: 'Move in a list (vendors, articles) or between sizes' },
   { display: '1, 2, 3…', label: 'On colours: pick colour 1, 2, 3…' },
   { keys: ['arrowleft', 'arrowright'], label: 'On colours: move · On sizes: quantity −1 / +1' },
@@ -418,7 +411,7 @@ const NEW_ORDER_KEYS: ShortcutHelp[] = [
   { keys: 'backspace', label: 'On sizes: remove the last digit' },
   { keys: 'shift+enter', label: 'Add this colour and stay on the article' },
   { display: 'Shift 1, 2…', label: 'From the sizes: switch to colour 1, 2…' },
-  { keys: 'escape', label: 'Skip this article (nothing added)' },
+  { keys: 'escape', label: 'On Next Article / Add to Order or a size button: back to the sizes. On the sizes: skip this article (nothing added)' },
   { keys: 'enter', label: 'On an empty article search: go to Create Order' },
 ]
 
@@ -480,7 +473,8 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
       onEnter?.(e.shiftKey)
       return
     }
-    if (e.key === 'Escape') { e.preventDefault(); onEscape?.(); return }
+    // Esc on a size chip or quantity box: back to the size bar (the matrix). Esc on the size bar: skip the article.
+    if (e.key === 'Escape') { e.preventDefault(); if (e.target !== boxRef.current) { setKbd(true); boxRef.current?.focus() } else onEscape?.(); return }
     if (e.shiftKey && digit && digit !== '0') { e.preventDefault(); onColour?.(Number(digit)); return }
     if (inInput || e.ctrlKey || e.metaKey || e.altKey || !sizes.length) return
     // On a focused chip the arrows move between chips (page arrow navigation); digits still type.
@@ -1145,7 +1139,8 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
     } else if (e.key === 'ArrowUp') {
       e.preventDefault(); matrixRef.current?.focus()
     } else if (e.key === 'Escape') {
-      e.preventDefault(); skipArticle()
+      // Esc on Next Article / Add to Order: back to the size bar (Esc there skips the article).
+      e.preventDefault(); matrixRef.current?.focus()
     }
   }
 

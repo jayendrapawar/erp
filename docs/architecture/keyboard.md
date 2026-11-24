@@ -79,7 +79,7 @@ users / retailers / suppliers / articles / assortments / sets, Purchases bills.
 
 | Screen | Keys |
 |---|---|
-| New Order (salesman) | Enter steps vendor → article → colour → sizes; 1–9 colour; ←→ quantity; Shift+Enter add and stay; Esc skip article; `Ctrl Enter` creates the order at once (no confirmation, as before). Tab also walks every quantity chip and box in the size matrix (Enter / Space press a chip; the highlighted size follows) and every line in the order (Enter edits it). "New" while New Order is open puts the cursor in the vendor search |
+| New Order (salesman) | Enter steps vendor → article → colour → sizes; 1–9 colour; ←→ quantity; Shift+Enter add and stay; Esc on Next Article / Add to Order or on a size button goes back to the size bar, Esc on the size bar skips the article; `Ctrl Enter` creates the order at once (no confirmation, as before). Tab also walks every quantity chip and box in the size matrix (Enter / Space press a chip; the highlighted size follows) and every line in the order (Enter edits it). "New" while New Order is open puts the cursor in the vendor search |
 | Ctrl K `> ` actions | Create the order, Direct bill, Upload bill PDFs, New …, theme, language, menu width |
 | Picker list (orders) | Keyboard changes wait for Enter (or leaving the list); Esc puts the old picker back. A mouse pick saves at once |
 | Master role menu | Enter / Space opens, ↑↓ move, Space ticks, Esc / Tab close |
