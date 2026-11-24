@@ -6,6 +6,13 @@ import { useListKeys } from '@/lib/shortcuts/list'
 import { useUrlFilters } from '@/lib/use-url-filters'
 import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { saveVendor, importVendors } from '@/app/actions/vendors'
+import { getRetailerTerms } from '@/app/actions/payments'
+import { TAX_TYPE_LABEL } from '@/lib/billing/bill-amounts'
+import type { TaxType } from '@/lib/billing/bill-totals'
+
+/** Bill type and payment terms as typed (text boxes; empty = the default / none). */
+interface TermsForm { taxType: TaxType; creditDays: string; creditLimit: string; discPct: string; discDays: string }
+const EMPTY_TERMS: TermsForm = { taxType: 'intra_state', creditDays: '', creditLimit: '', discPct: '', discDays: '' }
 import type { Vendor } from '@/app/actions/vendors'
 import { csvToCells, downloadCsv } from '@/lib/csv'
 import { UploadGuide, type UploadColumn } from '@/components/upload-guide'
@@ -183,8 +190,13 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
 
   const filtered = useMemo(() => applyColumnFilters(vendors, RETAILER_FILTERS, filters), [vendors, filters])
 
+  // Bill type and payment terms (payments): loaded when a retailer is opened (1 query).
+  const [terms, setTerms] = useState<TermsForm>(EMPTY_TERMS)
+  const [termsReady, setTermsReady] = useState(true)
+
   function openAdd() {
     setForm(EMPTY_FORM)
+    setTerms(EMPTY_TERMS); setTermsReady(true)
     setFormError('')
     setEditTarget(null)
     setModalMode('add')
@@ -196,6 +208,15 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
     setFormError('')
     setEditTarget(v)
     setModalMode('edit')
+    setTerms(EMPTY_TERMS); setTermsReady(false)
+    getRetailerTerms(v.id).then((t) => {
+      if (t) setTerms({
+        taxType: t.taxType, creditDays: t.creditDays == null ? '' : String(t.creditDays),
+        creditLimit: t.creditLimitPaise == null ? '' : String(t.creditLimitPaise / 100),
+        discPct: t.earlyPayDiscountBp == null ? '' : String(t.earlyPayDiscountBp / 100), discDays: t.earlyPayDays == null ? '' : String(t.earlyPayDays),
+      })
+      setTermsReady(true)
+    }).catch(() => setFormError('Could not load the payment terms. Close and open the retailer again.'))
   }
 
   function handleSave() {
@@ -206,10 +227,21 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
     const payload = modalMode === 'edit' && editTarget
       ? { ...form, id: editTarget.id }
       : { ...form }
+    const num = (s: string) => (s.trim() === '' ? null : Number(s.replace(/,/g, '')))
+    const limit = num(terms.creditLimit), pct = num(terms.discPct)
+    if ([num(terms.creditDays), limit, pct, num(terms.discDays)].some((n) => n !== null && !Number.isFinite(n))) { setFormError('Payment terms: type numbers only.'); return }
+    const termsPayload = termsReady ? {
+      taxType: terms.taxType, creditDays: num(terms.creditDays), creditLimitPaise: limit == null ? null : Math.round(limit * 100),
+      earlyPayDiscountBp: pct == null ? null : Math.round(pct * 100), earlyPayDays: num(terms.discDays),
+    } : undefined
     startSave(async () => {
-      const updated = await saveVendor(payload)
-      updateVendors(updated)
-      setModalMode(null)
+      try {
+        const updated = await saveVendor(payload, termsPayload)
+        updateVendors(updated)
+        setModalMode(null)
+      } catch (e) {
+        setFormError(e instanceof Error ? e.message : 'Not saved. Try again.')
+      }
     })
   }
 
@@ -471,6 +503,30 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
                     <option value="inactive">Inactive</option>
                   </select>
                 </div>
+                <fieldset className="col-span-2 mt-1 grid grid-cols-2 gap-3 rounded-xl border border-border p-3" disabled={!termsReady}>
+                  <legend className="px-1 text-xs font-semibold text-foreground">{termsReady ? 'Billing & payment terms' : 'Billing & payment terms (loading…)'}</legend>
+                  <label className="col-span-2 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Bill type
+                    <select value={terms.taxType} onChange={e => setTerms(t => ({ ...t, taxType: e.target.value as TaxType }))} className={`${inputCls} mt-1 normal-case tracking-normal`}>
+                      {(Object.keys(TAX_TYPE_LABEL) as TaxType[]).map(k => <option key={k} value={k}>{TAX_TYPE_LABEL[k]}</option>)}
+                    </select>
+                  </label>
+                  <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Credit days
+                    <input inputMode="numeric" value={terms.creditDays} onChange={e => setTerms(t => ({ ...t, creditDays: e.target.value }))} placeholder="90" className={`${inputCls} mt-1`} />
+                  </label>
+                  <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Credit limit (₹)
+                    <input inputMode="decimal" value={terms.creditLimit} onChange={e => setTerms(t => ({ ...t, creditLimit: e.target.value }))} placeholder="none" className={`${inputCls} mt-1`} />
+                  </label>
+                  <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Early-payment discount %
+                    <input inputMode="decimal" value={terms.discPct} onChange={e => setTerms(t => ({ ...t, discPct: e.target.value }))} placeholder="none" className={`${inputCls} mt-1`} />
+                  </label>
+                  <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">…if paid within (days)
+                    <input inputMode="numeric" value={terms.discDays} onChange={e => setTerms(t => ({ ...t, discDays: e.target.value }))} placeholder="e.g. 30" className={`${inputCls} mt-1`} />
+                  </label>
+                  <p className="col-span-2 text-[11px] text-muted-foreground">
+                    A bill unpaid longer than the credit days holds new orders and Direct bills (an admin can allow them). The credit limit only warns.
+                    The early-payment discount is suggested when recording a payment; the accountant decides.
+                  </p>
+                </fieldset>
               </div>
             </div>
 

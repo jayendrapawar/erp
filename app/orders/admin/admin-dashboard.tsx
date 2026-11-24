@@ -156,7 +156,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
   const [detailItems, setDetailItems] = useState<DetailItem[]>([])
   const [detailBillLines, setDetailBillLines] = useState<MrpLine[]>([])
   // The bill's saved amounts and line discount (getBillsForPrint: the same query the printed bill uses).
-  const [detailBill, setDetailBill] = useState<{ lineDiscPct: number; amounts: BillAmounts } | null>(null)
+  const [detailBill, setDetailBill] = useState<{ lineDiscPct: number; amounts: BillAmounts; unpaidPaise: number | null } | null>(null)
   const [detailBillLinesLoading, setDetailBillLinesLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState('')
@@ -199,7 +199,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
         const lines = bill?.lines ?? []
         const disc = bill?.lineDiscPct ?? 30
         setDetailBillLines(lines)
-        if (lines.length) setDetailBill({ lineDiscPct: disc, amounts: bill?.amounts ?? amountsFromLines(lines, disc, 'intra_state') })
+        if (lines.length) setDetailBill({ lineDiscPct: disc, amounts: bill?.amounts ?? amountsFromLines(lines, disc, 'intra_state'), unpaidPaise: bill?.unpaidPaise ?? null })
       } catch {
         setDetailBillLines([])
       } finally {
@@ -533,7 +533,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                     )
                   }
 
-                  return detailBill && <BillDetailCard lines={detailBillLines} lineDiscPct={detailBill.lineDiscPct} amounts={detailBill.amounts} />
+                  return detailBill && <BillDetailCard lines={detailBillLines} lineDiscPct={detailBill.lineDiscPct} amounts={detailBill.amounts} unpaidPaise={detailBill.unpaidPaise} />
                 })()}
 
                 {/* Delete order — hidden for read-only roles (e.g. accountant) */}

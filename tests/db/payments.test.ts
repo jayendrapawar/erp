@@ -12,6 +12,8 @@ import {
 } from '../../lib/payments/payments'
 import { listOutstanding, listPayments, partyStatement } from '../../lib/payments/queries'
 import { applyOpenings, listOpenings, planOpenings, reverseOpening } from '../../lib/payments/opening'
+import { creditStatus, enforceCredit } from '../../lib/payments/credit'
+import { createDraft, generateDirectBill } from '../../lib/billing/bill-stock'
 import type { Actor } from '../../lib/db/types'
 
 describe('payments and the party ledger (integration)', { skip: !harnessEnabled() && 'set TEST_DB_ENV_FILE=.env.local to run' }, () => {
@@ -40,12 +42,12 @@ describe('payments and the party ledger (integration)', { skip: !harnessEnabled(
 
   before(async () => {
     h = await createHarness()
-    await h.db.execute(sql`INSERT INTO "user" (id, name, email, role) VALUES ('u-acct', 'Accountant', 'ac@test.local', 'accountant')`)
+    await h.db.execute(sql`INSERT INTO "user" (id, name, email, role) VALUES ('u-acct', 'Accountant', 'ac@test.local', 'accountant'), ('u-pick', 'Picker', 'pk@test.local', 'picker')`)
     await h.db.execute(sql`INSERT INTO retailers (id, "partyName", "taxType", "earlyPayDiscountBp", "earlyPayDays") VALUES
       ('P1', 'Om Shoes', 'untaxed', NULL, NULL), ('P2', 'Early Payer', 'untaxed', 200, 30), ('P3', 'Cheque Party', 'untaxed', NULL, NULL),
       ('P4', 'Advance Party', 'untaxed', NULL, NULL), ('P5', 'Mistake Party', 'untaxed', NULL, NULL),
       ('P6', 'Ageing Traders', 'untaxed', NULL, NULL), ('P7', 'Old Dues', 'untaxed', NULL, NULL),
-      ('P9', 'Advance Shop', 'untaxed', NULL, NULL)`)
+      ('P9', 'Advance Shop', 'untaxed', NULL, NULL), ('PH', 'Held Shop', 'untaxed', NULL, NULL)`)
   })
   after(async () => { await h?.close() })
 
@@ -211,6 +213,32 @@ describe('payments and the party ledger (integration)', { skip: !harnessEnabled(
     assert.equal((await h.db.transaction((tx) => applyOpenings(tx, acct, re.rows))).added, 1)
     assert.equal(await num(sql`SELECT count(*) FROM party_ledger_entries WHERE "idempotencyKey" LIKE 'opening:P7:2026-04-01:A-1:100000%'`), 2)
     assert.equal((await partySummary(h.db, 'P7')).balancePaise, 120000)
+    await healthy()
+  })
+
+  test('credit hold: unpaid past the credit days holds Direct bills unless an admin allows it', async () => {
+    const ist = (d: number) => new Date(Date.now() + 5.5 * 3600_000 - d * 86_400_000).toISOString().slice(0, 10)
+    await bill('PH', 400, ist(95))
+    let s = await creditStatus(h.db, { name: 'held shop' })
+    assert.deepEqual([s?.blocked, s?.creditDays, s?.overduePaise, s?.overdue[0].days], [true, 90, 40000, 95])
+    // Its own credit days: 120 → not held yet.
+    await h.db.execute(sql`UPDATE retailers SET "creditDays" = 120, "creditLimitPaise" = 10000 WHERE id = 'PH'`)
+    s = await creditStatus(h.db, { retailerId: 'PH' })
+    assert.deepEqual([s?.blocked, s?.overLimit], [false, true]) // over the limit only warns
+    await h.db.execute(sql`UPDATE retailers SET "creditDays" = NULL WHERE id = 'PH'`)
+    await assert.rejects(enforceCredit(h.db, { retailerId: 'PH' }, { allowed: false, requested: true }), /^Error: Credit hold: Held Shop has ₹400.00 unpaid for more than 90 days/)
+    assert.equal((await enforceCredit(h.db, { retailerId: 'PH' }, { allowed: true, requested: true }))?.overduePaise, 40000)
+    assert.equal(await enforceCredit(h.db, { retailerId: 'P5' }, { allowed: false, requested: false }), null) // not held
+    const manual = [{ artNumber: 'FL-20', mrp: 239.5, qty: 1 }]
+    const d1 = await createDraft(h.db, acct)
+    await assert.rejects(generateDirectBill(h.db, acct, d1, { shopkeeperName: 'Held Shop', manualLines: manual }, { pickerId: 'u-pick' }), /Credit hold/)
+    await assert.rejects(generateDirectBill(h.db, acct, d1, { shopkeeperName: 'Held Shop', manualLines: manual }, { pickerId: 'u-pick', credit: { allowed: false, requested: true } }), /Credit hold/)
+    const ok = await generateDirectBill(h.db, acct, d1, { shopkeeperName: 'Held Shop', manualLines: manual }, { pickerId: 'u-pick', credit: { allowed: true, requested: true } })
+    assert.ok(ok.billNo)
+    assert.equal(await num(sql`SELECT count(*) FROM audit_events WHERE action = 'direct_bill.credit_override'`), 1)
+    // Paying the old bill lifts the hold.
+    await pay({ retailerId: 'PH', amountPaise: 40000 })
+    assert.equal((await creditStatus(h.db, { retailerId: 'PH' }))?.blocked, false)
     await healthy()
   })
 })

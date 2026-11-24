@@ -26,6 +26,7 @@ import { askConfirm } from '@/components/confirm-dialog'
 import { BillTypeChoice } from '@/components/bill-type-choice'
 import { DEFAULT_BILL_RATES, computeBillTotals, ratePaise, ratesBp, toBp, type BillRates, type TaxType } from '@/lib/billing/bill-totals'
 import { BillRatesFields, resolveRates, type RateEdits } from '@/components/bill-rates-fields'
+import { CreditNote, useCreditStatus } from '@/components/payments/credit-note'
 import { amountsFromTotals, billTotalRows, formatRs } from '@/lib/billing/bill-amounts'
 
 function newUuid(): string {
@@ -285,6 +286,10 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
   const [selectedVendor, setSelectedVendor] = useState<BillingVendor | null>(null)
   // Direct Billing: who picked the goods (kept on this screen only; chosen again for a resumed draft).
   const [pickedBy, setPickedBy] = useState('')
+  // Party balance / credit hold (payments, owner 22 Nov 2026): a held party needs an admin's "Allow".
+  const credit = useCreditStatus(onBillGenerated && selectedVendor && !selectedVendor.id.startsWith('draft-') ? { retailerId: selectedVendor.id } : null)
+  const [allowHeld, setAllowHeld] = useState(false)
+  useEffect(() => { setAllowHeld(false) }, [selectedVendor?.id])
   // Bill type (owner, 23 Nov 2026): from the retailer, changeable for this bill.
   const [taxType, setTaxType] = useState<TaxType>('intra_state')
   // Bill discount / GST typed on this bill (owner, 24 Nov 2026); empty = the defaults.
@@ -811,7 +816,7 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
         const header = draftHeader()
         const res = await generateDirectBillFromDraft(id, header, walkIn
           ? { pickerId: pickedBy, walkIn: { name: walkName.trim(), phone: walkPhone.trim(), paidMode: walkPaid as 'cash' | 'upi', discountPct: walkDiscNum } }
-          : { pickerId: pickedBy, taxType, ...(rated.changed ? { rates: rated.rates } : {}) })
+          : { pickerId: pickedBy, taxType, ...(rated.changed ? { rates: rated.rates } : {}), overrideCredit: allowHeld })
         onBillGenerated(walkIn
           ? { ...res, shopkeeperName: walkName.trim(), shopkeeperPhone: walkPhone.trim() || null, shopkeeperAddress: null }
           : { ...res, shopkeeperName: header.shopkeeperName, shopkeeperPhone: header.shopkeeperPhone, shopkeeperAddress: header.shopkeeperAddress })
@@ -898,7 +903,9 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
   const needsPicker = directBill && !pickedBy
   const partyHint = walkIn
     ? (!walkName.trim() ? 'Type the customer\'s name.' : !walkPaid ? 'Choose how the customer paid: cash or UPI.' : !walkDiscOk ? 'Bill discount must be 0 to 100 %.' : '')
-    : (!selectedVendor ? 'Choose the retailer to generate the bill.' : rated.error)
+    : (!selectedVendor ? 'Choose the retailer to generate the bill.'
+      : credit?.blocked && !allowHeld ? (credit.canOverride ? 'Credit hold: tick "Allow anyway" to bill this party.' : 'Credit hold: this party must pay first, or ask an admin.')
+      : rated.error)
   const canGenerate = !partyHint && !needsPicker && billLines.length > 0 && !isSaving && pendingScans === 0
   const generateHint = partyHint ? partyHint
     : needsPicker ? 'Choose who picked the goods.'
@@ -969,6 +976,10 @@ export function BillingScannerPage({ vendors, articles = [], onBillGenerated, pi
                 </div>
               )}
             </div>
+
+            {directBill && !walkIn && credit && (credit.blocked || credit.balancePaise !== 0) && (
+              <div className="min-w-0 basis-full"><CreditNote compact info={credit} allow={allowHeld} onAllow={setAllowHeld} /></div>
+            )}
 
             {directBill && (
               <button type="button" aria-pressed={walkIn} onClick={() => toggleWalkIn(!walkIn)}

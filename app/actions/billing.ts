@@ -23,7 +23,7 @@ import {
 
 const biller = async () => {
   const u = await requireAnyRole('biller', 'admin')
-  return { id: u.id, name: u.name }
+  return { id: u.id, name: u.name, isAdmin: u.roles.includes('admin') }
 }
 
 export async function getOpenDirectBillDrafts(): Promise<DraftSummary[]> {
@@ -65,10 +65,13 @@ export async function discardDirectBillDraft(draftId: number): Promise<void> {
 }
 
 /** Generate a Direct Bill: a master retailer (bill type from it unless chosen), or a walk-in customer. */
-export async function generateDirectBillFromDraft(draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn; pickerId?: string; rates?: BillRates } = {}): Promise<GeneratedBill> {
-  const actor = await biller()
+export async function generateDirectBillFromDraft(
+  draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn; pickerId?: string; rates?: BillRates; overrideCredit?: boolean } = {},
+): Promise<GeneratedBill> {
+  const { isAdmin, ...actor } = await biller()
   if (bill.taxType !== undefined && !isTaxType(bill.taxType)) throw new Error('Unknown bill type.')
-  return generateDirectBill(db, actor, draftId, header, bill)
+  const { overrideCredit, ...rest } = bill
+  return generateDirectBill(db, actor, draftId, header, { ...rest, credit: { allowed: isAdmin, requested: overrideCredit === true } })
 }
 
 /**

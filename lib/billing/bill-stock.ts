@@ -13,6 +13,7 @@ import { stampBillLineHsn } from './bill-number'
 import { cleanWalkIn, freezeSaleBill, notInMasterMessage, type TaxType, type WalkIn } from './sale-bill'
 import type { BillRates } from './bill-totals'
 import { applyAdvance } from '@/lib/payments/payments'
+import { enforceCredit } from '@/lib/payments/credit'
 import type { BillTotalsPaise } from './bill-totals'
 import { and, eq, sql } from 'drizzle-orm'
 import { billLines, billScans, directBillDrafts, orders, type BillStockSource, type DraftManualLine } from '@/lib/db/schema'
@@ -325,7 +326,7 @@ export interface GeneratedBill {
  * not taxed, paid at once). One transaction; ~12 statements whatever the number of boxes.
  */
 export async function generateDirectBill(
-  db: Db, actor: Actor, draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn; pickerId?: string; rates?: BillRates } = {},
+  db: Db, actor: Actor, draftId: number, header: Partial<DraftHeader>, bill: { taxType?: TaxType; walkIn?: WalkIn; pickerId?: string; rates?: BillRates; credit?: { allowed: boolean; requested: boolean } } = {},
 ): Promise<GeneratedBill> {
   const walk = bill.walkIn ? cleanWalkIn(bill.walkIn) : null
   const h = cleanHeader(walk ? { ...header, shopkeeperName: walk.name, shopkeeperPhone: walk.phone || null } : header)
@@ -336,6 +337,12 @@ export async function generateDirectBill(
     const r = walk ? null : (await tx.execute<{ id: string; taxType: TaxType }>(sql`
       SELECT id, "taxType" FROM retailers WHERE lower(btrim("partyName")) = lower(btrim(${h.shopkeeperName})) ORDER BY id LIMIT 1`)).rows[0]
     if (!walk && !r) throw new Error(notInMasterMessage(h.shopkeeperName))
+    // Credit hold (owner, 22 Nov 2026): unpaid past the party's credit days → no Direct bill unless an admin allows it.
+    const held = r ? await enforceCredit(tx, { retailerId: r.id }, bill.credit ?? { allowed: false, requested: false }) : null
+    if (held) {
+      await audit(tx, { actor, action: 'direct_bill.credit_override', entityType: 'direct_bill_draft', entityId: draftId,
+        after: { retailerId: r!.id, overduePaise: held.overduePaise, creditDays: held.creditDays, oldest: held.overdue[0] ?? null } })
+    }
     // Every Direct bill names who picked the goods (owner, 23 Nov 2026).
     const pickerId = await assertPickerChoice(tx, bill.pickerId)
     const scans = await tx.select({ articleCode: billScans.articleCode, mrp: billScans.mrp }).from(billScans)

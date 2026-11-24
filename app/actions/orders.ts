@@ -15,6 +15,7 @@ import { audit } from '@/lib/audit'
 import { olderOrders, recentOrders, type OrderScope } from '@/lib/orders/order-list'
 import { nextOrderNumber } from '@/lib/orders/order-number'
 import { assertPickerChoice } from '@/lib/orders/pickers'
+import { enforceCredit } from '@/lib/payments/credit'
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -48,6 +49,8 @@ export interface CreateOrderInput {
   shopkeeperName: string
   notes?: string
   items: OrderItemInput[]
+  /** Admin only: place the order although the party is on credit hold (lib/payments/credit.ts). */
+  overrideCredit?: boolean
 }
 
 // ── Salesman actions ──────────────────────────────────────────────────────────
@@ -59,10 +62,15 @@ export async function createOrder(input: CreateOrderInput) {
 
   // Header and lines are written together or not at all.
   const order = await db.transaction(async (tx) => {
+    const retailerId = await retailerIdFor(tx, input.shopkeeperName)
+    // Credit hold (owner, 22 Nov 2026): unpaid past the party's credit days → no new order unless an admin allows it.
+    const held = retailerId
+      ? await enforceCredit(tx, { retailerId }, { allowed: u.roles.includes('admin'), requested: input.overrideCredit === true })
+      : null
     const [created] = await tx.insert(orders).values({
       orderNumber: await nextOrderNumber(tx),
       shopkeeperName: input.shopkeeperName,
-      retailerId: await retailerIdFor(tx, input.shopkeeperName),
+      retailerId,
       salesmanId: u.id,
       notes: input.notes,
       status: 'pending',
@@ -77,6 +85,10 @@ export async function createOrder(input: CreateOrderInput) {
         quantityOrdered: item.quantityOrdered,
       }))
     )
+    if (held) {
+      await audit(tx, { actor: { id: u.id, name: u.name }, action: 'order.credit_override', entityType: 'order', entityId: created.id,
+        after: { retailerId, overduePaise: held.overduePaise, creditDays: held.creditDays, oldest: held.overdue[0] ?? null } })
+    }
     return created
   })
 
@@ -262,6 +274,8 @@ export interface PrintableBill {
   lineDiscPct: number | null
   /** Saved amounts (sale_bills); null for a bill made before migration 0017 that is not backfilled yet. */
   amounts: BillAmounts | null
+  /** Still unpaid on the bill (payments); 0 = paid; null = no saved bill. */
+  unpaidPaise: number | null
 }
 
 /**
@@ -272,12 +286,15 @@ export async function getBillsForPrint(orderIds: number[]): Promise<Record<numbe
   await requireRole('biller', 'admin', 'accountant')
   const ids = [...new Set((Array.isArray(orderIds) ? orderIds : []).filter((x) => Number.isInteger(x) && x > 0))].slice(0, 100)
   if (!ids.length) return {}
-  const rows = (await db.execute<{ id: number; lines: Array<{ artNumber: string; mrp: string; qty: number; disc: string; hsn: string | null }>; amounts: SaleBillAmountRow | null }>(sql`
+  const rows = (await db.execute<{ id: number; lines: Array<{ artNumber: string; mrp: string; qty: number; disc: string; hsn: string | null }>; amounts: SaleBillAmountRow | null; unpaid: string | null }>(sql`
     SELECT o.id,
       coalesce((SELECT json_agg(json_build_object('artNumber', b."artNumber", 'mrp', b.mrp, 'qty', b.qty, 'disc', b."lineDiscPct",
           'hsn', coalesce(b.hsn, (SELECT a.hsn FROM articles a WHERE a.hsn <> '' AND upper(btrim(a."artCode")) = upper(btrim(b."artNumber")) LIMIT 1))) ORDER BY b.id)
         FROM bill_lines b WHERE b."orderId" = o.id), '[]') AS lines,
-      (SELECT row_to_json(x) FROM (SELECT ${sql.raw(SALE_BILL_AMOUNT_COLUMNS)} FROM sale_bills sb WHERE sb."orderId" = o.id AND sb.status = 'active' LIMIT 1) x) AS amounts
+      (SELECT row_to_json(x) FROM (SELECT ${sql.raw(SALE_BILL_AMOUNT_COLUMNS)} FROM sale_bills sb WHERE sb."orderId" = o.id AND sb.status = 'active' LIMIT 1) x) AS amounts,
+      (SELECT CASE WHEN sb."retailerId" IS NULL THEN 0 ELSE e."amountPaise" - coalesce((SELECT sum(a."amountPaise") FROM party_allocations a WHERE a."debitEntryId" = e.id), 0) END
+       FROM sale_bills sb LEFT JOIN party_ledger_entries e ON e."saleBillId" = sb.id AND e.kind = 'bill'
+       WHERE sb."orderId" = o.id AND sb.status = 'active' LIMIT 1) AS unpaid
     FROM orders o WHERE o.id IN (SELECT (x)::int FROM json_array_elements_text(${JSON.stringify(ids)}::json) x)`)).rows
   const out: Record<number, PrintableBill> = {}
   for (const r of rows) {
@@ -285,6 +302,7 @@ export async function getBillsForPrint(orderIds: number[]): Promise<Record<numbe
       lines: r.lines.map((l) => ({ artNumber: l.artNumber, mrp: Number(l.mrp), qty: Number(l.qty), hsn: l.hsn || null })),
       lineDiscPct: r.lines[0] ? Number(r.lines[0].disc) : null,
       amounts: r.amounts ? amountsFromRow(r.amounts) : null,
+      unpaidPaise: r.unpaid == null ? null : Number(r.unpaid),
     }
   }
   return out
@@ -399,6 +417,13 @@ export async function getBillerQueue() {
       taxType: sql<TaxType | null>`(SELECT x."taxType" FROM retailers x
         WHERE x.id = ${orders.retailerId} OR (${orders.retailerId} IS NULL AND lower(btrim(x."partyName")) = lower(btrim(${orders.shopkeeperName})))
         ORDER BY (x.id = ${orders.retailerId}) DESC NULLS LAST LIMIT 1)`,
+      // Paid / part-paid / unpaid (payments, owner 22 Nov 2026): the saved bill's total and what is still
+      // unpaid on it (a walk-in bill is paid at once). Billed orders only.
+      billTotalPaise: sql<number | null>`(SELECT sb."grandTotalPaise"::float8 FROM sale_bills sb WHERE sb."orderId" = "orders".id AND sb.status = 'active' LIMIT 1)`,
+      unpaidPaise: sql<number | null>`(SELECT CASE WHEN sb."retailerId" IS NULL THEN 0
+          ELSE (e."amountPaise" - coalesce((SELECT sum(a."amountPaise") FROM party_allocations a WHERE a."debitEntryId" = e.id), 0))::float8 END
+        FROM sale_bills sb LEFT JOIN party_ledger_entries e ON e."saleBillId" = sb.id AND e.kind = 'bill'
+        WHERE sb."orderId" = "orders".id AND sb.status = 'active' LIMIT 1)`,
     })
     .from(orders)
     .where(inArray(orders.status, ['packed', 'billed']))

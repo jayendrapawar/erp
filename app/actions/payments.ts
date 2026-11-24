@@ -5,7 +5,12 @@
 // returns the party's new balance, so the screen updates in place (no revalidatePath, no refresh).
 
 import { db } from '@/lib/db'
-import { requirePermission } from '@/lib/authz'
+import { eq } from 'drizzle-orm'
+import { vendors } from '@/lib/db/schema'
+import type { RetailerTerms } from '@/app/actions/vendors'
+import { requirePermission, requireUser } from '@/lib/authz'
+import { hasPermission } from '@/lib/permissions'
+import { creditStatus, type CreditStatus } from '@/lib/payments/credit'
 import {
   bouncePayment, depositCheque, loadPartyForPayment, recordPayment, returnCheque, reversePayment,
   type PartyForPayment, type RecordedPayment,
@@ -110,4 +115,29 @@ export async function addOpeningBalance(input: { retailerId: string; date: strin
 export async function reverseOpeningAction(entryId: number, reason: string) {
   const u = await requirePermission('payments.record')
   await db.transaction((tx) => reverseOpening(tx, actorOf(u), idOf(entryId), reason))
+}
+
+// ── Credit hold (payments steps 7–9) ─────────────────────────────────────────
+
+/**
+ * The party's balance and what is overdue, for the order form and Direct bill (salesmen, billers,
+ * admins). canOverride: this user may place an order / bill despite a hold (admins). 1 query.
+ */
+export async function getCreditStatus(party: { retailerId?: string; name?: string }): Promise<(CreditStatus & { canOverride: boolean }) | null> {
+  const u = await requireUser()
+  if (!hasPermission(u.roles, 'payments.view') && !hasPermission(u.roles, 'orders.view')) throw new Error('Forbidden')
+  const s = await creditStatus(db, { retailerId: party?.retailerId, name: party?.name })
+  return s ? { ...s, canOverride: u.roles.includes('admin') } : null
+}
+
+// ── Retailer master: bill type and payment terms ─────────────────────────────
+
+/** The retailer's bill type and payment terms (the form, when a retailer is opened). 1 query. */
+export async function getRetailerTerms(id: string): Promise<RetailerTerms | null> {
+  await requirePermission('retailers.view')
+  const [r] = await db.select({
+    taxType: vendors.taxType, creditDays: vendors.creditDays, creditLimitPaise: vendors.creditLimitPaise,
+    earlyPayDiscountBp: vendors.earlyPayDiscountBp, earlyPayDays: vendors.earlyPayDays,
+  }).from(vendors).where(eq(vendors.id, String(id ?? ''))).limit(1)
+  return r ? { ...r, creditLimitPaise: r.creditLimitPaise == null ? null : Number(r.creditLimitPaise) } : null
 }

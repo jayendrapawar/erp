@@ -9,7 +9,16 @@ import { TAX_TYPE_SHORT, billTotalRows, formatRs, type BillAmounts } from '@/lib
 
 export interface BillCardLine { artNumber: string; mrp: number; qty: number }
 
-export function BillDetailCard({ lines, lineDiscPct, amounts }: { lines: BillCardLine[]; lineDiscPct: number; amounts: BillAmounts }) {
+/** Paid / Part-paid / Unpaid from the saved bill total and what is still unpaid (payments). */
+export function PaidBadge({ total, unpaid }: { total?: number | null; unpaid?: number | null }) {
+  if (total == null || unpaid == null) return null
+  const [label, cls] = unpaid <= 0 ? ['Paid', 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300']
+    : unpaid < total ? [`Part-paid · ${formatRs(unpaid)} due`, 'bg-amber-500/15 text-amber-800 dark:text-amber-300']
+    : ['Unpaid', 'bg-muted text-muted-foreground']
+  return <span className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${cls}`}>{label}</span>
+}
+
+export function BillDetailCard({ lines, lineDiscPct, amounts, unpaidPaise }: { lines: BillCardLine[]; lineDiscPct: number; amounts: BillAmounts; unpaidPaise?: number | null }) {
   const groups = new Map<string, BillCardLine[]>()
   for (const l of lines) {
     if (!groups.has(l.artNumber)) groups.set(l.artNumber, [])
@@ -19,7 +28,7 @@ export function BillDetailCard({ lines, lineDiscPct, amounts }: { lines: BillCar
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card">
       <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-4 py-3">
-        <p className="text-sm font-semibold text-foreground">Bill Items</p>
+        <p className="flex items-center gap-2 text-sm font-semibold text-foreground">Bill Items <PaidBadge total={amounts.frozen ? amounts.grandTotalPaise : null} unpaid={unpaidPaise} /></p>
         <span className="text-xs tabular-nums text-muted-foreground">
           {`${lines.length} line${lines.length !== 1 ? 's' : ''} · ${amounts.totalQty} box${amounts.totalQty !== 1 ? 'es' : ''}`}
         </span>

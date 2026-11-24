@@ -21,7 +21,7 @@ import { useListKeys } from '@/lib/shortcuts/list'
 import { tablistKeyDown, tabProps, useTabKeys } from '@/lib/shortcuts/tabs'
 import { DialogKeys } from '@/components/dialog-keys'
 import { EditBillDialog } from '@/components/billing/edit-bill-dialog'
-import { BillDetailCard } from '@/components/bill-detail-card'
+import { BillDetailCard, PaidBadge } from '@/components/bill-detail-card'
 import { BillTypeChoice } from '@/components/bill-type-choice'
 import { DEFAULT_BILL_RATES, computeBillTotals, ratesBp, type TaxType } from '@/lib/billing/bill-totals'
 import { BillRatesFields, resolveRates, type RateEdits } from '@/components/bill-rates-fields'
@@ -55,6 +55,9 @@ interface BillerOrder {
   billedPairs?: number | null
   /** The retailer's bill type (the bill's default; getBillerQueue). */
   taxType?: TaxType | null
+  /** Saved bill total and what is still unpaid on it (getBillerQueue; payments). */
+  billTotalPaise?: number | null
+  unpaidPaise?: number | null
 }
 
 interface Props {
@@ -130,7 +133,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   const [detailError, setDetailError] = useState('')
   // DB-fetched bill lines for detail panel (fallback when mrpLinesMap has no entry)
   // The billed order's lines and SAVED amounts (getBillsForPrint — the same numbers the printed bill shows).
-  const [detailBill, setDetailBill] = useState<{ lines: MrpLine[]; lineDiscPct: number; amounts: BillAmounts } | null>(null)
+  const [detailBill, setDetailBill] = useState<{ lines: MrpLine[]; lineDiscPct: number; amounts: BillAmounts; unpaidPaise: number | null } | null>(null)
   const [detailBillLinesLoading, setDetailBillLinesLoading] = useState(false)
 
   // ── Scanner modal ────────────────────────────────────────────────────────────
@@ -971,7 +974,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
           const disc = bill.lineDiscPct ?? 30
           // Cache into mrpLinesMap so print/mail also picks it up
           setMrpLinesMap(prev => ({ ...prev, [order.id]: bill.lines }))
-          setDetailBill({ lines: bill.lines, lineDiscPct: disc, amounts: bill.amounts ?? amountsFromLines(bill.lines, disc, 'intra_state') })
+          setDetailBill({ lines: bill.lines, lineDiscPct: disc, amounts: bill.amounts ?? amountsFromLines(bill.lines, disc, 'intra_state'), unpaidPaise: bill.unpaidPaise })
         }
       } catch { /* shown as "Bill data not available" */ } finally {
         setDetailBillLinesLoading(false)
@@ -1318,7 +1321,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                                 {`${pairs} ${pairs === 1 ? 'pair' : 'pairs'}`}
                               </span>
                             )}
-                            {/* No status label: every bill in Receipts is billed (owner, 24 Nov 2026). */}
+                            {/* No status label: every bill in Receipts is billed (owner, 24 Nov 2026). Paid / part-paid / unpaid instead. */}
+                            {!loading && <PaidBadge total={order.billTotalPaise} unpaid={order.unpaidPaise} />}
                             {/* Chevron hint */}
                             <svg className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -1557,7 +1561,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   </div>
                 )
 
-                return <BillDetailCard lines={detailBill.lines} lineDiscPct={detailBill.lineDiscPct} amounts={detailBill.amounts} />
+                return <BillDetailCard lines={detailBill.lines} lineDiscPct={detailBill.lineDiscPct} amounts={detailBill.amounts} unpaidPaise={detailBill.unpaidPaise} />
               })()}
 
               {detailOrder.status === 'packed' && (

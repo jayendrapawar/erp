@@ -16,6 +16,7 @@ import { useListKeys } from '@/lib/shortcuts/list'
 import { openKeyboardHelp } from '@/components/keyboard-help'
 import type { OrderSet } from '@/app/actions/sets'
 import { DialogKeys } from '@/components/dialog-keys'
+import { CreditNote, isCreditHold, useCreditStatus } from '@/components/payments/credit-note'
 import {
   deleteDraft, draftArticles, draftHasContent, draftPairs, draftStorageKey, readDrafts, saveDraft,
   type OrderDraft, type OrderLine, type SizeEntry,
@@ -824,6 +825,12 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
   const [skResults, setSkResults] = useState<ShopkeeperResult[]>([])
   const [skLoading, setSkLoading] = useState(false)
   const [selectedSk, setSelectedSk] = useState<ShopkeeperResult | null>(null)
+  // Party balance / credit hold (payments, owner 22 Nov 2026): shown when the vendor is chosen.
+  const credit = useCreditStatus(selectedSk ? { name: selectedSk.name } : null)
+  const [allowHeld, setAllowHeld] = useState(false)
+  useEffect(() => { setAllowHeld(false) }, [selectedSk?.name])
+  // Why the last Create / Save failed (shown above the bottom bar, whatever section is open).
+  const [submitError, setSubmitError] = useState('')
 
   // ── Article entry state ──
   const [artQuery, setArtQuery] = useState('')
@@ -1440,6 +1447,7 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
+    setSubmitError('')
     if (!selectedSk) { setError('Please select a vendor.'); return }
     if (lines.length === 0) { setError('Add at least one item to the order.'); return }
 
@@ -1459,7 +1467,7 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
     )
     if (items.length === 0) { setError('All items have zero quantity.'); return }
 
-    const payload = { shopkeeperName: selectedSk.name, notes, items }
+    const payload = { shopkeeperName: selectedSk.name, notes, items, overrideCredit: allowHeld }
 
     startTransition(async () => {
       try {
@@ -1480,8 +1488,9 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
         }
         resetForm()
         setView('list')
-      } catch {
-        setError(editingOrderId != null ? 'Failed to update order. Please try again.' : 'Failed to create order. Please try again.')
+      } catch (err) {
+        setSubmitError(isCreditHold(err) ? (err as Error).message
+          : editingOrderId != null ? 'Failed to update order. Please try again.' : 'Failed to create order. Please try again.')
       }
     })
   }
@@ -2218,6 +2227,9 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
                     </div>
                   </div>
                 )}
+                {selectedSk && editingOrderId == null && (
+                  <div className="mt-3"><CreditNote info={credit} allow={allowHeld} onAllow={setAllowHeld} /></div>
+                )}
               </div>
             </section>
 
@@ -2633,6 +2645,9 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
       {view === 'new' && (
         // Sits above the phone's bottom menu (z-40 there), at the very bottom from md up.
         <div className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] left-0 right-0 z-30 bg-background/95 backdrop-blur border-t border-border md:bottom-0 md:pb-[env(safe-area-inset-bottom)]">
+          {submitError && (
+            <p role="alert" className="mx-auto max-w-4xl px-3 pt-2 text-sm text-red-600 dark:text-red-400 sm:px-4">{submitError}</p>
+          )}
           <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2 sm:py-3 flex gap-2 items-center">
             <div className="mr-auto flex min-w-0 shrink flex-col text-xs leading-tight sm:flex-row sm:gap-3 sm:text-sm">
               <span className="font-semibold text-foreground whitespace-nowrap tabular-nums">{`${totalPairs} pairs`}</span>
