@@ -139,11 +139,16 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
   const listId = useId()
+  // Focus placed by the page (cursor ready for typing) must not pop the list open; the list
+  // opens on typing, ↑/↓ or a click.
+  const quietFocus = useRef(false)
 
   useImperativeHandle(ref, () => ({
     focus: () => {
+      quietFocus.current = true
       inputRef.current?.focus()
       inputRef.current?.select()
+      quietFocus.current = false
     },
   }))
 
@@ -224,7 +229,8 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
           autoComplete="off"
           disabled={disabled}
           onChange={e => { onInputChange(e.target.value); setOpen(true) }}
-          onFocus={() => setOpen(true)}
+          onFocus={() => { if (!quietFocus.current) setOpen(true) }}
+          onClick={() => setOpen(true)}
           onKeyDown={handleKey}
           className="w-full rounded-xl border border-border bg-background pl-9 pr-9 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         />
@@ -285,10 +291,11 @@ interface OrderItemsCardProps {
 }
 
 function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItemsCardProps) {
-  // Group lines by artNumber preserving insertion order
+  // Group lines by artNumber, most recently added first (owner, 24 Nov 2026): the article just added
+  // is on top, its newest colour first. Display only — the saved order keeps the entry order.
   const groups: { artNumber: string; lines: OrderLine[] }[] = []
   const seen = new Map<string, OrderLine[]>()
-  for (const line of lines) {
+  for (const line of [...lines].reverse()) {
     if (!seen.has(line.artNumber)) {
       const group: OrderLine[] = []
       seen.set(line.artNumber, group)
