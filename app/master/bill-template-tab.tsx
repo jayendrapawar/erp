@@ -147,6 +147,7 @@ export function BillTemplateTab() {
         </div>
         <BillNumberSettings series="sale_bill" />
         <BillNumberSettings series="sale_bill_untaxed" />
+        <BillNumberSettings series="credit_note" />
         <BillEmailSettings />
       </div>
 

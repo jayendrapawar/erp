@@ -17,6 +17,10 @@ import {
 } from '@/lib/payments/payments'
 import { applyOpenings, parseOpeningSheet, planOpenings, reverseOpening, type OpeningPlan, type OpeningRow } from '@/lib/payments/opening'
 import { csvToCells, xlsxToCells } from '@/lib/catalog/article-upload'
+import {
+  cancelCreditNote, checkReturnBox, createCreditNote, creditNoteForPrint, listPartyBills,
+  type CreditNotePrint, type PartyBill, type ReturnBox, type SavedCreditNote,
+} from '@/lib/payments/credit-notes'
 
 const actorOf = (u: { id: string; name: string }) => ({ id: u.id, name: u.name })
 const idOf = (v: unknown) => {
@@ -140,4 +144,34 @@ export async function getRetailerTerms(id: string): Promise<RetailerTerms | null
     earlyPayDiscountBp: vendors.earlyPayDiscountBp, earlyPayDays: vendors.earlyPayDays,
   }).from(vendors).where(eq(vendors.id, String(id ?? ''))).limit(1)
   return r ? { ...r, creditLimitPaise: r.creditLimitPaise == null ? null : Number(r.creditLimitPaise) } : null
+}
+
+// ── Credit notes (migration 0018) ─────────────────────────────────────────────
+
+/** The party's bills to choose the original bill from (newest first). 1 query. */
+export async function getPartyBills(retailerId: string): Promise<PartyBill[]> {
+  await requirePermission('payments.record')
+  return listPartyBills(db, String(retailerId ?? ''))
+}
+
+/** A box scanned for a goods return: on this bill and not returned yet. 1 query. */
+export async function checkReturnBoxAction(saleBillId: number, raw: string): Promise<ReturnBox> {
+  await requirePermission('payments.record')
+  return checkReturnBox(db, idOf(saleBillId), String(raw ?? ''))
+}
+
+export async function createCreditNoteAction(input: unknown): Promise<SavedCreditNote> {
+  const u = await requirePermission('payments.record')
+  return db.transaction((tx) => createCreditNote(tx, actorOf(u), input))
+}
+
+export async function cancelCreditNoteAction(id: number, reason: string) {
+  const u = await requirePermission('payments.record')
+  return db.transaction((tx) => cancelCreditNote(tx, actorOf(u), idOf(id), reason))
+}
+
+/** What a printed credit note shows. 2 queries. */
+export async function getCreditNotePrint(id: number): Promise<CreditNotePrint | null> {
+  await requirePermission('payments.view')
+  return creditNoteForPrint(db, idOf(id))
 }

@@ -5,13 +5,14 @@
 
 import { useEffect, useState, useTransition } from 'react'
 import { getBillNumberingSetup, saveBillNumbering } from '@/app/actions/bill-numbering'
-import type { BillSeries } from '@/lib/billing/bill-number'
+import type { NumberSeries } from '@/app/actions/bill-numbering'
 
 const inputCls = 'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring'
 const fmt = (prefix: string, n: number, padding: number) => `${prefix}${String(n).padStart(padding, '0')}`
 
-export function BillNumberSettings({ series = 'sale_bill' }: { series?: BillSeries }) {
+export function BillNumberSettings({ series = 'sale_bill' }: { series?: NumberSeries }) {
   const untaxed = series === 'sale_bill_untaxed'
+  const notes = series === 'credit_note'
   const hid = `bill-no-h-${series}`
   const [prefix, setPrefix] = useState('')
   const [next, setNext] = useState('')
@@ -31,8 +32,10 @@ export function BillNumberSettings({ series = 'sale_bill' }: { series?: BillSeri
 
   return (
     <section data-form className="space-y-3 rounded-xl border border-border bg-card p-4" aria-labelledby={hid}>
-      <h3 id={hid} className="text-sm font-semibold">{untaxed ? 'Bill numbers — bills without GST' : 'Bill numbers — GST bills'}</h3>
-      {untaxed ? (
+      <h3 id={hid} className="text-sm font-semibold">{notes ? 'Credit note numbers' : untaxed ? 'Bill numbers — bills without GST' : 'Bill numbers — GST bills'}</h3>
+      {notes ? (
+        <p className="text-xs text-muted-foreground">Every credit note gets the next number when it is saved (Payments → Credit notes). Cancelled notes keep their number.</p>
+      ) : untaxed ? (
         <p className="text-xs text-muted-foreground">
           Bills without GST (small parties and walk-in customers) have their own numbers, so the GST bill numbers stay
           in sequence. The prefix must differ from the GST bills&apos; prefix.
@@ -47,7 +50,7 @@ export function BillNumberSettings({ series = 'sale_bill' }: { series?: BillSeri
         <label className="col-span-1 block text-xs font-medium text-muted-foreground">Prefix
           <input value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder="none" className={`${inputCls} mt-1`} />
         </label>
-        <label className="col-span-1 block text-xs font-medium text-muted-foreground">Next bill number
+        <label className="col-span-1 block text-xs font-medium text-muted-foreground">{notes ? 'Next number' : 'Next bill number'}
           <input value={next} onChange={(e) => setNext(e.target.value.replace(/\D/g, ''))} inputMode="numeric" className={`${inputCls} mt-1`} />
         </label>
         <label className="col-span-1 block text-xs font-medium text-muted-foreground">Digits
@@ -56,10 +59,10 @@ export function BillNumberSettings({ series = 'sale_bill' }: { series?: BillSeri
           </select>
         </label>
       </div>
-      <p className="text-sm">Next bill: <span className="font-mono font-bold">{preview}</span></p>
+      <p className="text-sm">{notes ? 'Next note: ' : 'Next bill: '}<span className="font-mono font-bold">{preview}</span></p>
       {info && (
         <p className="text-[11px] text-muted-foreground">
-          {info.highestUsed > 0 ? `Highest number used so far: ${fmt(prefix.trim(), info.highestUsed, Number(padding) || 0)}.` : 'No bill numbered yet.'}
+          {info.highestUsed > 0 ? `Highest number used so far: ${fmt(prefix.trim(), info.highestUsed, Number(padding) || 0)}.` : notes ? 'No credit note yet.' : 'No bill numbered yet.'}
           {info.updatedByName ? ` Last changed by ${info.updatedByName}.` : ''}
         </p>
       )}
@@ -70,7 +73,7 @@ export function BillNumberSettings({ series = 'sale_bill' }: { series?: BillSeri
           catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : 'Not saved.' }) }
         })}
         className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50">
-        {busy ? 'Saving…' : untaxed ? 'Save numbers for bills without GST' : 'Save GST bill numbers'}
+        {busy ? 'Saving…' : notes ? 'Save credit note numbers' : untaxed ? 'Save numbers for bills without GST' : 'Save GST bill numbers'}
       </button>
       {msg && <p role="status" className={`rounded-lg px-3 py-2 text-xs ${msg.ok ? 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-200' : 'bg-red-500/15 text-red-700 dark:text-red-300'}`}>{msg.text}</p>}
     </section>

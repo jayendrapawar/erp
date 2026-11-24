@@ -125,7 +125,7 @@ export function cleanPaymentInput(raw: unknown): PaymentInput {
 // ── Shared steps ──────────────────────────────────────────────────────────────
 
 /** Lock the party (serialises its allocations). 1 statement. */
-async function lockParty(tx: Tx, retailerId: string): Promise<{ id: string; partyName: string }> {
+export async function lockParty(tx: Tx, retailerId: string): Promise<{ id: string; partyName: string }> {
   const r = (await tx.execute<{ id: string; partyName: string }>(sql`
     SELECT id, "partyName" FROM retailers WHERE id = ${retailerId} FOR UPDATE`)).rows[0]
   if (!r) throw new Error('This party is not in the retailer master.')
@@ -146,7 +146,7 @@ export async function partySummary(db: DbOrTx, retailerId: string): Promise<Part
  * Set a credit entry (payment, discount, negative opening) against the party's debits: as typed, else
  * oldest first. Returns the paise set. 1–2 statements. The party must be locked.
  */
-async function allocateCredit(tx: Tx, actor: Actor, retailerId: string, creditEntryId: number, creditPaise: number, manual: AllocationInput[] = []): Promise<number> {
+export async function allocateCredit(tx: Tx, actor: Actor, retailerId: string, creditEntryId: number, creditPaise: number, manual: AllocationInput[] = []): Promise<number> {
   if (manual.length) {
     const open = new Map((await tx.execute<{ id: string; openPaise: string }>(sql`
       SELECT id, "openPaise" FROM party_open_items

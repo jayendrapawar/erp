@@ -43,13 +43,21 @@ async function main() {
       check(Number(await one(`select count(*) from party_balance_mismatches`)) === 0, 'party_balances equal the ledger')
       check(Number(await one(`select count(*) from party_open_item_mismatches`)) === 0, 'per party: unpaid − advance = balance')
       check(Number(await one(`select count(*) from sale_bills b where b."retailerId" is not null and (
-        (b.status = 'active' and not exists (select 1 from party_ledger_entries e where e.kind = 'bill' and e."saleBillId" = b.id
+        -- Backfilled old bills have no entry unless posted with --ledger (the opening balance covers them).
+        (b.status = 'active' and b.source <> 'backfill' and not exists (select 1 from party_ledger_entries e where e.kind = 'bill' and e."saleBillId" = b.id
            and not exists (select 1 from party_ledger_entries r where r."reversalOfId" = e.id)))
         or (b.status = 'cancelled' and exists (select 1 from party_ledger_entries e where e.kind = 'bill' and e."saleBillId" = b.id
            and not exists (select 1 from party_ledger_entries r where r."reversalOfId" = e.id))))`)) === 0,
         'every active party bill is in the ledger once; every cancelled one is reversed')
       check(Number(await one(`select count(*) from sale_bills b where b."retailerId" is null
         and exists (select 1 from party_ledger_entries e where e."saleBillId" = b.id)`)) === 0, 'walk-in bills have no ledger entry')
+      // Credit notes (migration 0018): an active note is in the ledger once; a cancelled one is reversed.
+      if (await one(`select to_regclass('credit_notes') is not null`)) {
+        check(Number(await one(`select count(*) from credit_notes n where
+          (select count(*) from party_ledger_entries e where e.kind = 'credit_note' and e."creditNoteId" = n.id
+             and not exists (select 1 from party_ledger_entries r where r."reversalOfId" = e.id)) <> (case when n.status = 'active' then 1 else 0 end)`)) === 0,
+          'every active credit note is in the ledger once; every cancelled one is reversed')
+      }
       check(Number(await one(`select count(*) from payments p where
         (select count(*) from party_ledger_entries e where e.kind = 'payment' and e."paymentId" = p.id) <> (case when p.status in ('pending', 'returned') then 0 else 1 end)
         or (p.status in ('bounced', 'reversed')) <> exists (select 1 from party_ledger_entries e join party_ledger_entries r on r."reversalOfId" = e.id

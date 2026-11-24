@@ -69,7 +69,8 @@ export function sidebarSections(roles: readonly Role[]): SideSection[] {
       // Payments (owner, 22 Nov 2026): what retailers owe, money received, cheques.
       ...(can('payments.view') ? [{ href: '/payments', label: 'Payments', icon: 'payments' as NavIcon, children: [
         { href: '/payments#outstanding', label: 'Outstanding' }, { href: '/payments#cheques', label: 'Payments & cheques' },
-        { href: '/payments#statement', label: 'Party statement' }, { href: '/payments#opening', label: 'Opening balances' },
+        { href: '/payments#statement', label: 'Party statement' },
+        { href: '/payments#creditnotes', label: 'Credit notes' }, { href: '/payments#opening', label: 'Opening balances' },
       ] }] : []),
     ] },
     { title: 'Stock', links: [

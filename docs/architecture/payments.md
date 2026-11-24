@@ -69,6 +69,20 @@ reversal gets `…:r2`. After saving, each party's dues and advance are matched 
 by default; `--apply` on the development database only; no ledger entry unless `--ledger`). Run on
 dev 24 Nov: 1 bill.
 
+## Credit notes (24 Nov 2026, migration 0018) — `lib/payments/credit-notes.ts`
+
+Owner: both kinds; against a bill or none; amount typed before GST; own series CN1, CN2 … (Master →
+Bill template → Credit note numbers).
+- **Money** (discount / rate difference): amount before GST; GST added at the bill's saved rates, or —
+  no bill — at the chosen bill type's Master rates (`lib/payments/credit-note-math.ts`); total
+  rounded to the rupee. Can be cancelled with a reason (ledger reversed; the number stays used).
+- **Goods returned**: needs the bill; each box of that bill is scanned; its stock-out is reversed (back
+  in stock) and the box is marked `returned` on the bill (`bill_scans.creditNoteId`). The amount is
+  what those boxes were billed at. Cannot be cancelled (bill the boxes again).
+- Ledger: one `credit_note` entry (−), set against its bill first, then the oldest unpaid bills; the
+  rest is advance. Printed as "CREDIT NOTE (GST)" with the original bill no. and date.
+- Saving: 1 transaction, ~9 statements + audit (+1 query per scanned box while scanning).
+
 ## Credit hold and terms (steps 7–9) — `lib/payments/credit.ts`
 
 - A party with anything unpaid longer than its **credit days** (`retailers.creditDays`, default 90)
@@ -86,6 +100,7 @@ dev 24 Nov: 1 bill.
 | Outstanding | Who owes what, by age 0–30 / 31–60 / 61–90 / 90+, totals, search, sort, 50 a page. |
 | Payments & cheques | Cheques to deposit (Deposit / Return); last 60 days (Bounced / Reverse). |
 | Party statement | Opening, entries with running balance, closing, unpaid now; Print, WhatsApp. |
+| Credit notes | New credit note (money / goods returned), list, Print, Cancel (money only). |
 | Opening balances | Add one, upload with preview, list with Reverse. |
 
 Record payment: `n` (or the button) → party → amount → mode (← →) → Ctrl+Enter; receipt Print /
@@ -113,6 +128,6 @@ discount, reverse, outstanding ageing, statement running balance, opening balanc
 
 ## Later (not built; room left in the design)
 
-GST credit notes (new kind + document + series); bank-statement import to confirm UPI / bank /
+Bank-statement import to confirm UPI / bank /
 cheque deposits; supplier side (what we owe Relaxo) in its own `supplier_*` tables; salesman app
 collections (`payments.source = 'salesman'`, `collectedBy`, pending).

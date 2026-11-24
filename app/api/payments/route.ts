@@ -4,11 +4,13 @@ import { hasPermission } from '@/lib/permissions'
 import { db, withDbRetry } from '@/lib/db'
 import { listOutstanding, listPayments, partyStatement, type OutstandingSort } from '@/lib/payments/queries'
 import { listOpenings } from '@/lib/payments/opening'
+import { listCreditNotes } from '@/lib/payments/credit-notes'
 
 // GET /api/payments?view=outstanding&q=&sort=&overdue=1&offset=
 //     /api/payments?view=statement&party=V12&from=2026-04-01&to=2026-11-24
 //     /api/payments?view=payments&q=
 //     /api/payments?view=openings&q=
+//     /api/payments?view=creditnotes&q=
 // The Payments screens' reads (payments step 5): one query each. A GET route so the browser runs
 // them in parallel (server actions run one at a time). payments.view only. Never cached: money moves.
 export async function GET(req: Request) {
@@ -27,6 +29,8 @@ export async function GET(req: Request) {
       const party = p.get('party') ?? ''
       data = await withDbRetry(() => partyStatement(db, party, p.get('from') ?? '', p.get('to') ?? ''))
       if (!data) return NextResponse.json({ error: 'Party not found' }, { status: 404 })
+    } else if (view === 'creditnotes') {
+      data = await withDbRetry(() => listCreditNotes(db, p.get('q') ?? ''))
     } else if (view === 'openings') {
       data = await withDbRetry(() => listOpenings(db, p.get('q') ?? ''))
     } else if (view === 'payments') {

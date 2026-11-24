@@ -5,8 +5,10 @@
 import { openPrintWindow } from '@/lib/bill-html'
 import { getBillTemplate } from '@/app/actions/bill-template'
 import { formatRs } from '@/lib/billing/bill-amounts'
+import { ratePaise } from '@/lib/billing/bill-totals'
 import type { BillTemplate } from '@/lib/bill-template'
 import type { Statement } from '@/lib/payments/queries'
+import type { CreditNotePrint } from '@/lib/payments/credit-notes'
 
 /** Today in India (YYYY-MM-DD). */
 export function istToday(): string {
@@ -26,7 +28,7 @@ export function whatsappLink(phone: string, text: string): string {
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
 const KIND: Record<string, string> = {
   bill: 'Bill', payment: 'Payment', opening: 'Opening balance', discount: 'Early-payment discount', charge: 'Charge',
-  adjustment: 'Adjustment', reversal: 'Reversal',
+  adjustment: 'Adjustment', reversal: 'Reversal', credit_note: 'Credit note',
 }
 
 function page(title: string, t: BillTemplate | null, body: string): string {
@@ -98,4 +100,37 @@ export function statementText(s: Statement): string {
     ...(s.unpaid.length > 15 ? [`  …and ${s.unpaid.length - 15} more`] : []),
   ]
   return lines.join('\n')
+}
+
+/** A GST credit note (or, against a bill without GST, a plain credit note). */
+export async function printCreditNote(p: CreditNotePrint) {
+  const win = openPrintWindow()
+  if (!win) return
+  const T = p.totals
+  const pct = (bp: number) => `${Number((bp / 100).toFixed(2))}%`
+  const rate = (mrp: number) => ratePaise(mrp, p.lineDiscPct ?? 0) / 100
+  const lines = p.kind === 'return'
+    ? `<table><thead><tr><th>Article</th><th>HSN</th><th class="r">MRP</th><th class="r">Rate</th><th class="r">Pairs</th><th class="r">Amount</th></tr></thead><tbody>
+      ${p.lines.map((l) => `<tr><td>${esc(l.artNumber)}</td><td>${esc(l.hsn ?? '')}</td><td class="r">${esc(l.mrp.toFixed(2))}</td><td class="r">${esc(rate(l.mrp).toFixed(2))}</td><td class="r">${l.qty}</td><td class="r">${esc((rate(l.mrp) * l.qty).toFixed(2))}</td></tr>`).join('')}
+      </tbody></table>`
+    : `<div class="box">${esc(p.reason)}${p.bill ? ` — against bill ${esc(p.bill.billNo)}` : ''}</div>`
+  const rows = [
+    ...(p.kind === 'return' ? [[`Sub total (${T.totalQty} pairs)`, T.grossPaise], ...(T.discountPaise ? [[`Discount ${pct(T.discountBp)}`, -T.discountPaise]] : [])] : []),
+    ['Amount before GST', T.taxablePaise],
+    ...(T.cgstPaise ? [[`CGST ${pct(T.cgstBp)}`, T.cgstPaise], [`SGST ${pct(T.sgstBp)}`, T.sgstPaise]] : []),
+    ...(T.igstPaise ? [[`IGST ${pct(T.igstBp)}`, T.igstPaise]] : []),
+    ...(T.roundOffPaise ? [['Round off', T.roundOffPaise]] : []),
+  ] as Array<[string, number]>
+  const body = `
+    <p>Credit note no. <b>${esc(p.noteNo)}</b> &nbsp; Date <b>${esc(dayText(p.noteDate))}</b>${p.status !== 'active' ? ' &nbsp; <b style="color:#b00">CANCELLED</b>' : ''}</p>
+    ${p.bill ? `<p>Against original bill <b>${esc(p.bill.billNo)}</b> dated ${esc(dayText(p.bill.billDate))}</p>` : ''}
+    <p>To <b>${esc(p.party.partyName)}</b><br><span class="muted">${esc(p.party.address)}${p.party.gst ? ` · GSTIN ${esc(p.party.gst)}` : ''}</span></p>
+    <p>Reason: ${esc(p.reason)}</p>
+    ${lines}
+    <table style="margin-top:12px;max-width:360px;margin-left:auto"><tbody>
+      ${rows.map(([l, v]) => `<tr><td>${esc(l)}</td><td class="r">${v < 0 ? '− ' : ''}${esc(formatRs(Math.abs(v)))}</td></tr>`).join('')}
+      <tr><td><b>Total credit</b></td><td class="r"><b>${esc(formatRs(T.totalPaise))}</b></td></tr>
+    </tbody></table>
+    <p style="margin-top:40px" class="r">Authorised signatory</p>`
+  await fill(win, p.taxType === 'untaxed' ? 'CREDIT NOTE' : 'CREDIT NOTE (GST)', body)
 }
