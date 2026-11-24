@@ -20,6 +20,7 @@ import { useShortcut } from '@/lib/shortcuts'
 import { useListKeys } from '@/lib/shortcuts/list'
 import { tablistKeyDown, tabProps, useTabKeys } from '@/lib/shortcuts/tabs'
 import { DialogKeys } from '@/components/dialog-keys'
+import { EditBillDialog } from '@/components/billing/edit-bill-dialog'
 import { BillDetailCard } from '@/components/bill-detail-card'
 import { BillTypeChoice } from '@/components/bill-type-choice'
 import { DEFAULT_BILL_RATES, computeBillTotals, ratesBp, type TaxType } from '@/lib/billing/bill-totals'
@@ -50,6 +51,8 @@ interface BillerOrder {
   billerId: string | null
   salesmanId: string | null
   isEmergency: boolean
+  /** Pairs on the bill (billed orders; from the bill lines). */
+  billedPairs?: number | null
   /** The retailer's bill type (the bill's default; getBillerQueue). */
   taxType?: TaxType | null
 }
@@ -121,6 +124,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
   // Detail panel state
   const [detailOrder, setDetailOrder] = useState<BillerOrder | null>(null)
+  const [editBillOrder, setEditBillOrder] = useState<BillerOrder | null>(null)
   const [detailItems, setDetailItems] = useState<DetailItem[]>([])
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState('')
@@ -1583,6 +1587,18 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                 </button>
               )}
 
+              {/* Edit bill by scanning boxes on / off (owner, 24 Nov 2026): same number and date */}
+              {detailOrder.status === 'billed' && (
+                <button
+                  type="button"
+                  disabled={isPending}
+                  onClick={() => { const o = detailOrder; setDetailOrder(null); setEditBillOrder(o) }}
+                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground hover:bg-muted disabled:opacity-50 transition-colors"
+                >
+                  Edit bill (scan boxes on / off)
+                </button>
+              )}
+
               {/* Cancel bill (bills are never deleted, owner 23 Nov 2026): boxes back to stock, ledger entry reversed */}
               {detailOrder.status === 'billed' && (
                 <button
@@ -1614,6 +1630,21 @@ Why is it cancelled?`)
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Edit bill (scan boxes on / off) ── */}
+      {editBillOrder && (
+        <EditBillDialog
+          orderId={editBillOrder.id}
+          onClose={() => setEditBillOrder(null)}
+          onSaved={(r) => {
+            const o = editBillOrder
+            setMrpLinesMap(prev => ({ ...prev, [o.id]: r.lines.map(l => ({ artNumber: l.artNumber, mrp: l.mrp, qty: l.qty, hsn: l.hsn ?? null })) }))
+            setOrders(prev => prev.map(x => x.id === o.id ? { ...x, billNo: r.billNo, billedPairs: r.totals.totalQty } : x))
+            setEditBillOrder(null)
+            handleViewOrder({ ...o, billNo: r.billNo })
+          }}
+        />
       )}
 
       {/* ── Scan & verify modal ── */}

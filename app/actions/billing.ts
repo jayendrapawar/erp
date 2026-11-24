@@ -6,6 +6,7 @@ import type { BillRates } from '@/lib/billing/bill-totals'
 import type { BillTotalsPaise } from '@/lib/billing/bill-totals'
 import { audit } from '@/lib/audit'
 import { recordReceivedPairs } from '@/lib/billing/received-pairs'
+import { editBillByScan, loadBillForEdit, type BillForEdit, type EditedBill } from '@/lib/billing/edit-bill'
 import { and, eq, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { billLines, orders } from '@/lib/db/schema'
@@ -139,4 +140,22 @@ export async function cancelBill(orderId: number, reason: string): Promise<{ ord
     await audit(tx, { actor, action: 'bill.cancelled', entityType: 'order', entityId: orderId, before: { status: o.status }, after: { status: 'cancelled', billNo: sb?.billNo ?? o.billNo }, reason: why })
     return { orderId, billNo: sb?.billNo ?? o.billNo }
   })
+}
+
+/** Edit bill by scanning (owner, 24 Nov 2026): the bill's lines and boxes. 1 query. */
+export async function getBillForEdit(orderId: number): Promise<BillForEdit> {
+  await biller()
+  const b = await loadBillForEdit(db, Number(orderId))
+  if (!b) throw new Error('This bill has no saved amounts (made before 23 Nov). Cancel it and bill again.')
+  if (b.status !== 'billed') throw new Error(`Only bills not yet dispatched can be edited (this one is ${b.status}).`)
+  return b
+}
+
+/**
+ * Save an edit: boxes scanned on (raw labels) and off (box keys). Same number and date; stock,
+ * bill lines, frozen amounts, ledger and money set against the bill follow. One transaction, ~18 statements.
+ */
+export async function saveBillEdit(orderId: number, add: string[], remove: string[]): Promise<EditedBill> {
+  const actor = await biller()
+  return editBillByScan(db, actor, Number(orderId), { add, remove })
 }

@@ -44,10 +44,12 @@ export type BillParty = { retailerId: string; taxType: TaxType } | { walkIn: Wal
 
 export interface FreezeInput {
   orderId: number
-  source: 'invoice' | 'direct'
+  source: 'invoice' | 'direct' | 'backfill'
   lines: TotalsLine[]
   lineDiscPct: number
   party: BillParty
+  /** Keep this date (YYYY-MM-DD) instead of today: an edited bill keeps its original date. */
+  billDate?: string
   /** Bill discount and GST rates typed on the bill (owner, 24 Nov 2026); else the Master defaults. Walk-in: walkIn.discountPct. */
   rates?: BillRates
 }
@@ -76,13 +78,15 @@ export async function freezeSaleBill(tx: Tx, actor: Actor, p: FreezeInput): Prom
   const t = computeBillTotals(p.lines, p.lineDiscPct, taxType, walk ? { discountBp: toBp(walk.discountPct) } : ratesBp(rates!))
   if (t.grandTotalPaise <= 0) throw new Error('This bill comes to ₹0. Check the MRPs.')
   const billNo = await assignBillNo(tx, p.orderId, billSeriesFor(taxType))
+  if (p.billDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(p.billDate)) throw new Error('Bad bill date.')
+  const billDate = p.billDate ? sql`${p.billDate}::date` : IST_TODAY
   // Bill row and its ledger entry together (a walk-in bill has no entry: nothing is owed).
   const row = (await tx.execute<{ id: string; billDate: string }>(sql`
     WITH b AS (
       INSERT INTO sale_bills ("orderId", "retailerId", "customerName", "customerPhone", "paidMode", "billNo", "billDate", source, "taxType",
         "totalQty", "lineDiscPct", "grossPaise", "discountPct", "discountPaise", "taxablePaise",
         "cgstPct", "cgstPaise", "sgstPct", "sgstPaise", "igstPct", "igstPaise", "roundOffPaise", "grandTotalPaise", "createdBy", "createdByName")
-      VALUES (${p.orderId}, ${retailerId}, ${walk?.name ?? ''}, ${walk?.phone ?? ''}, ${walk?.paidMode ?? null}, ${billNo}, ${IST_TODAY}, ${p.source}, ${taxType},
+      VALUES (${p.orderId}, ${retailerId}, ${walk?.name ?? ''}, ${walk?.phone ?? ''}, ${walk?.paidMode ?? null}, ${billNo}, ${billDate}, ${p.source}, ${taxType},
         ${t.totalQty}, ${String(p.lineDiscPct)}, ${t.grossPaise}, ${bpToPct(t.discountBp)}, ${t.discountPaise}, ${t.taxablePaise},
         ${bpToPct(t.cgstBp)}, ${t.cgstPaise}, ${bpToPct(t.sgstBp)}, ${t.sgstPaise}, ${bpToPct(t.igstBp)}, ${t.igstPaise}, ${t.roundOffPaise}, ${t.grandTotalPaise},
         ${actor.id}, ${actor.name})

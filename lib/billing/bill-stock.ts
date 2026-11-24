@@ -17,7 +17,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import { billLines, billScans, directBillDrafts, orders, type BillStockSource, type DraftManualLine } from '@/lib/db/schema'
 import type { Actor, Db, DbOrTx, Tx } from '@/lib/db/types'
 import { audit } from '@/lib/audit'
-import { parseQr } from '@/lib/qr/parser'
+import { readBoxLabel, type BoxLabel } from './box-label'
 import { normalizeArticleValue } from '@/lib/article-utils'
 import { mainLocationId } from '@/lib/inventory/ledger'
 import { assertPickerChoice } from '@/lib/orders/pickers'
@@ -28,40 +28,8 @@ const J = (v: unknown) => JSON.stringify(v)
 
 // ── Box labels ────────────────────────────────────────────────────────────────
 
-export interface BoxLabel {
-  raw: string
-  dedupeKey: string
-  /** True when the label carries its own unique id (can be matched to a stock scan). */
-  unique: boolean
-  articleCode: string
-  colourCode: string
-  sizeLabel: string
-  mrp: number | null
-}
-
-export function readBoxLabel(rawInput: string): { ok: true; box: BoxLabel } | { ok: false; message: string } {
-  const raw = String(rawInput ?? '').trim()
-  if (!raw || raw.length > 500) return { ok: false, message: 'Empty or too long QR text.' }
-  const p = parseQr(raw)
-  if (p.kind === 'carton') return { ok: false, message: 'This is an outer-carton label. Scan the boxes inside.' }
-  if (p.status === 'unrecognised' || p.status === 'invalid') {
-    return { ok: false, message: p.issues.find((i) => i.severity === 'error')?.message ?? 'QR code not recognised.' }
-  }
-  const articleCode = normalizeArticleValue(p.fields.articleCode?.value ?? '')
-  if (!articleCode) return { ok: false, message: 'The label has no article code.' }
-  return {
-    ok: true,
-    box: {
-      raw,
-      dedupeKey: p.dedupeKey ?? `raw:${p.payload}`,
-      unique: Boolean(p.dedupeKey),
-      articleCode,
-      colourCode: normalizeArticleValue(p.fields.colourCode?.value ?? ''),
-      sizeLabel: p.fields.size?.value != null ? String(p.fields.size.value) : '',
-      mrp: p.fields.mrp ? Number(p.fields.mrp.value.toFixed(2)) : null,
-    },
-  }
-}
+// readBoxLabel lives in ./box-label (pure, also used by the Edit bill screen).
+export { readBoxLabel, type BoxLabel } from './box-label'
 
 // ── Direct Bill drafts ────────────────────────────────────────────────────────
 
@@ -308,18 +276,21 @@ export async function postOrderScans(tx: Tx, actor: Actor, orderId: number, orde
 
 /**
  * Free every box of an order: reverse its stock movements (set-based) and mark the rows released.
- * Used when a bill is deleted, sent back for editing, or moved back before "billed".
+ * Used when a bill is deleted, sent back for editing, or moved back before "billed". `only` (box
+ * dedupe keys) frees just those boxes (Edit bill: boxes scanned off the bill).
  */
-export async function releaseOrderScans(tx: Tx, actor: Actor, orderId: number, reason: string): Promise<number> {
+export async function releaseOrderScans(tx: Tx, actor: Actor, orderId: number, reason: string, only?: string[]): Promise<number> {
+  if (only && !only.length) return 0
+  const pick = only ? sql`AND b."dedupeKey" IN (SELECT json_array_elements_text(${J(only)}::json))` : sql``
   await tx.execute(sql`
     INSERT INTO stock_movements ("skuId", "locationId", provenance, quantity, "movementType", "sourceType", "sourceId", "idempotencyKey", "reversalOfId", "userId", reason)
     SELECT m."skuId", m."locationId", m.provenance, -m.quantity, 'reversal', m."sourceType", m."sourceId", 'bill_scan:' || b.id || ':back:' || m.id, m.id, ${actor.id}, ${reason}
     FROM bill_scans b JOIN stock_movements m ON m.id = b."movementId"
-    WHERE b."orderId" = ${orderId} AND b.status = 'active'
+    WHERE b."orderId" = ${orderId} AND b.status = 'active' ${pick}
       AND NOT EXISTS (SELECT 1 FROM stock_movements r WHERE r."reversalOfId" = m.id)`)
   const r = await tx.execute(sql`
-    UPDATE bill_scans SET status = 'released', "releasedAt" = now(), "releasedReason" = ${reason}, "orderId" = NULL
-    WHERE "orderId" = ${orderId} AND status = 'active'`)
+    UPDATE bill_scans b SET status = 'released', "releasedAt" = now(), "releasedReason" = ${reason}, "orderId" = NULL
+    WHERE b."orderId" = ${orderId} AND b.status = 'active' ${pick}`)
   const n = r.rowCount ?? 0
   if (n) await audit(tx, { actor, action: 'bill.boxes_released', entityType: 'order', entityId: orderId, after: { boxes: n }, reason })
   return n
@@ -417,6 +388,16 @@ export async function recordOrderScans(tx: Tx, actor: Actor, orderId: number, or
     seen.add(l.box.dedupeKey)
     boxes.push(l.box)
   }
+  await insertOrderBoxes(tx, actor, orderId, orderNumberText, boxes)
+  const counts = await postOrderScans(tx, actor, orderId, orderNumberText)
+  return { ...counts, skipped }
+}
+
+/**
+ * Put boxes on a billed order (not yet out of stock: postOrderScans does that). Refuses (throws) if a
+ * box is already on another bill or draft, naming where. 1 statement (+1 to name the held boxes).
+ */
+export async function insertOrderBoxes(tx: Tx, actor: Actor, orderId: number, orderNumberText: string, boxes: BoxLabel[]): Promise<void> {
   if (boxes.length) {
     const rows = boxes.map((b) => ({ clientEventId: crypto.randomUUID(), raw: b.raw, key: b.dedupeKey, art: b.articleCode, colour: b.colourCode || null, size: b.sizeLabel || null, mrp: b.mrp }))
     const ins = await tx.execute<{ dedupeKey: string }>(sql`
@@ -442,6 +423,4 @@ export async function recordOrderScans(tx: Tx, actor: Actor, orderId: number, or
       throw new Error(`${missing.length} box${missing.length === 1 ? ' is' : 'es are'} already on another bill: ${list}. Undo ${missing.length === 1 ? 'that scan' : 'those scans'} and save again.`)
     }
   }
-  const counts = await postOrderScans(tx, actor, orderId, orderNumberText)
-  return { ...counts, skipped }
 }

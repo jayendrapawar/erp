@@ -59,6 +59,33 @@ holding boxes cannot be deleted (foreign key), so stock can never silently drift
 `app/orders/biller/biller-dashboard.tsx`, Inventory additions in `lib/inventory/stock-queries.ts`
 and `components/inventory/inventory-page.tsx`. Tests: `tests/db/billing-stock.test.ts`.
 
+## Edit bill by scanning (24 Nov 2026)
+
+Biller → open a billed bill → **Edit bill (scan boxes on / off)**. Owner decisions: billers and admins,
+only while the bill is `billed` (once dispatched: cancel instead); same bill number **and date**; money
+already set against the bill is set against the edited bill again (oldest first, up to the new total,
+the rest stays advance); no reason asked (written as "Bill edited: +2 / −1 boxes").
+
+- Screen (`components/billing/edit-bill-dialog.tsx`): **Add** / **Remove** mode (type `+` / `−` in the
+  empty Scan box to switch). Each scan is checked on the screen with the server's rules
+  (`lib/billing/box-label.ts`, `lib/billing/bill-edit.ts`): not readable, already on the bill, not on
+  the bill, no MRP. New lines and total show at once; every change can be undone before saving.
+- A box changes the line with the same MRP and article (exact name, else the order's name for that
+  code, `articlesMatch`); otherwise it gets a new line under its own code. Typed lines stay as they are.
+- Save (`lib/billing/edit-bill.ts`, one transaction): boxes off → their stock movements reversed;
+  boxes on → recorded and taken out of stock (same rules as billing); bill lines rewritten (HSN kept);
+  old frozen bill cancelled + new one frozen with the same number and date; payments re-attached; audit
+  `bill.edited`. A box on another bill refuses the whole save. Refused when the bill has an early-payment
+  discount entered (undo it first) or was made before amounts were saved (cancel and bill again).
+
+| Action | Statements |
+|---|---|
+| Open the edit screen | 1 query |
+| Each scan | 0 (checked on the screen) |
+| Save | 1 transaction, ~18 statements whatever the number of boxes |
+
+Tests: `tests/bill/bill-edit.test.ts`, `tests/db/bill-edit.test.ts`.
+
 ## Not covered yet
 
 - Returns (a sold box coming back) — no flow yet; deleting the bill is the only way back.
