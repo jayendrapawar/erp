@@ -56,6 +56,20 @@ money twice.
 - Receipt numbers R1, R2 … (`document_sequences` 'payment_receipt').
 - Bank and cheque confirmation from the **bank statement** is a later step (needs a sample statement).
 
+## Cash and bank slips (24 Nov 2026, migration 0019) — `lib/payments/slips.ts`
+
+Like the old software: a numbered **slip** holds one day's receipts from many parties — a cash slip,
+or a bank slip for one of the shop's banks. Owner decisions: banks are kept in **Master → Banks**
+(add / edit / retire; never a fixed list); cash slips C1, C2 …, each bank its own series with its own
+prefix (e.g. SBI/1); one slip per day for cash and per bank — the same day's slip takes more lines
+later; a wrong line is reversed with a reason (shown struck out). Every payment is recorded **into**
+cash or a bank (Record payment → Into); bank lines are UPI / bank transfer / cheque, and a cheque on a
+bank slip is a deposited cheque (counted on the slip date). Cheques and UPI land in different banks and
+will be confirmed from each bank's statement (statement import: next step). Receipt no. = slip no. +
+line (C12-3). Per line, the money goes to the oldest bill first; any other bill can be chosen.
+Payments → Slips shows a day's slip (lines, total, Print, Reverse, Add entry). Cost: opening the day's
+slip +1–3 statements in the payment's transaction; a slip view is 1 query.
+
 ## Opening balances (step 6) — `lib/payments/opening.ts`
 
 What parties owed (or had paid in advance) before the app, as of go-live: one row per party or per

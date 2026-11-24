@@ -22,6 +22,7 @@
 import { sql } from 'drizzle-orm'
 import type { Actor, DbOrTx, Tx } from '@/lib/db/types'
 import { audit } from '@/lib/audit'
+import { slipForDay, type SlipInto } from './slips'
 
 export const PAY_MODES = ['cash', 'upi', 'cheque', 'bank'] as const
 export type PayMode = (typeof PAY_MODES)[number]
@@ -46,6 +47,11 @@ export interface PaymentInput {
   allocations?: AllocationInput[]
   /** Early-payment discounts, each against its bill. Counted payments only. */
   discounts?: DiscountInput[]
+  /**
+   * Into cash or a bank (owner, 24 Nov 2026): the payment goes on that day's cash / bank slip and is
+   * counted at once (a cheque on a bank slip is a deposited cheque). Receipt no. = slip no. + line.
+   */
+  into?: SlipInto
 }
 
 export interface PartySummary { retailerId: string; balancePaise: number; unpaidPaise: number; advancePaise: number }
@@ -61,6 +67,8 @@ export interface RecordedPayment {
   /** True when this clientId was already recorded (a retry): nothing new was written. */
   repeated: boolean
   party: PartySummary
+  /** The slip it went on (payments "into" cash / a bank). */
+  slipNo?: string
 }
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/
@@ -110,12 +118,25 @@ export function cleanPaymentInput(raw: unknown): PaymentInput {
     allocations: cleanList<AllocationInput>(r.allocations, 'entryId', 'Set against'),
     discounts: cleanList<DiscountInput>(r.discounts, 'saleBillId', 'Discount'),
   }
+  const into = r.into as Record<string, unknown> | undefined
+  if (into != null) {
+    if (into.kind === 'cash') out.into = { kind: 'cash' }
+    else if (into.kind === 'bank' && Number.isInteger(Number(into.bankAccountId)) && Number(into.bankAccountId) > 0) out.into = { kind: 'bank', bankAccountId: Number(into.bankAccountId) }
+    else throw new Error('Choose cash or a bank.')
+    if (out.into.kind === 'cash' && mode !== 'cash') throw new Error('A cash slip takes cash only.')
+    if (out.into.kind === 'bank' && mode === 'cash') throw new Error('Choose UPI, bank transfer or cheque for a bank slip.')
+  }
   if (mode === 'cheque') {
     out.chequeNo = text(r.chequeNo, 20)
     out.chequeBank = text(r.chequeBank, 60)
-    out.chequeDate = day(r.chequeDate, 'Cheque date')
     if (!out.chequeNo) throw new Error('Type the cheque number.')
-    if (!out.chequeBank) throw new Error('Type the cheque\'s bank.')
+    if (out.into) {
+      // A cheque on a bank slip is a deposited cheque: its bank and date are optional.
+      if (r.chequeDate) out.chequeDate = day(r.chequeDate, 'Cheque date')
+    } else {
+      out.chequeDate = day(r.chequeDate, 'Cheque date')
+      if (!out.chequeBank) throw new Error('Type the cheque\'s bank.')
+    }
   }
   const set = (out.allocations ?? []).reduce((s, a) => s + a.amountPaise, 0)
   if (set > out.amountPaise) throw new Error('More is set against bills than the amount received.')
@@ -282,18 +303,27 @@ export async function recordPayment(tx: Tx, actor: Actor, raw: unknown): Promise
     if (prev.retailerId !== p.retailerId || Number(prev.amountPaise) !== p.amountPaise) throw new Error('This payment form was already used for another payment. Reload the page.')
     return { paymentId: Number(prev.id), receiptNo: prev.receiptNo, status: prev.status, amountPaise: p.amountPaise, allocatedPaise: 0, discountPaise: 0, repeated: true, party: await partySummary(tx, p.retailerId) }
   }
-  const cheque = p.mode === 'cheque'
+  // A cheque in hand waits (pending) until deposited; a cheque on a bank slip is deposited already.
+  const cheque = p.mode === 'cheque' && !p.into
   if (cheque && (p.allocations?.length || p.discounts?.length)) throw new Error('A cheque is set against bills when it is deposited.')
-  const seq = (await tx.execute<{ prefix: string; n: string; padding: number }>(sql`
-    UPDATE document_sequences SET next = next + 1 WHERE name = 'payment_receipt' RETURNING prefix, next - 1 AS n, padding`)).rows[0]
-  if (!seq) throw new Error('Receipt numbering is not set up (document_sequences).')
-  const receiptNo = `${seq.prefix}${String(seq.n).padStart(seq.padding, '0')}`
+  let receiptNo: string, slip: { id: number; slipNo: string } | null = null
+  if (p.into) {
+    slip = await slipForDay(tx, actor, p.into, p.receivedOn)
+    const n = Number((await tx.execute<{ n: string }>(sql`SELECT count(*) AS n FROM payments WHERE "slipId" = ${slip.id}`)).rows[0].n) + 1
+    receiptNo = `${slip.slipNo}-${n}`
+  } else {
+    const seq = (await tx.execute<{ prefix: string; n: string; padding: number }>(sql`
+      UPDATE document_sequences SET next = next + 1 WHERE name = 'payment_receipt' RETURNING prefix, next - 1 AS n, padding`)).rows[0]
+    if (!seq) throw new Error('Receipt numbering is not set up (document_sequences).')
+    receiptNo = `${seq.prefix}${String(seq.n).padStart(seq.padding, '0')}`
+  }
   const row = (await tx.execute<{ id: string }>(sql`
     INSERT INTO payments ("clientId", "receiptNo", "retailerId", "receivedOn", "countedOn", mode, "amountPaise", "chequeNo", "chequeBank", "chequeDate",
-      reference, note, status, "countedBy", "countedByName", "createdBy", "createdByName")
+      reference, note, status, "countedBy", "countedByName", "createdBy", "createdByName", "slipId", "bankAccountId")
     VALUES (${p.clientId}, ${receiptNo}, ${p.retailerId}, ${p.receivedOn}::date, ${cheque ? null : p.receivedOn}::date, ${p.mode}, ${p.amountPaise},
       ${p.chequeNo ?? ''}, ${p.chequeBank ?? ''}, ${p.chequeDate ?? null}::date, ${p.reference ?? ''}, ${p.note ?? ''},
-      ${cheque ? 'pending' : 'active'}, ${cheque ? null : actor.id}, ${cheque ? '' : actor.name}, ${actor.id}, ${actor.name})
+      ${cheque ? 'pending' : 'active'}, ${cheque ? null : actor.id}, ${cheque ? '' : actor.name}, ${actor.id}, ${actor.name},
+      ${slip?.id ?? null}, ${p.into?.kind === 'bank' ? p.into.bankAccountId : null})
     RETURNING id`)).rows[0]
   const paymentId = Number(row.id)
   const posted = cheque
@@ -301,9 +331,9 @@ export async function recordPayment(tx: Tx, actor: Actor, raw: unknown): Promise
     : await postCounted(tx, actor, { id: paymentId, retailerId: p.retailerId, receiptNo, amountPaise: p.amountPaise, countedOn: p.receivedOn }, p.allocations ?? [], p.discounts ?? [])
   await audit(tx, {
     actor, action: 'payment.recorded', entityType: 'payment', entityId: paymentId,
-    after: { receiptNo, retailerId: p.retailerId, partyName: party.partyName, mode: p.mode, amountPaise: p.amountPaise, status: cheque ? 'pending' : 'active', ...posted },
+    after: { receiptNo, slipNo: slip?.slipNo, retailerId: p.retailerId, partyName: party.partyName, mode: p.mode, amountPaise: p.amountPaise, status: cheque ? 'pending' : 'active', ...posted },
   })
-  return { paymentId, receiptNo, status: cheque ? 'pending' : 'active', amountPaise: p.amountPaise, ...posted, repeated: false, party: await partySummary(tx, p.retailerId) }
+  return { paymentId, receiptNo, status: cheque ? 'pending' : 'active', amountPaise: p.amountPaise, ...posted, repeated: false, party: await partySummary(tx, p.retailerId), slipNo: slip?.slipNo }
 }
 
 /** A cheque in hand is deposited: counted from the deposit date and set against bills. */

@@ -21,6 +21,9 @@ import {
   cancelCreditNote, checkReturnBox, createCreditNote, creditNoteForPrint, listPartyBills,
   type CreditNotePrint, type PartyBill, type ReturnBox, type SavedCreditNote,
 } from '@/lib/payments/credit-notes'
+import {
+  cashSlipNumbering, listBanks, saveBank, saveCashSlipNumbering, type BankAccount, type SlipNumbering,
+} from '@/lib/payments/slips'
 
 const actorOf = (u: { id: string; name: string }) => ({ id: u.id, name: u.name })
 const idOf = (v: unknown) => {
@@ -174,4 +177,27 @@ export async function cancelCreditNoteAction(id: number, reason: string) {
 export async function getCreditNotePrint(id: number): Promise<CreditNotePrint | null> {
   await requirePermission('payments.view')
   return creditNoteForPrint(db, idOf(id))
+}
+
+// ── Banks and cash / bank slips (migration 0019) ─────────────────────────────
+
+/** The shop's banks: all (Master → Banks) or only active ones (Record payment's "Into"). 1 query. */
+export async function getBanks(activeOnly = false): Promise<BankAccount[]> {
+  await requirePermission('payments.view')
+  return listBanks(db, { activeOnly })
+}
+
+export async function saveBankAction(input: unknown): Promise<BankAccount[]> {
+  const u = await requirePermission('payments.record')
+  return db.transaction((tx) => saveBank(tx, actorOf(u), input))
+}
+
+export async function getCashSlipNumbering(): Promise<SlipNumbering> {
+  await requirePermission('payments.view')
+  return cashSlipNumbering(db)
+}
+
+export async function saveCashSlipNumberingAction(input: unknown): Promise<SlipNumbering> {
+  const u = await requirePermission('payments.record')
+  return db.transaction((tx) => saveCashSlipNumbering(tx, actorOf(u), input))
 }

@@ -21,10 +21,11 @@ import { PartyPicker } from './party-picker'
 import { OpeningTab } from './opening-tab'
 import { CreditNotesTab } from './credit-notes-tab'
 import { RecordPayment } from './record-payment'
-import { dayText, istToday, printStatement, statementText, whatsappLink } from './print'
+import { dayText, istToday, printSlip, printStatement, statementText, whatsappLink } from './print'
+import type { BankAccount, SlipInto, SlipView } from '@/lib/payments/slips'
 
-const TABS = ['outstanding', 'cheques', 'statement', 'creditnotes', 'opening'] as const
-const LABEL: Record<string, string> = { outstanding: 'Outstanding', cheques: 'Payments & cheques', statement: 'Party statement', creditnotes: 'Credit notes', opening: 'Opening balances' }
+const TABS = ['outstanding', 'slips', 'cheques', 'statement', 'creditnotes', 'opening'] as const
+const LABEL: Record<string, string> = { outstanding: 'Outstanding', slips: 'Slips', cheques: 'Payments & cheques', statement: 'Party statement', creditnotes: 'Credit notes', opening: 'Opening balances' }
 const inputCls = 'h-10 rounded-xl border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring'
 const STATUS: Record<string, { label: string; cls: string }> = {
   pending: { label: 'Cheque received', cls: 'bg-amber-500/15 text-amber-800 dark:text-amber-300' },
@@ -46,10 +47,10 @@ function fyStart(iso: string): string {
   return `${m >= 4 ? y : y - 1}-04-01`
 }
 
-export function PaymentsPage({ initialOutstanding, parties, canRecord }: { initialOutstanding: OutstandingPage; parties: PartyChoice[]; canRecord: boolean }) {
+export function PaymentsPage({ initialOutstanding, parties, banks = [], canRecord }: { initialOutstanding: OutstandingPage; parties: PartyChoice[]; banks?: BankAccount[]; canRecord: boolean }) {
   const [tab, setTab] = useHashTab(TABS, 'outstanding')
   useTabKeys(TABS.map((t) => ({ value: t, label: LABEL[t] })), setTab, { group: 'Payments tabs' })
-  const [recordFor, setRecordFor] = useState<{ partyId: string | null } | null>(null)
+  const [recordFor, setRecordFor] = useState<{ partyId: string | null; into?: SlipInto; date?: string } | null>(null)
   const [statementParty, setStatementParty] = useState<PartyChoice | null>(null)
   /** Bumped after any save, so the open lists load again. */
   const [version, setVersion] = useState(0)
@@ -81,13 +82,15 @@ export function PaymentsPage({ initialOutstanding, parties, canRecord }: { initi
 
       {tab === 'outstanding' && <OutstandingTab initial={initialOutstanding} version={version} canRecord={canRecord}
         onStatement={openStatement} onRecord={(id) => setRecordFor({ partyId: id })} />}
+      {tab === 'slips' && <SlipsTab banks={banks} version={version} canRecord={canRecord}
+        onAdd={(into, date) => setRecordFor({ partyId: null, into, date })} onChanged={() => setVersion((v) => v + 1)} />}
       {tab === 'cheques' && <PaymentsTab version={version} canRecord={canRecord} onChanged={() => setVersion((v) => v + 1)} onStatement={openStatement} />}
       {tab === 'creditnotes' && <CreditNotesTab parties={parties} canRecord={canRecord} onChanged={() => setVersion((v) => v + 1)} />}
       {tab === 'opening' && <OpeningTab parties={parties} canRecord={canRecord} onChanged={() => setVersion((v) => v + 1)} />}
       {tab === 'statement' && <StatementTab parties={parties} party={statementParty} onParty={setStatementParty} version={version} />}
 
       {recordFor && (
-        <RecordPayment parties={parties} initialPartyId={recordFor.partyId}
+        <RecordPayment parties={parties} banks={banks} initialPartyId={recordFor.partyId} initialInto={recordFor.into} initialDate={recordFor.date}
           onClose={() => setRecordFor(null)} onSaved={() => setVersion((v) => v + 1)} />
       )}
     </div>
@@ -196,6 +199,99 @@ function OutstandingTab({ initial, version, canRecord, onStatement, onRecord }: 
           {loading ? 'Loading…' : `Show more (${data.total - data.rows.length} more)`}
         </button>
       )}
+    </div>
+  )
+}
+
+// ── Slips (owner, 24 Nov 2026) ────────────────────────────────────────────────
+// A day's cash slip or bank slip: every party's line, reversed ones struck out, the total. "Add entry"
+// opens Record payment for that slip and day. One query (GET /api/payments?view=slip).
+
+function SlipsTab({ banks, version, canRecord, onAdd, onChanged }: {
+  banks: BankAccount[]; version: number; canRecord: boolean; onAdd: (into: SlipInto, date: string) => void; onChanged: () => void
+}) {
+  const [into, setInto] = useState<SlipInto>({ kind: 'cash' })
+  const [date, setDate] = useState(istToday())
+  const [view, setView] = useState<SlipView | null>(null)
+  const [err, setErr] = useState('')
+  const [msg, setMsg] = useState('')
+  const [rev, setRev] = useState<PaymentRow | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Slip lines' })
+  const key = into.kind === 'cash' ? 'cash' : String(into.bankAccountId)
+  useEffect(() => {
+    let live = true
+    setErr('')
+    getJson<SlipView>(`/api/payments?view=slip&bank=${key}&date=${date}`)
+      .then((v) => { if (live) setView(v) }).catch((e) => { if (live) setErr(e instanceof Error ? e.message : 'Could not load.') })
+    return () => { live = false }
+  }, [key, date, version])
+  const options: SlipInto[] = [{ kind: 'cash' }, ...banks.map((b): SlipInto => ({ kind: 'bank', bankAccountId: b.id }))]
+  const label = (i: SlipInto) => (i.kind === 'cash' ? 'Cash' : banks.find((b) => b.id === i.bankAccountId)?.name ?? 'Bank')
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <div role="tablist" aria-label="Cash or bank" onKeyDown={tablistKeyDown} className="flex flex-wrap gap-1 rounded-xl border border-border bg-muted/40 p-1">
+          {options.map((o) => {
+            const k = o.kind === 'cash' ? 'cash' : String(o.bankAccountId)
+            return (
+              <button key={k} type="button" {...tabProps(k === key)} onClick={() => setInto(o)}
+                className={`h-9 rounded-lg px-4 text-sm font-semibold ${k === key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                {label(o)}
+              </button>
+            )
+          })}
+        </div>
+        <label className="text-xs font-medium text-muted-foreground">Date
+          <input type="date" value={date} max={istToday()} onChange={(e) => setDate(e.target.value)} className={`${inputCls} mt-1 block`} />
+        </label>
+        <span className="flex-1" />
+        {view?.slip && <button type="button" onClick={() => void printSlip(view)} className="h-10 rounded-xl border border-border px-4 text-sm font-semibold hover:bg-muted">Print slip</button>}
+        {canRecord && (
+          <button type="button" onClick={() => onAdd(into, date)} className="h-10 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground">
+            {`+ Add entry to ${label(into)}`}
+          </button>
+        )}
+      </div>
+      {banks.length === 0 && <p className="text-xs text-muted-foreground">Add your banks in Master → Banks to keep bank slips.</p>}
+      {err && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{err}</p>}
+      {msg && <p role="status" className="rounded-xl bg-emerald-500/10 px-3 py-2 text-sm text-emerald-800 dark:text-emerald-200">{msg}</p>}
+      <p className="text-sm">
+        {view?.slip ? <>Slip <b className="font-mono">{view.slip.slipNo}</b>{` · ${dayText(view.slip.slipDate)} · ${label(into)}`}</> : `No ${label(into)} slip on ${dayText(date)} yet — the first entry opens it.`}
+      </p>
+      <div ref={listRef} className="overflow-x-auto rounded-xl border border-border bg-card">
+        <table className="w-full min-w-[720px] text-sm">
+          <thead className="border-b border-border bg-muted/30 text-[11px] uppercase tracking-wide text-muted-foreground">
+            <tr><th className="px-3 py-2 text-left font-semibold">#</th><th className="px-2 py-2 text-left font-semibold">Party</th><th className="px-2 py-2 text-left font-semibold">How</th>
+              <th className="px-2 py-2 text-left font-semibold">Against bills</th><th className="px-2 py-2 text-right font-semibold">Amount</th><th /></tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {view && view.lines.length === 0 && <tr><td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">No entries on this slip.</td></tr>}
+            {view?.lines.map((l, i) => (
+              <tr key={l.paymentId} data-list-row className={l.status !== 'active' ? 'text-muted-foreground line-through decoration-1' : ''}>
+                <td className="px-3 py-2 text-xs tabular-nums">{i + 1}</td>
+                <td className="px-2 py-2 font-medium" data-no-translate>{l.partyName}{l.note && <span className="block text-[11px] font-normal text-muted-foreground">{l.note}</span>}
+                  {l.reversalReason && <span className="block text-[11px] font-normal no-underline">{`Reversed: ${l.reversalReason}`}</span>}</td>
+                <td className="px-2 py-2 text-xs">{l.mode.toUpperCase()}{l.chequeNo ? ` ${l.chequeNo}` : ''}{l.reference ? ` · ${l.reference}` : ''}</td>
+                <td className="px-2 py-2 text-xs">{l.setAgainst.map((a) => `${a.refNo} ${formatRs(a.amountPaise)}`).join(', ') || (l.status === 'active' ? 'Advance' : '')}
+                  {l.discountPaise > 0 && <span className="block text-emerald-700 dark:text-emerald-300">{`Discount ${formatRs(l.discountPaise)}`}</span>}</td>
+                <td className="px-2 py-2 text-right font-semibold tabular-nums whitespace-nowrap">{formatRs(l.amountPaise)}</td>
+                <td className="px-3 py-2 text-right">
+                  {canRecord && l.status === 'active' && (
+                    <button type="button" data-row-open onClick={() => setRev({ paymentId: l.paymentId, receiptNo: l.receiptNo, retailerId: l.retailerId, partyName: l.partyName, mode: l.mode,
+                      amountPaise: l.amountPaise, receivedOn: date, countedOn: date, status: l.status, chequeNo: l.chequeNo, chequeBank: '', chequeDate: null, reference: l.reference, note: l.note, createdByName: l.createdByName })}
+                      className="rounded-lg border border-red-300 px-2.5 py-1 text-xs font-semibold text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950/30">Reverse</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {view && view.lines.length > 0 && (
+              <tr className="bg-muted/20"><td className="px-3 py-2" colSpan={4}><b>Total</b></td><td className="px-2 py-2 text-right font-bold tabular-nums whitespace-nowrap">{formatRs(view.totalPaise)}</td><td /></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {rev && <PaymentActionDialog kind="reverse" p={rev} onClose={() => setRev(null)} onDone={(t) => { setRev(null); setMsg(t); onChanged() }} />}
     </div>
   )
 }

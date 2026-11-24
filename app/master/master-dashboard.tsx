@@ -13,6 +13,7 @@ import type { CatalogReviewItem } from '@/app/actions/articles'
 import type { MissingArticle } from '@/lib/catalog/missing-articles'
 import { SetsTab } from './sets-tab'
 import { BillTemplateTab } from './bill-template-tab'
+import { BanksTab } from '@/components/master/banks-tab'
 import { SuppliersTab } from './suppliers-tab'
 import { AssortmentsTab } from './assortments-tab'
 import type { Assortment } from '@/lib/catalog/assortment-store'
@@ -225,7 +226,7 @@ interface Props {
 
 const ROLES: AppRole[] = [...ALL_ROLES, 'user']
 /** Section names for the page title (computers hide the tab row; the sidebar lists the sections). */
-const MASTER_TAB_LABEL: Record<string, string> = { users: 'Users', vendors: 'Retailers', suppliers: 'Suppliers', articles: 'Articles', assortments: 'Assortments', sets: 'Sets', bill: 'Bill template' }
+const MASTER_TAB_LABEL: Record<string, string> = { users: 'Users', vendors: 'Retailers', suppliers: 'Suppliers', articles: 'Articles', assortments: 'Assortments', sets: 'Sets', bill: 'Bill template', banks: 'Banks' }
 
 export function MasterDashboard({ users, currentUserId, vendors: initialVendors, articles: initialArticles, missingArticles, catalogReviewItems, sets: initialSets, suppliers, assortments, isAccountant = false }: Props) {
   const [isPending, startTransition] = useTransition()
@@ -244,7 +245,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
 
   const defaultTab = isAccountant ? 'vendors' : 'users'
   // Tab from the address (#articles) so the sidebar can open it; switching tabs updates the address.
-  const tabIds = isAccountant ? ['vendors', 'suppliers', 'articles', 'assortments'] : ['users', 'vendors', 'suppliers', 'articles', 'assortments', 'sets', 'bill']
+  const tabIds = isAccountant ? ['vendors', 'suppliers', 'articles', 'assortments', 'banks'] : ['users', 'vendors', 'suppliers', 'articles', 'assortments', 'sets', 'bill', 'banks']
   const [tab, setTab] = useState(defaultTab)
   useEffect(() => {
     const read = () => {
@@ -305,6 +306,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
             <TabsTrigger value="assortments" className="text-xs sm:text-sm">Assortments ({assortments.length})</TabsTrigger>
             {isAdmin && <TabsTrigger value="sets" className="text-xs sm:text-sm">Sets ({setList.length})</TabsTrigger>}
             {isAdmin && <TabsTrigger value="bill" className="text-xs sm:text-sm">Bill template</TabsTrigger>}
+            <TabsTrigger value="banks" className="text-xs sm:text-sm">Banks</TabsTrigger>
           </TabsList>
 
           {/* ── Users tab — hidden for accountant ── */}
@@ -416,6 +418,11 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
               <SetsTab initialSets={setList} onListChange={setSetList} />
             </TabsContent>
           )}
+
+          {/* ── Banks (admin, accountant): banks money comes into, slip numbers ── */}
+          <TabsContent value="banks">
+            <BanksTab />
+          </TabsContent>
 
           {/* ── Bill template (admin only): details printed on sale bills ── */}
           {isAdmin && (

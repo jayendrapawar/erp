@@ -5,6 +5,10 @@
 // changed ("Set against"). Parties with an early-payment discount get it pre-filled on bills still
 // within their days (editable, untickable — the accountant decides). A cheque is only "received":
 // it is set against bills when it is deposited (Payments & cheques tab).
+//
+// Slips (owner, 24 Nov 2026): every payment goes INTO cash or one of the banks (Master → Banks) and
+// lands on that day's slip (Payments → Slips). Bank lines are UPI / bank transfer / cheque; a cheque
+// on a bank slip is a deposited cheque (counted on the slip date).
 
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { DialogKeys } from '@/components/dialog-keys'
@@ -15,11 +19,12 @@ import { formatRs } from '@/lib/billing/bill-amounts'
 import { toPaise } from '@/lib/billing/bill-totals'
 import type { PartyForPayment, PayMode, RecordedPayment } from '@/lib/payments/payments'
 import type { PartyChoice } from '@/lib/payments/queries'
+import type { BankAccount, SlipInto } from '@/lib/payments/slips'
 import { printReceipt, whatsappLink, istToday, dayText } from './print'
 
-const MODES: Array<{ id: PayMode; label: string }> = [
-  { id: 'cash', label: 'Cash' }, { id: 'upi', label: 'UPI' }, { id: 'cheque', label: 'Cheque' }, { id: 'bank', label: 'Bank' },
-]
+/** How money came into a bank. */
+const BANK_MODES: Array<{ id: PayMode; label: string }> = [{ id: 'upi', label: 'UPI' }, { id: 'bank', label: 'Bank transfer' }, { id: 'cheque', label: 'Cheque' }]
+const intoKey = (i: SlipInto) => (i.kind === 'cash' ? 'cash' : `bank:${i.bankAccountId}`)
 const inputCls = 'mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring'
 const smallCls = 'h-8 w-24 rounded-lg border bg-background px-2 text-right text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-ring'
 
@@ -39,15 +44,20 @@ function paiseOf(text: string): number | null {
 const rupeesText = (p: number) => (p / 100).toFixed(2).replace(/\.00$/, '')
 
 export interface SavedReceipt extends RecordedPayment {
-  partyName: string; phone: string; mode: PayMode; receivedOn: string
+  partyName: string; phone: string; mode: PayMode; receivedOn: string; intoLabel: string
   chequeNo?: string; chequeBank?: string; chequeDate?: string; reference?: string
   setAgainst: Array<{ refNo: string; amountPaise: number }>
   discounts: Array<{ refNo: string; amountPaise: number }>
 }
 
-export function RecordPayment({ parties, initialPartyId, onClose, onSaved }: {
+export function RecordPayment({ parties, banks = [], initialPartyId, initialInto, initialDate, onClose, onSaved }: {
   parties: PartyChoice[]
+  /** Active banks (Master → Banks). */
+  banks?: BankAccount[]
   initialPartyId?: string | null
+  /** Opened from a slip: cash or that bank, that day. */
+  initialInto?: SlipInto
+  initialDate?: string
   onClose: () => void
   onSaved: (r: SavedReceipt) => void
 }) {
@@ -55,8 +65,9 @@ export function RecordPayment({ parties, initialPartyId, onClose, onSaved }: {
   const [data, setData] = useState<PartyForPayment | null>(null)
   const [loadErr, setLoadErr] = useState('')
   const [amount, setAmount] = useState('')
-  const [mode, setMode] = useState<PayMode>('cash')
-  const [receivedOn, setReceivedOn] = useState(istToday())
+  const [into, setInto] = useState<SlipInto>(initialInto ?? { kind: 'cash' })
+  const [mode, setMode] = useState<PayMode>(initialInto?.kind === 'bank' ? 'upi' : 'cash')
+  const [receivedOn, setReceivedOn] = useState(initialDate ?? istToday())
   const [chequeNo, setChequeNo] = useState('')
   const [chequeBank, setChequeBank] = useState('')
   const [chequeDate, setChequeDate] = useState(istToday())
@@ -95,7 +106,11 @@ export function RecordPayment({ parties, initialPartyId, onClose, onSaved }: {
     setDisc(next)
   }, [data, receivedOn])
 
-  const cheque = mode === 'cheque'
+  // A cheque on a bank slip is deposited: counted at once, set against bills like any payment.
+  const cheque = false
+  const isCheque = mode === 'cheque'
+  const intoLabel = into.kind === 'cash' ? 'Cash' : banks.find((b) => b.id === into.bankAccountId)?.name ?? 'Bank'
+  const chooseInto = (i: SlipInto) => { setInto(i); setMode(i.kind === 'cash' ? 'cash' : mode === 'cash' ? 'upi' : mode) }
   const amountPaise = paiseOf(amount)
   const plan = useMemo(() => {
     const rows = (data?.open ?? []).map((o) => {
@@ -117,7 +132,7 @@ export function RecordPayment({ parties, initialPartyId, onClose, onSaved }: {
   const problem = !party ? 'Choose the party.'
     : !data ? (loadErr || 'Loading the party…')
     : amountPaise == null || amountPaise <= 0 ? 'Type the amount received.'
-    : cheque && (!chequeNo.trim() || !chequeBank.trim() || !chequeDate) ? 'Type the cheque number, bank and date.'
+    : isCheque && !chequeNo.trim() ? 'Type the cheque number.'
     : plan.rows.some((r) => r.discountPaise < 0) ? 'A discount amount is not a number.'
     : plan.rows.some((r) => r.discountPaise > r.openPaise) ? 'A discount is more than is unpaid on its bill.'
     : plan.set.some((v) => v < 0) ? 'A "set against" amount is not a number.'
@@ -131,14 +146,14 @@ export function RecordPayment({ parties, initialPartyId, onClose, onSaved }: {
     const discounts = cheque ? [] : plan.rows.filter((r) => r.saleBillId && r.discountPaise > 0).map((r) => ({ saleBillId: r.saleBillId!, amountPaise: r.discountPaise }))
     const allocations = cheque || !manual ? [] : plan.rows.map((r, i) => ({ entryId: r.entryId, amountPaise: plan.set[i] })).filter((a) => a.amountPaise > 0)
     const input = {
-      clientId: clientId.current, retailerId: party.id, receivedOn, mode, amountPaise,
-      chequeNo, chequeBank, chequeDate: cheque ? chequeDate : undefined, reference, note, allocations, discounts,
+      clientId: clientId.current, retailerId: party.id, receivedOn, mode, amountPaise, into,
+      chequeNo, chequeBank, chequeDate: isCheque && chequeDate ? chequeDate : undefined, reference, note, allocations, discounts,
     }
     startSave(async () => {
       try {
         const r = await recordPaymentAction(input)
         const receipt: SavedReceipt = {
-          ...r, partyName: data.partyName, phone: party.phone, mode, receivedOn,
+          ...r, partyName: data.partyName, phone: party.phone, mode, receivedOn, intoLabel,
           chequeNo, chequeBank, chequeDate, reference,
           setAgainst: cheque ? [] : plan.rows.map((x, i) => ({ refNo: x.refNo, amountPaise: plan.set[i] })).filter((x) => x.amountPaise > 0),
           discounts: plan.rows.filter((x) => x.discountPaise > 0).map((x) => ({ refNo: x.refNo, amountPaise: x.discountPaise })),
@@ -153,7 +168,7 @@ export function RecordPayment({ parties, initialPartyId, onClose, onSaved }: {
 
   function another() {
     clientId.current = uuid()
-    setSaved(null); setAmount(''); setReference(''); setNote(''); setChequeNo(''); setManual(null); setError('')
+    setSaved(null); setAmount(''); setReference(''); setNote(''); setChequeNo(''); setChequeBank(''); setManual(null); setError('')
     setParty(null)
   }
 
@@ -175,6 +190,7 @@ export function RecordPayment({ parties, initialPartyId, onClose, onSaved }: {
               <p className="text-sm text-emerald-900 dark:text-emerald-200">{saved.repeated ? 'Already recorded (nothing new saved)' : saved.status === 'pending' ? 'Cheque received — counted when deposited' : 'Payment recorded'}</p>
               <p className="mt-1 text-2xl font-bold tabular-nums">{`${saved.receiptNo} · ${formatRs(saved.amountPaise)}`}</p>
               <p className="mt-1 text-sm" data-no-translate>{saved.partyName}</p>
+              {saved.slipNo && <p className="mt-0.5 text-xs text-muted-foreground">{`On ${saved.intoLabel} slip ${saved.slipNo}`}</p>}
             </div>
             <dl className="grid grid-cols-2 gap-2 text-sm">
               <dt className="text-muted-foreground">Set against bills</dt><dd className="text-right tabular-nums">{formatRs(saved.allocatedPaise)}</dd>
@@ -211,40 +227,65 @@ export function RecordPayment({ parties, initialPartyId, onClose, onSaved }: {
             </div>
 
             <div>
-              <span className="text-xs font-medium text-muted-foreground" id="pay-mode">How paid</span>
-              <div role="radiogroup" aria-labelledby="pay-mode" className="mt-1 grid grid-cols-4 gap-1 rounded-xl border border-border bg-muted/40 p-1">
-                {MODES.map((m, i) => (
-                  <button key={m.id} type="button" role="radio" aria-checked={mode === m.id} tabIndex={mode === m.id ? 0 : -1} data-mode={m.id}
-                    onClick={() => setMode(m.id)}
-                    onKeyDown={(e) => {
-                      const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0
-                      if (!step) return
-                      e.preventDefault()
-                      const next = MODES[(i + step + MODES.length) % MODES.length].id
-                      setMode(next)
-                      ;(e.currentTarget.parentElement?.querySelector(`[data-mode="${next}"]`) as HTMLElement | null)?.focus()
-                    }}
-                    className={`h-9 rounded-lg text-sm font-semibold ${mode === m.id ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-background'}`}>
-                    {m.label}
-                  </button>
-                ))}
+              <span className="text-xs font-medium text-muted-foreground" id="pay-into">Into</span>
+              <div role="radiogroup" aria-labelledby="pay-into" className="mt-1 flex flex-wrap gap-1 rounded-xl border border-border bg-muted/40 p-1">
+                {[{ kind: 'cash' } as SlipInto, ...banks.map((b): SlipInto => ({ kind: 'bank', bankAccountId: b.id }))].map((i, n, all) => {
+                  const on = intoKey(i) === intoKey(into)
+                  const label = i.kind === 'cash' ? 'Cash' : banks.find((b) => b.id === i.bankAccountId)?.name ?? 'Bank'
+                  return (
+                    <button key={intoKey(i)} type="button" role="radio" aria-checked={on} tabIndex={on ? 0 : -1} data-into={intoKey(i)}
+                      onClick={() => chooseInto(i)}
+                      onKeyDown={(e) => {
+                        const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0
+                        if (!step) return
+                        e.preventDefault()
+                        const next = all[(n + step + all.length) % all.length]
+                        chooseInto(next)
+                        ;(e.currentTarget.parentElement?.querySelector(`[data-into="${intoKey(next)}"]`) as HTMLElement | null)?.focus()
+                      }}
+                      className={`h-9 min-w-[5rem] flex-1 rounded-lg px-3 text-sm font-semibold ${on ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-background'}`}>
+                      {label}
+                    </button>
+                  )
+                })}
               </div>
+              {banks.length === 0 && <p className="mt-1 text-[11px] text-muted-foreground">Add your banks in Master → Banks to take UPI, bank transfers and cheques.</p>}
             </div>
 
-            {cheque ? (
+            {into.kind === 'bank' && (
+              <div>
+                <span className="text-xs font-medium text-muted-foreground" id="pay-mode">How</span>
+                <div role="radiogroup" aria-labelledby="pay-mode" className="mt-1 grid grid-cols-3 gap-1 rounded-xl border border-border bg-muted/40 p-1">
+                  {BANK_MODES.map((m, i) => (
+                    <button key={m.id} type="button" role="radio" aria-checked={mode === m.id} tabIndex={mode === m.id ? 0 : -1} data-mode={m.id}
+                      onClick={() => setMode(m.id)}
+                      onKeyDown={(e) => {
+                        const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0
+                        if (!step) return
+                        e.preventDefault()
+                        const next = BANK_MODES[(i + step + BANK_MODES.length) % BANK_MODES.length].id
+                        setMode(next)
+                        ;(e.currentTarget.parentElement?.querySelector(`[data-mode="${next}"]`) as HTMLElement | null)?.focus()
+                      }}
+                      className={`h-9 rounded-lg text-sm font-semibold ${mode === m.id ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-background'}`}>
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {isCheque ? (
               <div className="grid grid-cols-3 gap-3">
                 <label className="block text-xs font-medium text-muted-foreground">Cheque no.
                   <input value={chequeNo} onChange={(e) => setChequeNo(e.target.value)} maxLength={20} inputMode="numeric" className={inputCls} />
                 </label>
-                <label className="block text-xs font-medium text-muted-foreground">Bank
+                <label className="block text-xs font-medium text-muted-foreground">Party&apos;s bank (optional)
                   <input value={chequeBank} onChange={(e) => setChequeBank(e.target.value)} maxLength={60} className={inputCls} />
                 </label>
-                <label className="block text-xs font-medium text-muted-foreground">Cheque date
+                <label className="block text-xs font-medium text-muted-foreground">Cheque date (optional)
                   <input type="date" value={chequeDate} onChange={(e) => setChequeDate(e.target.value)} className={inputCls} />
                 </label>
-                <p className="col-span-3 rounded-xl bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
-                  Saved as <b>cheque received</b>. It is not counted until it is deposited (Payments &amp; cheques tab); it is set against bills then.
-                </p>
               </div>
             ) : (mode === 'upi' || mode === 'bank') && (
               <label className="block text-xs font-medium text-muted-foreground">{mode === 'upi' ? 'UPI reference (optional)' : 'UTR / reference (optional)'}
@@ -323,7 +364,7 @@ export function RecordPayment({ parties, initialPartyId, onClose, onSaved }: {
             <div className="sticky bottom-0 -mx-4 border-t border-border bg-card px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 sm:-mx-5 sm:px-5">
               <button type="submit" data-primary disabled={saving || !!problem}
                 className="h-12 w-full rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground disabled:opacity-50">
-                {saving ? 'Saving…' : cheque ? `Save cheque received${amountPaise ? ` · ${formatRs(amountPaise)}` : ''}` : `Record payment${amountPaise ? ` · ${formatRs(amountPaise)}` : ''}`}
+                {saving ? 'Saving…' : `Save to ${intoLabel}${amountPaise ? ` · ${formatRs(amountPaise)}` : ''}`}
               </button>
             </div>
           </form>
@@ -337,7 +378,7 @@ function receiptText(r: SavedReceipt): string {
   const lines = [
     `Shayona — payment receipt ${r.receiptNo}`,
     `${r.partyName}`,
-    `${r.status === 'pending' ? 'Cheque received' : 'Received'} ${formatRs(r.amountPaise)} on ${dayText(r.receivedOn)} (${r.mode.toUpperCase()}${r.chequeNo ? ` no. ${r.chequeNo}` : ''})`,
+    `Received ${formatRs(r.amountPaise)} on ${dayText(r.receivedOn)} (${r.intoLabel}, ${r.mode.toUpperCase()}${r.chequeNo ? ` no. ${r.chequeNo}` : ''})`,
     ...r.setAgainst.map((s) => `  ${s.refNo}: ${formatRs(s.amountPaise)}`),
     ...(r.discountPaise > 0 ? [`Early-payment discount: ${formatRs(r.discountPaise)}`] : []),
     `Balance now: ${formatRs(r.party.balancePaise)}`,

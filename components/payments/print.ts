@@ -9,6 +9,7 @@ import { ratePaise } from '@/lib/billing/bill-totals'
 import type { BillTemplate } from '@/lib/bill-template'
 import type { Statement } from '@/lib/payments/queries'
 import type { CreditNotePrint } from '@/lib/payments/credit-notes'
+import type { SlipView } from '@/lib/payments/slips'
 
 /** Today in India (YYYY-MM-DD). */
 export function istToday(): string {
@@ -133,4 +134,22 @@ export async function printCreditNote(p: CreditNotePrint) {
     </tbody></table>
     <p style="margin-top:40px" class="r">Authorised signatory</p>`
   await fill(win, p.taxType === 'untaxed' ? 'CREDIT NOTE' : 'CREDIT NOTE (GST)', body)
+}
+
+/** A day's cash / bank slip: every line, reversed ones struck out, and the total. */
+export async function printSlip(v: SlipView) {
+  if (!v.slip) return
+  const win = openPrintWindow()
+  if (!win) return
+  const s = v.slip
+  const body = `
+    <p>Slip no. <b>${esc(s.slipNo)}</b> &nbsp; Date <b>${esc(dayText(s.slipDate))}</b> &nbsp; ${s.kind === 'cash' ? 'CASH' : `BANK: <b>${esc(s.bankName ?? '')}</b>`}</p>
+    <table><thead><tr><th>#</th><th>Party</th><th>How</th><th>Against bills</th><th class="r">Amount</th></tr></thead><tbody>
+    ${v.lines.map((l, i) => `<tr${l.status !== 'active' ? ' style="text-decoration:line-through;color:#888"' : ''}><td>${i + 1}</td><td>${esc(l.partyName)}${l.note ? `<br><span class="muted">${esc(l.note)}</span>` : ''}</td>
+      <td>${esc(l.mode.toUpperCase())}${l.chequeNo ? ` ${esc(l.chequeNo)}` : ''}${l.reference ? ` · ${esc(l.reference)}` : ''}</td>
+      <td>${esc(l.setAgainst.map((a) => a.refNo).join(', '))}${l.discountPaise ? ` (disc. ${esc(formatRs(l.discountPaise))})` : ''}</td>
+      <td class="r">${esc(formatRs(l.amountPaise))}</td></tr>`).join('')}
+    <tr><td colspan="4"><b>Total</b></td><td class="r"><b>${esc(formatRs(v.totalPaise))}</b></td></tr></tbody></table>
+    <p style="margin-top:40px" class="r">Checked by</p>`
+  await fill(win, s.kind === 'cash' ? 'CASH SLIP' : 'BANK SLIP', body)
 }
