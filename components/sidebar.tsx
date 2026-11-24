@@ -10,7 +10,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   BarChart2, BookOpen, Boxes, ChevronDown, Home, LogOut, Moon, Package, PanelLeftClose, PanelLeftOpen,
-  ScanBarcode, Search, ShoppingCart, Sun, type LucideIcon,
+  ScanBarcode, Search, ShoppingCart, Store, Sun, type LucideIcon,
 } from 'lucide-react'
 import { signOut } from '@/lib/auth-client'
 import { useShortcut } from '@/lib/shortcuts'
@@ -120,8 +120,8 @@ export function Sidebar({ sections }: { sections: SideSection[] }) {
         aria-label="Main menu"
         className={`fixed inset-y-0 left-0 z-30 hidden h-dvh flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex ${collapsed ? 'w-[72px]' : 'w-64'}`}
       >
-        <div className={`flex items-center gap-2.5 px-4 pb-3 pt-4 ${collapsed ? 'justify-center px-2' : ''}`}>
-          <Link href="/home" className="flex min-w-0 items-center gap-2.5" aria-label="Shayona home">
+        <div className={`flex items-center gap-2.5 px-4 pb-3 pt-4 ${collapsed ? 'flex-col justify-center px-2' : ''}`}>
+          <Link href="/home" className="flex min-w-0 flex-1 items-center gap-2.5" aria-label="Shayona home">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary font-display text-lg font-bold text-primary-foreground">S</span>
             {!collapsed && (
               <span className="min-w-0">
@@ -130,6 +130,18 @@ export function Sidebar({ sections }: { sections: SideSection[] }) {
               </span>
             )}
           </Link>
+          {/* Retailer shop in a new tab (owner, 24 Nov 2026): it has its own retailer sign-in, so the staff
+              session here stays as it is. */}
+          <a
+            href="/shop"
+            target="_blank"
+            rel="noopener"
+            aria-label="Visit the retailer shop (opens a new tab)"
+            title="Visit shop"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-sidebar-border text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-foreground"
+          >
+            <Store className="h-4 w-4" aria-hidden />
+          </a>
         </div>
 
         <div className={collapsed ? 'px-3 pb-2' : 'px-3.5 pb-2'}>

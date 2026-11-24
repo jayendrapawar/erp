@@ -1040,9 +1040,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   // ── Derived lists ────────────────────────────────────────────────────────────
   const verifyOrders = orders.filter(o => o.status === 'packed')
   // Newest bill first (owner, 24 Nov 2026).
-  // Newest bill first (owner, 24 Nov 2026).
   const billedOrders = orders.filter(o => o.status === 'billed')
-    .sort((a, b) => (b.billedAt ? new Date(b.billedAt).getTime() : 0) - (a.billedAt ? new Date(a.billedAt).getTime() : 0) || b.id - a.id)
     .sort((a, b) => (b.billedAt ? new Date(b.billedAt).getTime() : 0) - (a.billedAt ? new Date(a.billedAt).getTime() : 0) || b.id - a.id)
 
   const counts = {
@@ -1366,7 +1364,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
         >
           <DialogKeys onClose={() => setDetailOrder(null)} />
           <div
-            className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85vh] sm:max-h-none overflow-y-auto shadow-2xl rounded-t-2xl sm:rounded-none"
+            className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85dvh] sm:max-h-none overflow-y-auto pb-[env(safe-area-inset-bottom)] shadow-2xl rounded-t-2xl sm:rounded-none"
             onClick={e => e.stopPropagation()}
           >
             <div className="sm:hidden flex justify-center pt-3 pb-1">
