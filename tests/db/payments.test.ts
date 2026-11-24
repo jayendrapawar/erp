@@ -11,6 +11,7 @@ import {
   applyAdvance, bouncePayment, depositCheque, loadPartyForPayment, partySummary, recordPayment, returnCheque, reversePayment,
 } from '../../lib/payments/payments'
 import { listOutstanding, listPayments, partyStatement } from '../../lib/payments/queries'
+import { applyOpenings, listOpenings, planOpenings, reverseOpening } from '../../lib/payments/opening'
 import type { Actor } from '../../lib/db/types'
 
 describe('payments and the party ledger (integration)', { skip: !harnessEnabled() && 'set TEST_DB_ENV_FILE=.env.local to run' }, () => {
@@ -43,7 +44,8 @@ describe('payments and the party ledger (integration)', { skip: !harnessEnabled(
     await h.db.execute(sql`INSERT INTO retailers (id, "partyName", "taxType", "earlyPayDiscountBp", "earlyPayDays") VALUES
       ('P1', 'Om Shoes', 'untaxed', NULL, NULL), ('P2', 'Early Payer', 'untaxed', 200, 30), ('P3', 'Cheque Party', 'untaxed', NULL, NULL),
       ('P4', 'Advance Party', 'untaxed', NULL, NULL), ('P5', 'Mistake Party', 'untaxed', NULL, NULL),
-      ('P6', 'Ageing Traders', 'untaxed', NULL, NULL)`)
+      ('P6', 'Ageing Traders', 'untaxed', NULL, NULL), ('P7', 'Old Dues', 'untaxed', NULL, NULL),
+      ('P9', 'Advance Shop', 'untaxed', NULL, NULL)`)
   })
   after(async () => { await h?.close() })
 
@@ -168,6 +170,47 @@ describe('payments and the party ledger (integration)', { skip: !harnessEnabled(
     assert.equal(await partyStatement(h.db, 'NOPE', ist(5), ist(0)), null)
     const list = await listPayments(h.db, { q: 'Ageing' })
     assert.equal(list.recent.length, 1)
+    await healthy()
+  })
+
+  test('opening balances: preview, save, same file again adds nothing, advance matched, reverse and re-enter', async () => {
+    // An advance paid before the opening balances are entered.
+    await pay({ retailerId: 'P7', amountPaise: 30000 })
+    const rows = [
+      { rowNumber: 2, party: 'old dues', date: '2026-04-01', amountPaise: 100000, billNo: 'A-1', note: '' },
+      { rowNumber: 3, party: 'Old Dues', date: '2026-04-01', amountPaise: 50000, billNo: 'A-2', note: '' },
+      { rowNumber: 4, party: 'Old Dues', date: '2026-04-01', amountPaise: 50000, billNo: 'A-2', note: '' }, // same row twice
+      { rowNumber: 5, party: 'Nobody', date: '2026-04-01', amountPaise: 100, billNo: '', note: '' },
+      { rowNumber: 6, party: 'Old Dues', date: '2026-04-01', amountPaise: 0, billNo: 'Z', note: '' }, // amount 0
+      { rowNumber: 7, party: '', partyId: 'P9', date: '2026-04-01', amountPaise: -2500, billNo: '', note: 'advance' },
+    ]
+    const plan = await planOpenings(h.db, rows)
+    assert.deepEqual(plan.rows.map((r) => r.status), ['ok', 'ok', 'error', 'error', 'error', 'ok'])
+    assert.match(plan.rows[3].message, /not in the retailer master/)
+    assert.match(plan.rows[4].message, /Amount is 0/)
+    assert.deepEqual([plan.ok, plan.owedPaise, plan.advancePaise], [3, 150000, 2500])
+    const r = await h.db.transaction((tx) => applyOpenings(tx, acct, plan.rows, { fileName: 'old.xlsx' }))
+    assert.deepEqual([r.added, r.owedPaise, r.advancePaise, r.matchedPaise], [3, 150000, 2500, 30000])
+    // The earlier advance went to the oldest opening bill.
+    assert.deepEqual(await partySummary(h.db, 'P7'), { retailerId: 'P7', balancePaise: 120000, unpaidPaise: 120000, advancePaise: 0 })
+    assert.equal((await partySummary(h.db, 'P9')).advancePaise, 2500)
+    // The same file again: nothing new.
+    const again = await planOpenings(h.db, rows)
+    assert.deepEqual(again.rows.map((x) => x.status), ['duplicate', 'duplicate', 'error', 'error', 'error', 'duplicate'])
+    assert.equal((await h.db.transaction((tx) => applyOpenings(tx, acct, again.rows))).added, 0)
+    // A wrong row reversed (what was set against it freed), then entered again.
+    const list = await listOpenings(h.db, 'old dues')
+    assert.equal(list.count, 2)
+    const a1 = list.rows.find((x) => x.refNo === 'A-1')!
+    await assert.rejects(h.db.transaction((tx) => reverseOpening(tx, acct, a1.entryId, ' ')), /reason/)
+    await h.db.transaction((tx) => reverseOpening(tx, acct, a1.entryId, 'typed twice'))
+    assert.deepEqual(await partySummary(h.db, 'P7'), { retailerId: 'P7', balancePaise: 20000, unpaidPaise: 50000, advancePaise: 30000 })
+    await assert.rejects(h.db.transaction((tx) => reverseOpening(tx, acct, a1.entryId, 'again')), /already reversed/)
+    const re = await planOpenings(h.db, [rows[0]])
+    assert.equal(re.rows[0].status, 'ok') // the reversed one does not block it
+    assert.equal((await h.db.transaction((tx) => applyOpenings(tx, acct, re.rows))).added, 1)
+    assert.equal(await num(sql`SELECT count(*) FROM party_ledger_entries WHERE "idempotencyKey" LIKE 'opening:P7:2026-04-01:A-1:100000%'`), 2)
+    assert.equal((await partySummary(h.db, 'P7')).balancePaise, 120000)
     await healthy()
   })
 })

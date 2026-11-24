@@ -18,11 +18,12 @@ import { toPaise } from '@/lib/billing/bill-totals'
 import { bouncePaymentAction, depositChequeAction, returnChequeAction, reversePaymentAction } from '@/app/actions/payments'
 import type { OutstandingPage, OutstandingSort, PartyChoice, PaymentRow, Statement } from '@/lib/payments/queries'
 import { PartyPicker } from './party-picker'
+import { OpeningTab } from './opening-tab'
 import { RecordPayment } from './record-payment'
 import { dayText, istToday, printStatement, statementText, whatsappLink } from './print'
 
-const TABS = ['outstanding', 'cheques', 'statement'] as const
-const LABEL: Record<string, string> = { outstanding: 'Outstanding', cheques: 'Payments & cheques', statement: 'Party statement' }
+const TABS = ['outstanding', 'cheques', 'statement', 'opening'] as const
+const LABEL: Record<string, string> = { outstanding: 'Outstanding', cheques: 'Payments & cheques', statement: 'Party statement', opening: 'Opening balances' }
 const inputCls = 'h-10 rounded-xl border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring'
 const STATUS: Record<string, { label: string; cls: string }> = {
   pending: { label: 'Cheque received', cls: 'bg-amber-500/15 text-amber-800 dark:text-amber-300' },
@@ -80,6 +81,7 @@ export function PaymentsPage({ initialOutstanding, parties, canRecord }: { initi
       {tab === 'outstanding' && <OutstandingTab initial={initialOutstanding} version={version} canRecord={canRecord}
         onStatement={openStatement} onRecord={(id) => setRecordFor({ partyId: id })} />}
       {tab === 'cheques' && <PaymentsTab version={version} canRecord={canRecord} onChanged={() => setVersion((v) => v + 1)} onStatement={openStatement} />}
+      {tab === 'opening' && <OpeningTab parties={parties} canRecord={canRecord} onChanged={() => setVersion((v) => v + 1)} />}
       {tab === 'statement' && <StatementTab parties={parties} party={statementParty} onParty={setStatementParty} version={version} />}
 
       {recordFor && (
