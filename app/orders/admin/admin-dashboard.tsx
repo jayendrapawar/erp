@@ -279,12 +279,12 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
         {/* ── Detail panel overlay ── */}
         {detailOrder && (
           <div
-            className="fixed inset-0 z-40 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
+            className="fixed inset-0 z-50 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
             onClick={() => setDetailOrder(null)}
           >
             <DialogKeys onClose={() => setDetailOrder(null)} />
             <div
-              className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85vh] sm:max-h-none overflow-y-auto shadow-2xl rounded-t-2xl sm:rounded-none"
+              className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85dvh] sm:max-h-none overflow-y-auto pb-[env(safe-area-inset-bottom)] shadow-2xl rounded-t-2xl sm:rounded-none"
               onClick={e => e.stopPropagation()}
             >
               {/* Mobile drag handle */}

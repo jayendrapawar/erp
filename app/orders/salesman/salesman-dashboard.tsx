@@ -306,6 +306,7 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
   }
 
   const totalPairs = lines.reduce((s, l) => s + Object.values(l.quantities).reduce((a, b) => a + b, 0), 0)
+  let serial = 0 // line number, 1, 2, 3… down the table
 
   return (
     <div className="overflow-x-auto">
@@ -313,6 +314,7 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
         {/* Header */}
         <thead>
           <tr className="border-b border-border/50 bg-muted/20">
+            <th className="w-8 px-2 py-2 text-right text-xs font-medium text-muted-foreground border-r border-border/40">#</th>
             <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground border-r border-border/40 whitespace-nowrap">Article</th>
             <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground border-r border-border/40 whitespace-nowrap">Color</th>
             <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Size / Qty</th>
@@ -340,6 +342,8 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
                     isEditing ? 'bg-amber-50/40 dark:bg-amber-900/10' : 'hover:bg-primary/5'
                   }`}
                 >
+                  {/* Line number, 1, 2, 3… top to bottom (owner, 24 Nov 2026) */}
+                  <td className="w-8 px-2 py-2.5 align-top text-right text-xs tabular-nums text-muted-foreground border-r border-border/40">{++serial}</td>
                   {/* Article cell — only shown on first row of group */}
                   <td className="px-3 py-2.5 align-top border-r border-border/40 whitespace-nowrap">
                     {isFirst && (
@@ -378,7 +382,7 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
 
           {/* Total row */}
           <tr className="border-t border-border/60 bg-muted/20">
-            <td colSpan={2} className="px-3 py-2 text-right text-xs text-muted-foreground border-r border-border/40">Total</td>
+            <td colSpan={3} className="px-3 py-2 text-right text-xs text-muted-foreground border-r border-border/40">Total</td>
             <td className="px-3 py-2 text-sm font-bold text-foreground">{totalPairs}</td>
           </tr>
         </tbody>
@@ -1955,11 +1959,13 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
                   artNumber,
                   colorGroups: Array.from(colorMap.entries()).map(([color, items]) => ({ color, items })),
                 }))
+                let serial = 0 // line number, 1, 2, 3… down the table
                 return (
                   <div className="overflow-x-auto">
                   <table className="w-full text-sm border-collapse">
                     <thead className="bg-muted/20 border-b border-border">
                       <tr>
+                        <th className="w-8 px-2 py-2 text-right text-xs font-medium text-muted-foreground">#</th>
                         <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Article</th>
                         <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Color</th>
                         <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">
@@ -1991,6 +1997,7 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
                           const allVer = isBilled ? allPkd : 0
                           return (
                             <tr key={`${artNumber}-${color}`} className="border-b border-border hover:bg-muted/20">
+                              <td className="w-8 px-2 py-2.5 text-right text-xs tabular-nums text-muted-foreground align-top border-r border-border">{++serial}</td>
                               {ci === 0 && (
                                 <td
                                   className="px-4 py-2.5 font-semibold text-xs align-top border-r border-border"
@@ -2047,7 +2054,7 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
                     </tbody>
                     <tfoot className="border-t-2 border-border bg-muted/20">
                       <tr>
-                        <td colSpan={2} className="px-4 py-2.5 text-xs font-medium text-muted-foreground text-right">Total</td>
+                        <td colSpan={3} className="px-4 py-2.5 text-xs font-medium text-muted-foreground text-right">Total</td>
                         <td className="px-3 py-2.5 text-xs">
                           {showPacked ? (() => {
                             const totalOrd = detailItems.reduce((s, i) => s + i.quantityOrdered, 0)

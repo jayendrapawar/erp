@@ -1051,7 +1051,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   }
 
   return (
-    <div ref={rootRef} className={embedded ? '' : 'min-h-screen bg-background'}>
+    // Room for the ticked-bills bar so it never covers the last bills (phone menu room is kept by the menu itself).
+    <div ref={rootRef} className={`${embedded ? '' : 'min-h-screen bg-background'}${activeTab === 'generated' && printSelectedIds.size > 0 ? ' pb-20 md:pb-24' : ''}`}>
       {/* Direct Billing needs room for the bill beside the scanner: wider page on that tab. */}
       <div className={embedded ? '' : `${activeTab === 'emergency' ? 'max-w-6xl' : 'max-w-2xl'} mx-auto px-4 py-6`}>
         {!embedded && (
@@ -1316,7 +1317,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                                 {pairs} {order.isEmergency ? 'boxes' : 'pairs'}
                               </span>
                             )}
-                            {!checked && <StatusPill status={order.status} />}
+                            {/* No status label: every bill in Receipts is billed (owner, 24 Nov 2026). */}
                             {/* Chevron hint */}
                             <svg className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -1357,7 +1358,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       {/* ── Order detail panel ── */}
       {detailOrder && (
         <div
-          className="fixed inset-0 z-40 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
           onClick={() => setDetailOrder(null)}
         >
           <DialogKeys onClose={() => setDetailOrder(null)} />
