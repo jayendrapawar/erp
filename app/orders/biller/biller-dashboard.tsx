@@ -955,7 +955,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   }
 
   return (
-    <div className={embedded ? '' : 'min-h-screen bg-background'}>
+    // Room for the ticked-bills bar so it never covers the last bills (phone menu room is kept by the menu itself).
+    <div className={`${embedded ? '' : 'min-h-screen bg-background'}${activeTab === 'generated' && printSelectedIds.size > 0 ? ' pb-20 md:pb-24' : ''}`}>
       {/* Direct Billing needs room for the bill beside the scanner: wider page on that tab. */}
       <div className={embedded ? '' : `${activeTab === 'emergency' ? 'max-w-6xl' : 'max-w-2xl'} mx-auto px-4 py-6`}>
         {!embedded && (
@@ -1242,11 +1243,11 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       {/* ── Order detail panel ── */}
       {detailOrder && (
         <div
-          className="fixed inset-0 z-40 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
           onClick={() => setDetailOrder(null)}
         >
           <div
-            className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85vh] sm:max-h-none overflow-y-auto shadow-2xl rounded-t-2xl sm:rounded-none"
+            className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85dvh] sm:max-h-none overflow-y-auto pb-[env(safe-area-inset-bottom)] shadow-2xl rounded-t-2xl sm:rounded-none"
             onClick={e => e.stopPropagation()}
           >
             <div className="sm:hidden flex justify-center pt-3 pb-1">

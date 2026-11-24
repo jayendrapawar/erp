@@ -214,7 +214,7 @@ function ArticleSheet({ item, colours, sets, cartons, inCart, onPick, onClose, o
   const addAll = (add: Record<string, number>) => setQty((q) => { const n = { ...q }; for (const [s, v] of Object.entries(add)) n[s] = Math.min(999, (n[s] ?? 0) + v); return n })
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-center bg-black/60 sm:items-center sm:p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex justify-center bg-black/60 sm:items-center sm:p-4" onClick={onClose}>
       <section role="dialog" aria-modal="true" aria-label={`${item.name} ${item.color}`} onClick={(e) => e.stopPropagation()}
         className="flex h-full w-full max-w-2xl flex-col bg-background sm:h-auto sm:max-h-[92vh] sm:rounded-2xl sm:border sm:border-border">
         <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">
@@ -322,7 +322,7 @@ function CartSheet({ lines, onChange, onEdit, onClose, onPlaced }: {
   const pairs = lines.reduce((t, l) => t + l.qty, 0)
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-center bg-black/60 sm:items-center sm:p-4" onClick={() => !busy && onClose()}>
+    <div className="fixed inset-0 z-50 flex justify-center bg-black/60 sm:items-center sm:p-4" onClick={() => !busy && onClose()}>
       <section role="dialog" aria-modal="true" aria-labelledby="cart-h" onClick={(e) => e.stopPropagation()}
         className="flex h-full w-full max-w-xl flex-col bg-background sm:h-auto sm:max-h-[92vh] sm:rounded-2xl sm:border sm:border-border">
         <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">

@@ -289,6 +289,7 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
   }
 
   const totalPairs = lines.reduce((s, l) => s + Object.values(l.quantities).reduce((a, b) => a + b, 0), 0)
+  let serial = 0 // line number, 1, 2, 3… down the table
 
   return (
     <div className="overflow-x-auto">
@@ -296,6 +297,7 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
         {/* Header */}
         <thead>
           <tr className="border-b border-border/50 bg-muted/20">
+            <th className="w-8 px-2 py-2 text-right text-xs font-medium text-muted-foreground border-r border-border/40">#</th>
             <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground border-r border-border/40 whitespace-nowrap">Article</th>
             <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground border-r border-border/40 whitespace-nowrap">Color</th>
             <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Size / Qty</th>
@@ -320,6 +322,8 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
                     isEditing ? 'bg-amber-50/40 dark:bg-amber-900/10' : 'hover:bg-primary/5'
                   }`}
                 >
+                  {/* Line number, 1, 2, 3… top to bottom (owner, 24 Nov 2026) */}
+                  <td className="w-8 px-2 py-2.5 align-top text-right text-xs tabular-nums text-muted-foreground border-r border-border/40">{++serial}</td>
                   {/* Article cell — only shown on first row of group */}
                   <td className="px-3 py-2.5 align-top border-r border-border/40 whitespace-nowrap">
                     {isFirst && (
@@ -358,7 +362,7 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
 
           {/* Total row */}
           <tr className="border-t border-border/60 bg-muted/20">
-            <td colSpan={2} className="px-3 py-2 text-right text-xs text-muted-foreground border-r border-border/40">Total</td>
+            <td colSpan={3} className="px-3 py-2 text-right text-xs text-muted-foreground border-r border-border/40">Total</td>
             <td className="px-3 py-2 text-sm font-bold text-foreground">{totalPairs}</td>
           </tr>
         </tbody>
@@ -1608,6 +1612,7 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
       day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
     })
     let rows = ''
+    let serial = 0
     artMap.forEach((colMap, artNumber) => {
       rows += `<div class="art-block"><div class="art-number">${artNumber}</div>`
       colMap.forEach((sizes, color) => {
@@ -1616,7 +1621,7 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
         const bracket = orientation === 'portrait'
           ? '[&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;]'
           : '[&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;]'
-        rows += `<div class="color-row"><span class="col-color">${color || '—'}</span><span class="col-sizes">${sizesStr}</span><span class="col-bracket">${bracket}</span></div>`
+        rows += `<div class="color-row"><span class="col-no">${++serial}.</span><span class="col-color">${color || '—'}</span><span class="col-sizes">${sizesStr}</span><span class="col-bracket">${bracket}</span></div>`
       })
       rows += `</div>`
     })
@@ -1755,6 +1760,7 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
   .art-block     { margin: 4px 0 1px; }
   .art-number    { font-weight: bold; font-size: 12px; margin-bottom: 1px; }
   .color-row     { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; font-size: 11px; }
+  .col-no        { width: 18px; flex-shrink: 0; text-align: right; }
   .col-color     { width: 64px; flex-shrink: 0; }
   .col-sizes     { flex: 1; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; min-width: 0; }
   .bill-portrait .color-row { gap: 12px; }
@@ -2086,11 +2092,13 @@ ${bills}
                   artNumber,
                   colorGroups: Array.from(colorMap.entries()).map(([color, items]) => ({ color, items })),
                 }))
+                let serial = 0 // line number, 1, 2, 3… down the table
                 return (
                   <div className="overflow-x-auto">
                   <table className="w-full text-sm border-collapse">
                     <thead className="bg-muted/20 border-b border-border">
                       <tr>
+                        <th className="w-8 px-2 py-2 text-right text-xs font-medium text-muted-foreground">#</th>
                         <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Article</th>
                         <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Color</th>
                         <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">
@@ -2122,6 +2130,7 @@ ${bills}
                           const allVer = isBilled ? allPkd : 0
                           return (
                             <tr key={`${artNumber}-${color}`} className="border-b border-border hover:bg-muted/20">
+                              <td className="w-8 px-2 py-2.5 text-right text-xs tabular-nums text-muted-foreground align-top border-r border-border">{++serial}</td>
                               {ci === 0 && (
                                 <td
                                   className="px-4 py-2.5 font-semibold text-xs align-top border-r border-border"
@@ -2178,7 +2187,7 @@ ${bills}
                     </tbody>
                     <tfoot className="border-t-2 border-border bg-muted/20">
                       <tr>
-                        <td colSpan={2} className="px-4 py-2.5 text-xs font-medium text-muted-foreground text-right">Total</td>
+                        <td colSpan={3} className="px-4 py-2.5 text-xs font-medium text-muted-foreground text-right">Total</td>
                         <td className="px-3 py-2.5 text-xs">
                           {showPacked ? (() => {
                             const totalOrd = detailItems.reduce((s, i) => s + i.quantityOrdered, 0)
