@@ -2,7 +2,7 @@
 import { hasPermission, type Permission, type Role } from '@/lib/permissions'
 import type { TranslationKey } from '@/lib/translations'
 
-export type NavIcon = 'home' | 'scanner' | 'inventory' | 'orders' | 'purchases' | 'master' | 'reports'
+export type NavIcon = 'home' | 'scanner' | 'inventory' | 'orders' | 'payments' | 'purchases' | 'master' | 'reports'
 
 export interface NavItem { href: string; label: TranslationKey; icon: NavIcon; permission: Permission | null }
 
@@ -12,6 +12,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/scanner', label: 'scanner', icon: 'scanner', permission: 'scan.record' },
   { href: '/orders', label: 'navOrders', icon: 'orders', permission: 'orders.view' },
   { href: '/inventory', label: 'navInventory', icon: 'inventory', permission: 'inventory.view.all' },
+  { href: '/payments', label: 'navPayments', icon: 'payments', permission: 'payments.view' },
   { href: '/purchases', label: 'navPurchases', icon: 'purchases', permission: 'purchases.view' },
   { href: '/master', label: 'navMaster', icon: 'master', permission: 'users.view' },
   { href: '/reports', label: 'navReports', icon: 'reports', permission: 'users.view' },
@@ -65,6 +66,11 @@ export function sidebarSections(roles: readonly Role[]): SideSection[] {
     { title: null, links: [{ href: '/home', label: 'Home', icon: 'home' }] },
     { title: 'Daily work', links: [
       ...(orders ? [orders] : []),
+      // Payments (owner, 22 Nov 2026): what retailers owe, money received, cheques.
+      ...(can('payments.view') ? [{ href: '/payments', label: 'Payments', icon: 'payments' as NavIcon, children: [
+        { href: '/payments#outstanding', label: 'Outstanding' }, { href: '/payments#cheques', label: 'Payments & cheques' },
+        { href: '/payments#statement', label: 'Party statement' },
+      ] }] : []),
     ] },
     { title: 'Stock', links: [
       ...(can('inventory.view.all') ? [{ href: '/inventory', label: 'Inventory', icon: 'inventory' as NavIcon, children: [
@@ -105,6 +111,7 @@ export function goToTargets(sections: SideSection[], roles: readonly Role[]): Go
     ['i', 'Inventory', top('/inventory')],
     ['s', 'Scanner', top('/scanner')],
     ['b', 'Billing', billing],
+    ['y', 'Payments', top('/payments')],
     ['p', 'Purchases', top('/purchases')],
     ['m', 'Master', top('/master')],
     ['r', 'Reports', top('/reports')],

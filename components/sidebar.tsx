@@ -10,7 +10,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   BarChart2, BookOpen, Boxes, ChevronDown, Home, LogOut, Moon, Package, PanelLeftClose, PanelLeftOpen,
-  ScanBarcode, Search, ShoppingCart, Store, Sun, type LucideIcon,
+  ScanBarcode, Search, ShoppingCart, Store, Sun, Wallet, type LucideIcon,
 } from 'lucide-react'
 import { signOut } from '@/lib/auth-client'
 import { useShortcut } from '@/lib/shortcuts'
@@ -23,7 +23,7 @@ import type { NavIcon, SideLink, SideSection } from '@/lib/nav'
 import { useSessionUser } from './session-user'
 
 const ICONS: Record<NavIcon, LucideIcon> = {
-  home: Home, scanner: ScanBarcode, inventory: Boxes, orders: ShoppingCart, purchases: Package, master: BookOpen, reports: BarChart2,
+  home: Home, scanner: ScanBarcode, inventory: Boxes, orders: ShoppingCart, payments: Wallet, purchases: Package, master: BookOpen, reports: BarChart2,
 }
 const HIDDEN_ON = ['/', '/sign-in', '/sign-up']
 const COLLAPSE_KEY = 'shayona.sidebar.collapsed'

@@ -3,12 +3,12 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { BarChart2, BookOpen, Boxes, Home, Menu, Package, ScanBarcode, ShoppingCart, X, type LucideIcon } from 'lucide-react'
+import { BarChart2, BookOpen, Boxes, Home, Menu, Package, ScanBarcode, ShoppingCart, Wallet, X, type LucideIcon } from 'lucide-react'
 import { useLanguage } from '@/lib/language-context'
 import { BAR_SLOTS, type NavIcon, type NavItem } from '@/lib/nav'
 
 const ICONS: Record<NavIcon, LucideIcon> = {
-  home: Home, scanner: ScanBarcode, inventory: Boxes, orders: ShoppingCart, purchases: Package, master: BookOpen, reports: BarChart2,
+  home: Home, scanner: ScanBarcode, inventory: Boxes, orders: ShoppingCart, payments: Wallet, purchases: Package, master: BookOpen, reports: BarChart2,
 }
 
 /** No bar on Home (its tiles are the menu) or on the sign-in pages. */

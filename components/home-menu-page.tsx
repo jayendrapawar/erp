@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { ScanBarcode, ShoppingCart, Package, BookOpen, BarChart2, Boxes } from 'lucide-react'
+import { ScanBarcode, ShoppingCart, Package, BookOpen, BarChart2, Boxes, Wallet } from 'lucide-react'
 import { hasPermission, parseRoles, type Permission } from '@/lib/permissions'
 import { PageNav } from '@/components/page-nav'
 import { useLanguage } from '@/lib/language-context'
@@ -46,6 +46,15 @@ const MENU_ITEMS: MenuItem[] = [
     color: 'bg-green-50 text-green-600 dark:bg-green-950 dark:text-green-400',
     border: 'border-green-200 dark:border-green-800',
     permission: 'orders.view',
+  },
+  {
+    label: 'navPayments',
+    description: 'descPayments',
+    href: '/payments',
+    icon: Wallet,
+    color: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400',
+    border: 'border-emerald-200 dark:border-emerald-800',
+    permission: 'payments.view',
   },
   {
     label: 'navPurchases',

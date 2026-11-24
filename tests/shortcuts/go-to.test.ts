@@ -7,10 +7,12 @@ const letters = (roles: Role[]) => Object.fromEntries(goToTargets(sidebarSection
 
 test('go-to chords: only pages the roles allow, billing goes to the biller tab', () => {
   assert.deepEqual(letters(['admin']), {
-    h: '/home', o: '/orders/admin', i: '/inventory', s: '/scanner', b: '/orders/admin#biller', p: '/purchases', m: '/master', r: '/reports',
+    h: '/home', o: '/orders/admin', i: '/inventory', s: '/scanner', b: '/orders/admin#biller', y: '/payments', p: '/purchases', m: '/master', r: '/reports',
   })
-  // A salesman: no billing, purchases, master or reports.
-  assert.deepEqual(Object.keys(letters(['salesman'])).sort(), ['h', 'i', 'o', 's'])
+  // A salesman: no billing, purchases, master or reports; Payments to see balances (owner, 22 Nov 2026).
+  assert.deepEqual(Object.keys(letters(['salesman'])).sort(), ['h', 'i', 'o', 's', 'y'])
+  // Warehouse: no Payments.
+  assert.equal(letters(['warehouse']).y, undefined)
   // A biller alone: Orders is the billing screen (no tabs).
   assert.equal(letters(['biller']).b, '/orders')
   // Biller + picker: the Biller tab of the hub.

@@ -38,7 +38,7 @@ registry below, so it is always current.
 | `Esc` | Leave the focused button or box (closes a dialog, a menu or a search list first); the next arrow carries on from there |
 | `Ctrl K` | Jump to… a page or tab; `> ` actions on this page; `# ` find an order / bill number, retailer or article code |
 | `?` | This list (also the **?** button in the sidebar) |
-| `g` then `h` `o` `i` `s` `b` `p` `m` `r` | Go to Home, Orders, Inventory, Scanner, Billing, Purchases, Master, Reports (only pages your roles open; a "g…" hint shows; 1.5 s or Esc cancels) |
+| `g` then `h` `o` `i` `s` `b` `y` `p` `m` `r` | Go to Home, Orders, Inventory, Scanner, Billing, Payments, Purchases, Master, Reports (only pages your roles open; a "g…" hint shows; 1.5 s or Esc cancels) |
 | `Ctrl B` | Menu narrow / wide (computers) |
 | `Ctrl S`, `Ctrl Enter` | Save the form the cursor is in |
 | `Tab` (first) | "Skip to content" link |
@@ -129,6 +129,7 @@ scanner was **not** available: scans were simulated by typing the code at ~4 ms 
 | Assign a picker (admin) | `g o` → `/` type order no. → ↓ → Tab to the picker list → ↓ pick → Enter | ✅ (fixed: arrows no longer assign every picker on the way) |
 | Scan and bill (biller) | `g b` → Alt+Shift+2 → (cursor in Scan box) → Shift+Tab retailer, type, Enter → scan → Tab to Generate bill → Enter | ✅ scans land in the Scan box even with focus on a button; no shortcut fired. Generate bill not pressed in the test |
 | Print and mail a bill | Receipts (Alt+Shift+3) → j/k → x tick → Tab to mail → Enter; Enter on a row → preview → Tab to Print | ✅ tick; ⚠ mail and preview not re-tested end to end (no receipt left on dev at the time) |
+| Record a payment | `g y` → `n` → party (type, Enter) → amount → Tab to How paid (← →) → Ctrl+Enter | ✅ reachable without a mouse (24 Nov 2026); Save not pressed in the test (dev data) |
 | Receive a carton | `g p` → Alt+2 → scan | ✅ (code reaches the Scan box and is answered) |
 | Correct stock | `g i` → Alt+2 → `/` Tab (code filter) → ↓ → Enter → Tab to a size → Enter → + Add / − Remove → Pairs → Reason → Ctrl+Enter | ✅ reachable; save not pressed in the test |
 | Add a retailer | `g m` → Alt+2 → `n` → name → Ctrl+Enter ("Phone is required": cursor goes to Phone) → phone → Ctrl+Enter | ✅ saved |

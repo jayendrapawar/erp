@@ -10,6 +10,7 @@ import { cancelSaleBill, freezeSaleBill } from '../../lib/billing/sale-bill'
 import {
   applyAdvance, bouncePayment, depositCheque, loadPartyForPayment, partySummary, recordPayment, returnCheque, reversePayment,
 } from '../../lib/payments/payments'
+import { listOutstanding, listPayments, partyStatement } from '../../lib/payments/queries'
 import type { Actor } from '../../lib/db/types'
 
 describe('payments and the party ledger (integration)', { skip: !harnessEnabled() && 'set TEST_DB_ENV_FILE=.env.local to run' }, () => {
@@ -41,7 +42,8 @@ describe('payments and the party ledger (integration)', { skip: !harnessEnabled(
     await h.db.execute(sql`INSERT INTO "user" (id, name, email, role) VALUES ('u-acct', 'Accountant', 'ac@test.local', 'accountant')`)
     await h.db.execute(sql`INSERT INTO retailers (id, "partyName", "taxType", "earlyPayDiscountBp", "earlyPayDays") VALUES
       ('P1', 'Om Shoes', 'untaxed', NULL, NULL), ('P2', 'Early Payer', 'untaxed', 200, 30), ('P3', 'Cheque Party', 'untaxed', NULL, NULL),
-      ('P4', 'Advance Party', 'untaxed', NULL, NULL), ('P5', 'Mistake Party', 'untaxed', NULL, NULL)`)
+      ('P4', 'Advance Party', 'untaxed', NULL, NULL), ('P5', 'Mistake Party', 'untaxed', NULL, NULL),
+      ('P6', 'Ageing Traders', 'untaxed', NULL, NULL)`)
   })
   after(async () => { await h?.close() })
 
@@ -145,6 +147,27 @@ describe('payments and the party ledger (integration)', { skip: !harnessEnabled(
     await assert.rejects(pay({ retailerId: 'P5', mode: 'cheque', amountPaise: 100, chequeNo: '1', chequeBank: 'B', chequeDate: '2026-11-20', allocations: [{ entryId: a.entryId, amountPaise: 100 }] }), /when it is deposited/)
     await assert.rejects(pay({ retailerId: 'NOPE', amountPaise: 100 }), /not in the retailer master/)
     await assert.rejects(pay({ retailerId: 'P5', amountPaise: 0 }), /more than ₹0/)
+    await healthy()
+  })
+
+  test('screens: Outstanding ages what is unpaid; the statement carries a running balance', async () => {
+    const ist = (d: number) => new Date(Date.now() + 5.5 * 3600_000 - d * 86_400_000).toISOString().slice(0, 10)
+    await bill('P6', 300, ist(100)); await bill('P6', 200, ist(45)); await bill('P6', 100, ist(10))
+    await pay({ retailerId: 'P6', amountPaise: 5000, receivedOn: ist(0) }) // oldest first: off the 100-day bill
+    const out = await listOutstanding(h.db, { q: 'ageing' })
+    assert.equal(out.total, 1)
+    const r = out.rows[0]
+    assert.deepEqual([r.balancePaise, r.age0, r.age30, r.age60, r.age90, r.oldestUnpaid], [55000, 10000, 20000, 0, 25000, ist(100)])
+    assert.equal(out.sums.age90, 25000)
+    assert.equal((await listOutstanding(h.db, { q: 'ageing', overdueOnly: true })).total, 1)
+    const st = await partyStatement(h.db, 'P6', ist(50), ist(0))
+    assert.equal(st?.openingPaise, 30000) // the 100-day bill, before the period
+    assert.deepEqual(st?.entries.map((e) => [e.kind, e.runningPaise]), [['bill', 50000], ['bill', 60000], ['payment', 55000]])
+    assert.equal(st?.closingPaise, 55000)
+    assert.equal(st?.unpaid.length, 3)
+    assert.equal(await partyStatement(h.db, 'NOPE', ist(5), ist(0)), null)
+    const list = await listPayments(h.db, { q: 'Ageing' })
+    assert.equal(list.recent.length, 1)
     await healthy()
   })
 })
