@@ -49,7 +49,7 @@ users / retailers / suppliers / articles / assortments / sets, Purchases bills.
 
 | Keys | Does |
 |---|---|
-| `↑ ↓` (on a row) / `j k` | Move the highlighted row (real focus; ring in both themes); past the first / last row the arrows move on to the buttons above / below. `→` on a row goes to its buttons |
+| `↑ ↓` (on a row) / `j k` | Move the highlighted row (real focus; soft glow in both themes); past the first / last row the arrows move on to the buttons above / below. `→` on a row goes to its buttons |
 | `Home` / `End` | First / last row shown; `↓` on the last row reaches "Show more" (Enter presses it) |
 | `Enter` | Open the row (Master: edit; Users: role menu) |
 | `Space` / `x` | Tick the row (Receipts: for mail) |

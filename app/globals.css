@@ -176,20 +176,41 @@
   .no-scrollbar::-webkit-scrollbar { display: none; }
 }
 
-/* Keyboard (docs/architecture/keyboard.md). Not in a layer on purpose: it must win over the
-   "focus:outline-none" utilities many controls carry. Keyboard focus only (:focus-visible, not a
-   mouse click on a button), the --ring colour of each theme (light and dark). Controls that already
-   draw their own focus ring (focus:ring / focus-visible:ring) keep it. */
-:where(a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"]), [role="button"], [role="tab"], [role="menuitem"], [contenteditable="true"]):focus-visible:not([data-list-row]):not([class*="focus:ring"]):not([class*="focus-visible:ring"]) {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
+/* Keyboard focus (docs/architecture/keyboard.md; owner, 24 Nov 2026: no hard blue border, a soft
+   glow like apps show on a selected icon). A soft glow in the theme colour around and under the
+   control (no ring), and buttons lift 1 px. Not in a CSS layer on purpose: it replaces every
+   "focus:ring" / "focus-visible:ring" / "focus:outline-none" utility, so all controls look the same.
+   Buttons and links: keyboard only (:focus-visible), never on a mouse click. */
+:root {
+  --focus-halo: color-mix(in oklab, var(--ring) 20%, transparent);
+  --focus-glow: color-mix(in oklab, var(--ring) 50%, transparent);
+  --focus-tint: color-mix(in oklab, var(--ring) 9%, transparent);
 }
-/* The highlighted row of a list (lib/shortcuts/list.ts): real focus, inside the row. */
+.dark {
+  --focus-halo: color-mix(in oklab, var(--ring) 28%, transparent);
+  --focus-glow: color-mix(in oklab, var(--ring) 60%, transparent);
+  --focus-tint: color-mix(in oklab, var(--ring) 16%, transparent);
+}
+:where(a[href], button, summary, [tabindex]:not([tabindex="-1"]), [role="button"], [role="tab"], [role="menuitem"], input[type="checkbox"], input[type="radio"]):focus-visible:not([data-list-row]) {
+  outline: none;
+  box-shadow: 0 0 14px 1px var(--focus-glow), 0 8px 18px -8px var(--focus-glow);
+  transform: translateY(-1px);
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+/* Text boxes and dropdowns: the same soft halo whenever they have the cursor (no lift). */
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea, [contenteditable="true"]):focus {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--focus-halo), 0 0 14px 1px var(--focus-glow);
+}
+/* The highlighted row of a list (lib/shortcuts/list.ts): a soft tint and shadow, no border. */
 [data-list-row]:focus { outline: none; }
 [data-list-row]:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -2px;
-  background-color: color-mix(in oklab, var(--ring) 14%, transparent);
+  outline: none;
+  background-color: var(--focus-tint);
+  box-shadow: 0 10px 26px -12px var(--focus-glow);
+}
+@media (prefers-reduced-motion: reduce) {
+  :where(a[href], button, summary, [tabindex], [role="button"], [role="tab"]):focus-visible { transform: none; transition: none; }
 }
 /* "Skip to content": the first Tab stop, shown only when it has the focus. */
 .skip-link { position: fixed; left: 12px; top: -48px; z-index: 100; transition: top 0.1s; }

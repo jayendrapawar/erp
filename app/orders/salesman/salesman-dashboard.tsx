@@ -556,7 +556,7 @@ const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMa
           )}
           <div
             onClick={() => setRow(i)}
-            className={`grid items-center gap-y-0 gap-x-1 rounded-lg py-0.5 ${focused ? 'bg-primary/10 ring-2 ring-primary' : ''}`}
+            className={`grid items-center gap-y-0 gap-x-1 rounded-lg py-0.5 ${focused ? 'bg-[var(--focus-tint)] shadow-[0_0_14px_1px_var(--focus-glow)]' : ''}`}
             style={{ gridTemplateColumns: gridCols }}
           >
             <span className="text-sm font-medium text-foreground truncate pr-1 leading-tight">{sz.sizeLabel}</span>
