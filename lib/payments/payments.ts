@@ -293,7 +293,8 @@ function reasonText(v: unknown): string {
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 
-export async function recordPayment(tx: Tx, actor: Actor, raw: unknown): Promise<RecordedPayment> {
+/** opts.statementLineId: set by the statement import only (never taken from the screen's input). */
+export async function recordPayment(tx: Tx, actor: Actor, raw: unknown, opts: { statementLineId?: number } = {}): Promise<RecordedPayment> {
   const p = cleanPaymentInput(raw)
   const party = await lockParty(tx, p.retailerId)
   // A retry of the same screen action (same clientId) records nothing new.
@@ -319,11 +320,11 @@ export async function recordPayment(tx: Tx, actor: Actor, raw: unknown): Promise
   }
   const row = (await tx.execute<{ id: string }>(sql`
     INSERT INTO payments ("clientId", "receiptNo", "retailerId", "receivedOn", "countedOn", mode, "amountPaise", "chequeNo", "chequeBank", "chequeDate",
-      reference, note, status, "countedBy", "countedByName", "createdBy", "createdByName", "slipId", "bankAccountId")
+      reference, note, status, "countedBy", "countedByName", "createdBy", "createdByName", "slipId", "bankAccountId", "statementLineId")
     VALUES (${p.clientId}, ${receiptNo}, ${p.retailerId}, ${p.receivedOn}::date, ${cheque ? null : p.receivedOn}::date, ${p.mode}, ${p.amountPaise},
       ${p.chequeNo ?? ''}, ${p.chequeBank ?? ''}, ${p.chequeDate ?? null}::date, ${p.reference ?? ''}, ${p.note ?? ''},
       ${cheque ? 'pending' : 'active'}, ${cheque ? null : actor.id}, ${cheque ? '' : actor.name}, ${actor.id}, ${actor.name},
-      ${slip?.id ?? null}, ${p.into?.kind === 'bank' ? p.into.bankAccountId : null})
+      ${slip?.id ?? null}, ${p.into?.kind === 'bank' ? p.into.bankAccountId : null}, ${opts.statementLineId ?? null})
     RETURNING id`)).rows[0]
   const paymentId = Number(row.id)
   const posted = cheque

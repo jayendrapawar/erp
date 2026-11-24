@@ -20,12 +20,13 @@ import type { OutstandingPage, OutstandingSort, PartyChoice, PaymentRow, Stateme
 import { PartyPicker } from './party-picker'
 import { OpeningTab } from './opening-tab'
 import { CreditNotesTab } from './credit-notes-tab'
+import { BankStatementTab } from './bank-statement-tab'
 import { RecordPayment } from './record-payment'
 import { dayText, istToday, printSlip, printStatement, statementText, whatsappLink } from './print'
 import type { BankAccount, SlipInto, SlipView } from '@/lib/payments/slips'
 
-const TABS = ['outstanding', 'slips', 'cheques', 'statement', 'creditnotes', 'opening'] as const
-const LABEL: Record<string, string> = { outstanding: 'Outstanding', slips: 'Slips', cheques: 'Payments & cheques', statement: 'Party statement', creditnotes: 'Credit notes', opening: 'Opening balances' }
+const TABS = ['outstanding', 'slips', 'bank', 'cheques', 'statement', 'creditnotes', 'opening'] as const
+const LABEL: Record<string, string> = { outstanding: 'Outstanding', slips: 'Slips', bank: 'Bank statement', cheques: 'Payments & cheques', statement: 'Party statement', creditnotes: 'Credit notes', opening: 'Opening balances' }
 const inputCls = 'h-10 rounded-xl border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring'
 const STATUS: Record<string, { label: string; cls: string }> = {
   pending: { label: 'Cheque received', cls: 'bg-amber-500/15 text-amber-800 dark:text-amber-300' },
@@ -84,6 +85,7 @@ export function PaymentsPage({ initialOutstanding, parties, banks = [], canRecor
         onStatement={openStatement} onRecord={(id) => setRecordFor({ partyId: id })} />}
       {tab === 'slips' && <SlipsTab banks={banks} version={version} canRecord={canRecord}
         onAdd={(into, date) => setRecordFor({ partyId: null, into, date })} onChanged={() => setVersion((v) => v + 1)} />}
+      {tab === 'bank' && <BankStatementTab banks={banks} parties={parties} canRecord={canRecord} onChanged={() => setVersion((v) => v + 1)} />}
       {tab === 'cheques' && <PaymentsTab version={version} canRecord={canRecord} onChanged={() => setVersion((v) => v + 1)} onStatement={openStatement} />}
       {tab === 'creditnotes' && <CreditNotesTab parties={parties} canRecord={canRecord} onChanged={() => setVersion((v) => v + 1)} />}
       {tab === 'opening' && <OpeningTab parties={parties} canRecord={canRecord} onChanged={() => setVersion((v) => v + 1)} />}

@@ -70,6 +70,28 @@ line (C12-3). Per line, the money goes to the oldest bill first; any other bill 
 Payments → Slips shows a day's slip (lines, total, Print, Reverse, Add entry). Cost: opening the day's
 slip +1–3 statements in the payment's transaction; a slip view is 1 query.
 
+## Bank statement import (25 Nov 2026, migration 0020) — `lib/payments/statements.ts`
+
+Owner: UPI and cheques come into different banks; payer names differ from retailer names; "entries
+should be accurate". So **nothing reaches a ledger until a person confirms the line**.
+- Upload a bank's Excel / CSV statement (Payments → Bank statement). The columns (date, details,
+  reference, credit / debit or amount + Dr/Cr) are chosen once and saved on the bank
+  (`statementColumns`); they are guessed from the header the first time. PDF statements need a reader
+  per bank (samples awaited). `lineKey` (bank, date, amounts, reference, details, occurrence) makes an
+  overlapping file add nothing twice.
+- Each money-in line shows: **typed on the slip** (a payment on that bank, same amount, close date;
+  ✓ when its cheque no. / UTR is in the line) → confirming links it, nothing is added; **known payer**
+  (`payer_aliases`: UPI ID or cleaned name → parties, learnt on confirm; one payer may pay for several
+  shops); else choose the party, or **split** across parties (must add up exactly).
+- **Exact** (pre-ticked; one click confirms all): one ✓ typed payment, or one known payer whose amount
+  equals one of that party's unpaid bills. Everything else is confirmed line by line.
+- Confirming a party line = a payment on that bank's slip for the statement date (UPI / transfer /
+  cheque from the details), set against the oldest bills, `payments.statementLineId` set. A typed
+  payment may be linked once (the payments guard allows only that change). Lines that are not party
+  payments are ignored with a reason; money out is listed, never posted.
+- Cost: preview 1 query; import 1 transaction (3 statements + audit); review list 1 query; confirm
+  1 transaction (~8 statements per new payment).
+
 ## Opening balances (step 6) — `lib/payments/opening.ts`
 
 What parties owed (or had paid in advance) before the app, as of go-live: one row per party or per

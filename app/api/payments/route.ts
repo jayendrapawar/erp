@@ -6,6 +6,7 @@ import { listOutstanding, listPayments, partyStatement, type OutstandingSort } f
 import { listOpenings } from '@/lib/payments/opening'
 import { listCreditNotes } from '@/lib/payments/credit-notes'
 import { slipView } from '@/lib/payments/slips'
+import { listStatementLines, type LineFilter } from '@/lib/payments/statements'
 
 // GET /api/payments?view=outstanding&q=&sort=&overdue=1&offset=
 //     /api/payments?view=statement&party=V12&from=2026-04-01&to=2026-11-24
@@ -13,6 +14,7 @@ import { slipView } from '@/lib/payments/slips'
 //     /api/payments?view=openings&q=
 //     /api/payments?view=creditnotes&q=
 //     /api/payments?view=slip&bank=cash|<bank id>&date=2026-11-24
+//     /api/payments?view=bankstatement&bank=<bank id>&filter=review|confirmed|ignored|out
 // The Payments screens' reads (payments step 5): one query each. A GET route so the browser runs
 // them in parallel (server actions run one at a time). payments.view only. Never cached: money moves.
 export async function GET(req: Request) {
@@ -31,6 +33,9 @@ export async function GET(req: Request) {
       const party = p.get('party') ?? ''
       data = await withDbRetry(() => partyStatement(db, party, p.get('from') ?? '', p.get('to') ?? ''))
       if (!data) return NextResponse.json({ error: 'Party not found' }, { status: 404 })
+    } else if (view === 'bankstatement') {
+      const f = (p.get('filter') ?? 'review') as LineFilter
+      data = await withDbRetry(() => listStatementLines(db, Number(p.get('bank')) || 0, ['review', 'confirmed', 'ignored', 'out'].includes(f) ? f : 'review'))
     } else if (view === 'slip') {
       const bank = p.get('bank') ?? 'cash', day = p.get('date') ?? ''
       if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return NextResponse.json({ error: 'Choose the date.' }, { status: 400 })
