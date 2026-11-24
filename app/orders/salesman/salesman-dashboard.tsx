@@ -1,6 +1,7 @@
 'use client'
 
 import { sizeWithCode } from '@/lib/orders/size-label'
+import { pickListHtml } from '@/lib/orders/pick-list-print'
 import { useState, useTransition, useRef, useEffect, useMemo, useId, useCallback, forwardRef, useImperativeHandle, Fragment } from 'react'
 import { useAutoRefresh } from '@/lib/use-auto-refresh'
 import { StatusPill, fmt, PageHeader, StatButton, SegTabs, SidePanel, isInProgress, type SegTab } from '../_components/shared'
@@ -1606,204 +1607,28 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
     }
   }
 
-  // ── Build a Pick List bill HTML fragment for one order ──
-  function buildBillFragment(
-    order: ExistingOrder,
-    items: DetailItem[],
-    salesman: string,
-    orientation: 'portrait' | 'landscape',
-    hindiName?: string,
-    hindiAddress?: string,
-    engAddress?: string,
-  ): string {
-    const artMap = new Map<string, Map<string, Record<string, number>>>()
-    for (const item of items) {
-      const art = item.artNumber
-      const col = item.colorNumber ?? ''
-      if (!artMap.has(art)) artMap.set(art, new Map())
-      const colMap = artMap.get(art)!
-      if (!colMap.has(col)) colMap.set(col, {})
-      const sz = item.sizeNumber ?? '?'
-      colMap.get(col)![sz] = (colMap.get(col)![sz] ?? 0) + item.quantityOrdered
-    }
-    const grandTotal = items.reduce((s, i) => s + i.quantityOrdered, 0)
-    const dateStr = new Date(order.orderedAt).toLocaleDateString('en-IN', {
-      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
-    })
-    let rows = ''
-    artMap.forEach((colMap, artNumber) => {
-      rows += `<div class="art-block"><div class="art-number">${artNumber}</div>`
-      colMap.forEach((sizes, color) => {
-        const sorted = Object.entries(sizes).sort(([a], [b]) => Number(a) - Number(b) || a.localeCompare(b))
-        const sizesStr = sorted.map(([sz, qty]) => `${sz}/${qty}`).join(', ')
-        const bracket = orientation === 'portrait'
-          ? '[&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;]'
-          : '[&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;]'
-        rows += `<div class="color-row"><span class="col-color">${color || '—'}</span><span class="col-sizes">${sizesStr}</span><span class="col-bracket">${bracket}</span></div>`
-      })
-      rows += `</div>`
-    })
-    return `<div class="bill${orientation === 'portrait' ? ' bill-portrait' : ''}">
-  <div class="bill-row">
-    <span class="bill-title">${order.shopkeeperName}</span>
-    <span class="bill-addr-eng">${engAddress || ''}</span>
-  </div>
-  <div class="bill-row">
-    <span class="bill-title-hindi">${hindiName || ''}</span>
-    <span class="bill-addr-hindi">${hindiAddress || ''}</span>
-  </div>
-  <div class="bill-row bill-meta-row">
-    <span class="bill-meta-left">Order #${order.orderNumber}</span>
-    <span class="bill-meta-right">${dateStr}</span>
-  </div>
-  <div class="rule"></div>
-  ${rows}
-  <div class="rule"></div>
-  <div class="total-row"><span>Total</span><span>${grandTotal} pairs</span></div>
-  <div class="rule"></div>
-  <div class="picker-row"><span>Picked by:&nbsp;<span class="blank-line"></span></span><span>Salesman: ${salesman}</span></div>
-</div>`
-  }
-
-  // ── Estimate the relative "height" of a bill (in logical line units) ──
-  function estimateBillHeight(items: DetailItem[]): number {
-    // Fixed overhead: title(1) + meta(1) + rule(1) + parties(1) + rule(1) + rule(1) + total(1) + rule(1) + picker(1) = 9
-    const FIXED_LINES = 9
-    // Per article: article-number row (1) + one color row per unique color
-    const artMap = new Map<string, Set<string>>()
-    for (const item of items) {
-      if (!artMap.has(item.artNumber)) artMap.set(item.artNumber, new Set())
-      artMap.get(item.artNumber)!.add(item.colorNumber ?? '')
-    }
-    let artLines = 0
-    artMap.forEach((colors, _) => { artLines += 1 + colors.size })  // 1 art-number + N color rows
-    return FIXED_LINES + artLines
-  }
-
-  // ── Open a new window with bills packed tightly and trigger print ──
+  // ── Print the selected orders, compact (owner, 24 Nov 2026): lib/orders/pick-list-print.ts ──
+  // Newspaper columns (as many as fit the paper), one line per colour, two-line header. Measured on 30
+  // orders: A5 portrait 16 → 4 pages, A4 portrait 11 → 2. The order's own salesman is printed.
   async function handlePrintOrders(
     selectedOrders: ExistingOrder[],
     pageSize: 'A4' | 'A5',
     orientation: 'portrait' | 'landscape',
   ) {
-    // Page dimensions in mm
-    const pageDims = {
-      A4:     { w: 210, h: 297 },
-      A5:     { w: 148, h: 210 },
-    }
-    const { w: pw, h: ph } = pageDims[pageSize]
-    const [pageW, pageH] = orientation === 'landscape' ? [ph, pw] : [pw, ph]
-
-    // Usable area after margins (6mm each side)
-    const marginMm = 6
-    const usableW = pageW - marginMm * 2   // mm
-
-    // Bill width: try to fit 2 per row in landscape, 1 in portrait
-    // 1mm ≈ 3.7795px at 96dpi; bill inner width chosen so two fit with a gap
-    const gapMm = 4
-    const cols = orientation === 'landscape' ? 2 : 1
-    const billWidthMm = (usableW - gapMm * (cols - 1)) / cols
-    const billWidthPx = Math.floor(billWidthMm * 3.7795)
-
-    // ── Sort by height descending so same-sized bills land on the same row ──
-    // flex-wrap places bills left→right; sorting descending means the two
-    // tallest bills fill row 1, the next two fill row 2, etc.
-    // For portrait (1 col) the row concept doesn't apply — keep original order.
-    let orderedOrders: ExistingOrder[]
-    if (cols === 1) {
-      orderedOrders = [...selectedOrders]
-    } else {
-      orderedOrders = [...selectedOrders].sort(
-        (a, b) =>
-          estimateBillHeight(printItemsMap[b.id] ?? []) -
-          estimateBillHeight(printItemsMap[a.id] ?? []),
-      )
-    }
-
-    // Fetch Hindi transliterations for all shopkeeper names + addresses in parallel
-    const engAddresses = orderedOrders.map(o =>
-      o.shopkeeperAddress || vendorAddressMap.get(o.shopkeeperName.toUpperCase()) || ''
-    )
-    const [hindiNames, hindiAddresses] = await Promise.all([
-      Promise.all(orderedOrders.map(o => transliterateToHindi(o.shopkeeperName))),
-      Promise.all(engAddresses.map(addr => addr ? transliterateToHindi(addr) : Promise.resolve(''))),
-    ])
-
-    const bills = orderedOrders
-      .map((o, i) => buildBillFragment(o, printItemsMap[o.id] ?? [], userName, orientation, hindiNames[i], hindiAddresses[i], engAddresses[i]))
-      .join('\n')
-
-    const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<title>Bills</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"/>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;700&display=swap"/>
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 12px;
-    background: #fff;
-    color: #000;
-    /* flex-wrap so bills fill columns naturally */
-    display: flex;
-    flex-wrap: wrap;
-    align-content: flex-start;
-    gap: ${gapMm}mm;
-    padding: ${marginMm}mm;
-    width: ${pageW}mm;
-  }
-  .bill {
-    width: ${billWidthPx}px;
-    border: 1px solid #ccc;
-    padding: 6px 8px 5px;
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-  .bill-row         { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1px; }
-  .bill-title       { font-size: 13px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
-  .bill-addr-eng    { font-size: 11px; font-weight: bold; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
-  .bill-title-hindi { font-size: 13px; font-weight: bold; color: #222; font-family: 'Noto Sans Devanagari', 'Mangal', Arial, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
-  .bill-addr-hindi  { font-size: 11px; font-family: 'Noto Sans Devanagari', 'Mangal', Arial, sans-serif; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
-  .bill-meta-row    { margin-top: 1px; margin-bottom: 3px; }
-  .bill-meta-left   { font-size: 9px; color: #555; white-space: nowrap; }
-  .bill-meta-right  { font-size: 9px; color: #555; white-space: nowrap; }
-  .bill-meta-sm  { font-size: 8.5px; margin-bottom: 4px; }
-  .rule          { border-top: 1px dashed #aaa; margin: 3px 0; }
-  .bill-parties  { display: flex; justify-content: space-between; align-items: baseline; padding: 2px 0; }
-  .shop-name     { font-weight: bold; font-size: 12px; }
-  .salesman-name { font-size: 11px; }
-  .art-block     { margin: 4px 0 1px; }
-  .art-number    { font-weight: bold; font-size: 12px; margin-bottom: 1px; }
-  .color-row     { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; font-size: 11px; }
-  .col-color     { width: 64px; flex-shrink: 0; }
-  .col-sizes     { flex: 1; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; min-width: 0; }
-  .bill-portrait .color-row { gap: 12px; }
-  .col-bracket   { white-space: nowrap; }
-  .total-row     { display: flex; justify-content: space-between; font-weight: bold; font-size: 13px; padding: 2px 0; }
-  .picker-row    { display: flex; justify-content: space-between; font-size: 10px; color: #555; padding: 2px 0; }
-  .blank-line    { display: inline-block; border-bottom: 1px solid #000; width: 80px; margin-bottom: -1px; }
-  .blank-line.short { width: 50px; }
-  @media print {
-    @page {
-      size: ${pageSize} ${orientation};
-      margin: ${marginMm}mm;
-    }
-    body { padding: 0; width: 100%; }
-  }
-</style>
-</head>
-<body>
-${bills}
-<script>window.onload = function(){ window.print(); }</` + `script>
-</body>
-</html>`
-
-    const winW = Math.round(pageW * 3.7795) + 40
-    const winH = Math.min(Math.round(pageH * 3.7795) + 80, screen.availHeight - 60)
-    const w = window.open('', '_blank', `width=${winW},height=${winH}`)
+    const addresses = selectedOrders.map(o => o.shopkeeperAddress || vendorAddressMap.get(o.shopkeeperName.toUpperCase()) || '')
+    const hindiNames = await Promise.all(selectedOrders.map(o => transliterateToHindi(o.shopkeeperName)))
+    const html = pickListHtml(selectedOrders.map((o, i) => ({
+      orderNumber: o.orderNumber,
+      shopkeeperName: o.shopkeeperName,
+      hindiName: hindiNames[i],
+      address: addresses[i],
+      orderedAt: o.orderedAt,
+      salesman: o.salesmanName ?? userName,
+      items: (printItemsMap[o.id] ?? []).map(it => ({ artNumber: it.artNumber, colorNumber: it.colorNumber ?? null, sizeNumber: it.sizeNumber ?? null, quantityOrdered: it.quantityOrdered })),
+    })), pageSize, orientation)
+    const mm = { A4: { w: 210, h: 297 }, A5: { w: 148, h: 210 } }[pageSize]
+    const [pageW, pageH] = orientation === 'landscape' ? [mm.h, mm.w] : [mm.w, mm.h]
+    const w = window.open('', '_blank', `width=${Math.round(pageW * 3.7795) + 40},height=${Math.min(Math.round(pageH * 3.7795) + 80, screen.availHeight - 60)}`)
     if (w) {
       w.document.write(html)
       w.document.close()
