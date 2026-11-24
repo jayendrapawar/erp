@@ -64,6 +64,9 @@ export const PERMISSIONS = {
   'sets.edit': ['admin'],
   'users.view': ['admin', 'accountant'],
   'users.manage': ['admin'],
+  // Payments (owner, 22–23 Nov 2026): admin + accountant record; salesmen see every party's balance.
+  'payments.view': ['admin', 'accountant', 'salesman'],
+  'payments.record': ['admin', 'accountant'],
   'flags.create': SCANNING,
   'audit.view': ['admin'],
 } as const satisfies Record<string, readonly Role[]>

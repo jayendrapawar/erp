@@ -12,6 +12,7 @@
 import { stampBillLineHsn } from './bill-number'
 import { cleanWalkIn, freezeSaleBill, notInMasterMessage, type TaxType, type WalkIn } from './sale-bill'
 import type { BillRates } from './bill-totals'
+import { applyAdvance } from '@/lib/payments/payments'
 import type { BillTotalsPaise } from './bill-totals'
 import { and, eq, sql } from 'drizzle-orm'
 import { billLines, billScans, directBillDrafts, orders, type BillStockSource, type DraftManualLine } from '@/lib/db/schema'
@@ -358,6 +359,7 @@ export async function generateDirectBill(
       party: walk ? { walkIn: walk } : { retailerId: r!.id, taxType: bill.taxType ?? r!.taxType },
       rates: bill.rates,
     })
+    if (frozen.retailerId) await applyAdvance(tx, actor, frozen.retailerId, frozen.saleBillId) // the party's advance goes to this bill
     await stampBillLineHsn(tx, order.id)
     await tx.execute(sql`UPDATE bill_scans SET "orderId" = ${order.id}, "orderNumber" = ${number} WHERE "draftId" = ${draftId} AND status = 'active'`)
     const stock = await postOrderScans(tx, actor, order.id, number)

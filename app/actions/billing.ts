@@ -3,6 +3,7 @@
 import { stampBillLineHsn } from '@/lib/billing/bill-number'
 import { billingPartyFor, cancelSaleBill, freezeSaleBill, isTaxType, notInMasterMessage, type TaxType, type WalkIn } from '@/lib/billing/sale-bill'
 import type { BillRates } from '@/lib/billing/bill-totals'
+import { applyAdvance } from '@/lib/payments/payments'
 import type { BillTotalsPaise } from '@/lib/billing/bill-totals'
 import { audit } from '@/lib/audit'
 import { recordReceivedPairs } from '@/lib/billing/received-pairs'
@@ -112,6 +113,7 @@ export async function billOrder(
     await tx.insert(billLines).values(clean.map((l) => ({ orderId, artNumber: l.artNumber, mrp: String(l.mrp), qty: l.qty, lineDiscPct: String(pct) })))
     // Official bill number, frozen amounts and the ledger entry; HSN on each line — same transaction.
     const bill = await freezeSaleBill(tx, actor, { orderId, source: 'invoice', lines: clean, lineDiscPct: pct, party: { retailerId: o.retailerId, taxType: opts.taxType ?? o.taxType }, rates: opts.rates })
+    await applyAdvance(tx, actor, o.retailerId, bill.saleBillId) // the party's advance goes to this bill (owner, 22 Nov 2026)
     await stampBillLineHsn(tx, orderId)
     const counts = await recordOrderScans(tx, actor, orderId, o.orderNumber, Array.isArray(scannedQrs) ? scannedQrs : [])
     return { ...counts, billNo: bill.billNo, taxType: bill.taxType, totals: bill.totals }
