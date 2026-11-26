@@ -100,4 +100,30 @@ describe('bank statement import (integration)', { skip: !harnessEnabled() && 'se
     assert.equal((await listStatementLines(h.db, bank, 'ignored')).length, 1)
     await healthy()
   })
+
+  test('PDF-style lines: a bounced cheque is set aside on import; short cheque no. links; a same-name party is suggested, not ticked', async () => {
+    await h.db.execute(sql`INSERT INTO retailers (id, "partyName", "taxType") VALUES ('T4', 'Shree Ji Footwear', 'untaxed')`)
+    const typed = await h.db.transaction((tx) => recordPayment(tx, acct, {
+      clientId: randomUUID(), retailerId: 'T3', receivedOn: '2026-12-10', mode: 'cheque', chequeNo: '43', amountPaise: 12000, into: { kind: 'bank', bankAccountId: bank },
+    }))
+    const lines = file([
+      ['10/12/2026', 'By-Outward Return SOME PARTY Br-, Chq : 415478, Seq : 19102619001970, Bank : CANARA BANK', '', '', '7,421.00'],
+      ['10/12/2026', 'To-Outward Return Clg Return, Chq : 415478, Seq : 19102619001970 Return Reason :Funds Insufficient', '', '7,421.00', ''],
+      ['11/12/2026', 'By-Clg. CHEQUE PARTY Br-, Chq : 43, Seq : 21102619002102, Bank : BANK OF BARODA', '43', '', '120.00'],
+      ['11/12/2026', 'By-Clg. SHREE JI FOOTWEAR Br-, Chq : 1386, Seq : 19102619001988, Bank : IDFC FIRST BANK LIMITED', '1386', '', '999.00'],
+    ])
+    const r = await h.db.transaction((tx) => importStatement(tx, acct, bank, { name: 'dec.pdf', sha256: 'e'.repeat(64) }, null, lines))
+    assert.deepEqual([r.rowsNew, r.setAside], [4, 1])
+    const ignored = (await listStatementLines(h.db, bank, 'ignored')).find((l) => l.creditPaise === 742100)!
+    assert.match(ignored.ignoreReason ?? '', /^Cheque 415478 returned unpaid \(Funds Insufficient\)/)
+    const review = await listStatementLines(h.db, bank, 'review')
+    assert.equal(review.some((l) => l.creditPaise === 742100), false)
+    const short = review.find((l) => l.creditPaise === 12000)!
+    assert.deepEqual([short.chequeNo, short.typed.length, short.typed[0].paymentId, short.typed[0].strong, short.exact], ['43', 1, typed.paymentId, true, true])
+    const named = review.find((l) => l.creditPaise === 99900)!
+    assert.deepEqual([named.payerKey, named.known.map((k) => [k.retailerId, k.timesUsed]), named.exact], ['SHREE JI FOOTWEAR', [['T4', 0]], false])
+    // A PDF import keeps the bank's saved Excel / CSV columns.
+    assert.equal(await num(sql`SELECT count(*) FROM bank_accounts WHERE id = ${bank} AND "statementColumns" IS NOT NULL`), 1)
+    await healthy()
+  })
 })

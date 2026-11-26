@@ -76,9 +76,25 @@ Owner: UPI and cheques come into different banks; payer names differ from retail
 should be accurate". So **nothing reaches a ledger until a person confirms the line**.
 - Upload a bank's Excel / CSV statement (Payments → Bank statement). The columns (date, details,
   reference, credit / debit or amount + Dr/Cr) are chosen once and saved on the bank
-  (`statementColumns`); they are guessed from the header the first time. PDF statements need a reader
-  per bank (samples awaited). `lineKey` (bank, date, amounts, reference, details, occurrence) makes an
-  overlapping file add nothing twice.
+  (`statementColumns`); they are guessed from the header the first time. `lineKey` (bank, date, amounts,
+  reference, details, occurrence) makes an overlapping file add nothing twice.
+- **PDF statements** (25 Nov 2026, `lib/payments/statement-pdf.ts`): the table is rebuilt from the text
+  positions (column headings Date / Particulars / Chq No. / Value Date / Debit / Credit / Balance;
+  particulars wrapping below their row and across pages; Balance B/F, C/F, totals skipped). Written from
+  The Sarvodaya Sahakari Bank's "Statement Of Accounts". A PDF is imported **only** when every balance =
+  the one before + credit − debit, and the closing balance, totals and debit / credit counts at the end
+  match; otherwise nothing is imported (download Excel / CSV). A PDF's columns are not saved on the bank.
+  Another bank's PDF layout may need its own sample.
+- **Set aside on import** (`setAsideNonPayments`, every file type): money in that the same file proves is
+  not a payment is saved as *ignored* with the reason — a bounced cheque (credit taken back by a
+  "return" debit with the same amount and cheque no. within 10 days; Sarvodaya prints "By-Outward
+  Return …" then "To-Outward Return Clg Return …") and a reversal ("… Rev" after the same amount went out
+  with the same long reference). If a bounced cheque was typed on a slip, mark it Bounced in Payments &
+  cheques (the reason says so).
+- Clearing lines give the drawer's name as the payer ("By-Clg. NAME Br-, Chq : n" → `NAME`) and the
+  cheque no. of any length when labelled ("Chq : 43"). A typed payment is a ✓ match only when its cheque
+  no. equals the line's (or its UTR is in the line). A party whose name equals the payer's name is
+  suggested (pre-filled, "(same name)", never pre-ticked) until the payer is learnt.
 - Each money-in line shows: **typed on the slip** (a payment on that bank, same amount, close date;
   ✓ when its cheque no. / UTR is in the line) → confirming links it, nothing is added; **known payer**
   (`payer_aliases`: UPI ID or cleaned name → parties, learnt on confirm; one payer may pay for several
@@ -90,7 +106,7 @@ should be accurate". So **nothing reaches a ledger until a person confirms the l
   payment may be linked once (the payments guard allows only that change). Lines that are not party
   payments are ignored with a reason; money out is listed, never posted.
 - Cost: preview 1 query; import 1 transaction (3 statements + audit); review list 1 query; confirm
-  1 transaction (~8 statements per new payment).
+  1 transaction (~8 statements per new payment). Reading a PDF and the set-aside checks add no queries.
 
 ## Opening balances (step 6) — `lib/payments/opening.ts`
 
