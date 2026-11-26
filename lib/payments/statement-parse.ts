@@ -24,6 +24,8 @@ export interface StatementLine {
   debitPaise: number
   balancePaise: number | null
   payerKey: string
+  /** Proved by the statement itself not to be a party payment (a bounced cheque, a reversal): saved as ignored with this reason. */
+  setAside?: string
 }
 
 export type Cells = { rowNumber: number; values: unknown[] }[]
@@ -115,9 +117,22 @@ export function columnsProblem(cols: Partial<StatementColumns>): string {
 export function payerKeyOf(details: string): string {
   const vpa = /[a-z0-9._-]{2,}@[a-z]{2,}/i.exec(details)
   if (vpa) return vpa[0].toLowerCase()
+  // Clearing lines name the drawer: "By-Clg. SHREE JI FOOTWEAR Br-, Chq : …" or "By-Clg. NAME, Chq : …" (Sarvodaya).
+  const drawer = /^by[- ](?:clg\.?|outward return)\s+(.+?)(?:\s+br\s*-|\s*,?\s*chq\b)/i.exec(details.trim())
+  if (drawer) return nameKey(drawer[1])
+  // A transfer from an account in the same bank: "By-Trf. 1001021011267".
+  const acct = /^by[- ]trf\.?\s+(\d{6,})\s*$/i.exec(details.trim())
+  if (acct) return `A/C ${acct[1]}`
   const words = details.toUpperCase().replace(/[^A-Z ]+/g, ' ').split(/\s+/)
     .filter((w) => w.length > 1 && !NOISE.has(w) && !/^[A-Z]{4}0/.test(w))
   return words.slice(0, 5).join(' ')
+}
+/**
+ * A name as a payer key: capitals, letters only ("J.D. Brothers" → "J D BROTHERS"), no "M/S".
+ * The same rule runs in SQL (NAME_KEY_SQL in statements.ts) to find a party with that exact name.
+ */
+export function nameKey(name: string): string {
+  return name.toUpperCase().replace(/[^A-Z]+/g, ' ').trim().replace(/^(M S|MS|MESSRS) /, '').slice(0, 80)
 }
 const NOISE = new Set(['UPI', 'NEFT', 'IMPS', 'RTGS', 'CR', 'DR', 'BY', 'TO', 'FROM', 'TRANSFER', 'TRF', 'CLG', 'CHQ', 'CHEQUE', 'CLEARING',
   'INWARD', 'OUTWARD', 'P2A', 'P2P', 'MOB', 'PAY', 'PAYMENT', 'REF', 'NO', 'INB', 'IB', 'FT', 'DEP', 'DEPOSIT', 'CASH', 'SBIN', 'HDFC', 'ICIC',
@@ -130,9 +145,13 @@ export function guessMode(details: string, reference: string): 'cheque' | 'upi' 
   return 'bank'
 }
 
-/** The cheque number in a line, if any. */
+/** The cheque number in a line, if any ("Chq : 43" — short numbers too, when labelled). */
 export function chequeNoOf(details: string, reference: string): string {
-  if (/^\d{6}$/.test(reference.trim())) return reference.trim()
+  const ref = reference.trim()
+  if (/^\d{6}$/.test(ref)) return ref
+  const labelled = /\b(?:chq|cheque)(?:\s*no)?\.?\s*[:#-]?\s*(\d{1,10})\b/i.exec(details)
+  if (/^\d{1,10}$/.test(ref) && (!labelled || sameCheque(labelled[1], ref))) return ref
+  if (labelled) return labelled[1]
   const m = /\b(?:chq|cheque|clg)\D{0,6}(\d{6})\b/i.exec(details)
   return m ? m[1] : ''
 }
@@ -172,7 +191,40 @@ export function parseStatement(cells: Cells, cols: StatementColumns): { lines: S
       balancePaise: readStatementAmount(at(c, i.balance)), payerKey: credit > 0 ? payerKeyOf(details) : '',
     })
   }
+  setAsideNonPayments(lines)
   return { lines, problems, headerRow: h }
+}
+
+const sameCheque = (a: string, b: string) => !!a && !!b && a.replace(/^0+/, '') === b.replace(/^0+/, '')
+const daysBetween = (a: string, b: string) => (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000
+
+/**
+ * Money in that the same statement proves is not a party payment, so it never reaches review:
+ * - a bounced cheque: the credit is taken back by a "return" debit of the same amount and cheque
+ *   no. within 10 days (Sarvodaya: "By-Outward Return …" then "To-Outward Return Clg Return …");
+ * - a reversal: "… Rev" money in after the same amount went out with the same long reference.
+ * Each debit pairs once. Returns how many credits were set aside.
+ */
+export function setAsideNonPayments(lines: StatementLine[]): number {
+  const paired = new Set<number>()
+  let n = 0
+  for (const c of lines) {
+    if (c.creditPaise <= 0 || c.setAside) continue
+    const chq = chequeNoOf(c.details, c.reference)
+    let j = chq ? lines.findIndex((d, i) => !paired.has(i) && d.debitPaise === c.creditPaise && /\b(return|rtn|bounce|dishono)/i.test(d.details)
+      && daysBetween(c.txnDate, d.txnDate) >= 0 && daysBetween(c.txnDate, d.txnDate) <= 10 && sameCheque(chequeNoOf(d.details, d.reference), chq)) : -1
+    if (j >= 0) {
+      const why = /return reason\s*:\s*(.+?)(?:\s+booking\b|$)/i.exec(lines[j].details)?.[1]?.trim()
+      c.setAside = `Cheque ${chq} returned unpaid${why ? ` (${why.slice(0, 80)})` : ''}: not a payment. If it was recorded, mark it Bounced in Payments & cheques.`
+    } else if (/\brev\b|revers/i.test(c.details)) {
+      const refs = c.details.match(/\d{8,}/g) ?? []
+      j = refs.length ? lines.findIndex((d, i) => !paired.has(i) && d.debitPaise === c.creditPaise && daysBetween(d.txnDate, c.txnDate) >= 0
+        && daysBetween(d.txnDate, c.txnDate) <= 3 && refs.some((r) => d.details.includes(r) || d.reference.includes(r))) : -1
+      if (j >= 0) c.setAside = 'Money sent out came back (reversal): not a payment.'
+    }
+    if (j >= 0) { paired.add(j); n++ }
+  }
+  return n
 }
 
 /**

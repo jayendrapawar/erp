@@ -165,9 +165,12 @@ export function BankStatementTab({ banks, parties, canRecord, onChanged }: { ban
                           <span className="self-center text-muted-foreground">This payer paid for:</span>
                           {l.known.map((k) => (
                             <button key={k.retailerId} type="button" onClick={() => setParts(l.id, [{ party: byId.get(k.retailerId) ?? null, amount: rupees(l.creditPaise) }])}
-                              className="rounded-lg border border-border px-2 py-1 font-semibold hover:bg-muted">{k.partyName}{k.exactBill ? ' (bill amount)' : ''}</button>
+                              className="rounded-lg border border-border px-2 py-1 font-semibold hover:bg-muted">{k.partyName}{k.timesUsed === 0 ? ' (same name)' : ''}{k.exactBill ? ' (bill amount)' : ''}</button>
                           ))}
                         </div>
+                      )}
+                      {l.known.length === 1 && l.known[0].timesUsed === 0 && (
+                        <p className="text-xs text-muted-foreground">{`Suggested because the party's name is the payer's name${l.known[0].exactBill ? ' and the amount is one of its unpaid bills' : ''} — check, then tick.`}</p>
                       )}
                       {c.parts.map((p, i) => (
                         <div key={i} className="grid grid-cols-[minmax(0,1fr)_8rem_auto] items-end gap-2">
@@ -231,14 +234,20 @@ function UploadDialog({ bank, onClose, onDone }: { bank: BankAccount; onClose: (
           <button type="button" onClick={onClose} aria-label="Close" className="flex h-10 w-10 items-center justify-center rounded-lg border border-border hover:bg-muted">✕</button>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
-          <p className="text-sm text-muted-foreground">Download the statement from net banking as <b>Excel (.xlsx)</b> or <b>CSV</b>. Lines already imported are skipped, so an overlapping period is fine.</p>
+          <p className="text-sm text-muted-foreground">Download the statement from net banking as <b>Excel (.xlsx)</b>, <b>CSV</b> or <b>PDF</b>. Lines already imported are skipped, so an overlapping period is fine. A PDF is imported only when every balance and total in it adds up.</p>
           <input type="file" accept=".xlsx,.csv,.pdf,.xls" aria-label="Statement file" onChange={(e) => { const f = e.target.files?.[0]; if (f) { setFile(f); preview(f) } }}
             className="block w-full text-sm file:mr-3 file:rounded-lg file:border file:border-border file:bg-background file:px-3 file:py-1.5 file:text-sm file:font-semibold" />
           {busy && !p && <p className="text-sm text-muted-foreground">Reading…</p>}
           {err && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{err}</p>}
+          {p?.pdf && (
+            <section className="space-y-1 rounded-xl border border-border p-3">
+              <h3 className="text-sm font-semibold">Read from the PDF and checked</h3>
+              <ul className="space-y-0.5 text-xs">{p.checks.map((x, i) => <li key={i}>{`✓ ${x}`}</li>)}</ul>
+            </section>
+          )}
           {p && (
             <>
-              <section className="space-y-2 rounded-xl border border-border p-3">
+              {!p.pdf && <section className="space-y-2 rounded-xl border border-border p-3">
                 <h3 className="text-sm font-semibold">{p.saved ? `Columns (saved for ${p.bankName})` : 'Which column is which? (saved for this bank)'}</h3>
                 <div className="grid grid-cols-2 gap-2">
                   {FIELDS.map(([k, label, required]) => (
@@ -252,7 +261,7 @@ function UploadDialog({ bank, onClose, onDone }: { bank: BankAccount; onClose: (
                   ))}
                 </div>
                 {file && <button type="button" onClick={() => preview(file, cols)} disabled={busy} className="h-9 rounded-lg border border-border px-3 text-sm font-semibold hover:bg-muted">Check again with these columns</button>}
-              </section>
+              </section>}
               {p.sample.length > 0 && (
                 <div className="overflow-x-auto rounded-lg border border-border">
                   <table className="w-full text-[11px]"><thead className="bg-muted/30"><tr>{p.headers.map((hd, i) => <th key={i} className="whitespace-nowrap px-2 py-1 text-left">{hd}</th>)}</tr></thead>
@@ -264,13 +273,14 @@ function UploadDialog({ bank, onClose, onDone }: { bank: BankAccount; onClose: (
                 <p className="text-sm">{`${p.lines} line(s) ${p.fromDate ? `from ${dayText(p.fromDate)} to ${dayText(p.toDate)}` : ''}: ${p.credits} money in (${formatRs(p.creditPaise)}), ${p.debits} money out. `}
                   <b>{`${p.lines - p.known} new`}</b>{p.known ? `, ${p.known} already imported (skipped).` : '.'}</p>
               )}
+              {p.setAside > 0 && <p className="text-xs text-muted-foreground">{`${p.setAside} money-in line(s) are bounced cheques or reversals (the money went back out in this statement): they are kept aside under Ignored, never posted.`}</p>}
             </>
           )}
         </div>
         <div className="border-t border-border p-4">
           <button type="button" data-primary disabled={busy || !file || !p || p.lines === 0 || p.lines === p.known}
             onClick={() => file && start(async () => {
-              try { const r = await importStatementAction(form(file, cols)); onDone(`Statement imported: ${r.rowsNew} new line(s) of ${r.rowsRead}. Review them below.`) }
+              try { const r = await importStatementAction(form(file, cols)); onDone(`Statement imported: ${r.rowsNew} new line(s) of ${r.rowsRead}${r.setAside ? ` (${r.setAside} bounced / reversed, set aside)` : ''}. Review them below.`) }
               catch (e) { setErr(e instanceof Error ? e.message : 'Not imported.') }
             })}
             className="h-12 w-full rounded-xl bg-primary text-sm font-bold text-primary-foreground disabled:opacity-50">
