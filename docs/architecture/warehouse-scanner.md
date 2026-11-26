@@ -27,8 +27,9 @@ scanned by mistake cannot count its pairs. Details: `docs/architecture/stocktake
 - Finish: admin / supervisor only (`scan.void.any`) — one person finishing would end it for all.
   Nothing new starts until the next scan.
 - **Finish does not change stock** (every scan already did). It closes the count as a record. A box QR
-  or carton label can be counted only once while its scan is active, so a second stocktake of the same
-  goods is NOT supported yet (it needs "counted vs system" and a correction step — owner to decide).
+  or carton label can be counted only once while its scan is active. That is intended: the owner
+  decided (27 Nov 2026) this is a ONE-TIME stocktake — afterwards stock moves through purchases
+  (receiving) and bills. No recount / "counted vs system" step is needed.
 - **Area (optional)**: "Area: none ▾" — pick a rack / area from the list kept by admin + supervisor
   (`racks`, Manage areas) to tag the next scans (`flag`); not needed. The old free-text flags became
   this list. Old per-rack counts (0021) keep their rack; 0022 finished the ones still open.
