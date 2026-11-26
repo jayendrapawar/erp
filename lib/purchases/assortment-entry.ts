@@ -63,6 +63,14 @@ export async function settleLineAssortment(tx: DbOrTx, actor: Actor, line: Locke
 
 async function createFromCarton(tx: DbOrTx, actor: Actor, line: LockedLine, code: string, entered: { segment: string; sizes: AssortmentSize[] }, from: string): Promise<number> {
   if (!line.division) throw new Error(`Bill ${line.refNo} has no division. Set it on the bill first (Purchases → Bills).`)
+  return createTypedAssortment(tx, actor, { ...line, note: `Entered at ${from} (bill ${line.refNo})` }, code, entered, from)
+}
+
+/** The carton a typed assortment is for: a bill line, or a stocktake carton (lib/inventory/stocktake-carton.ts). */
+export interface TypedCartonKind { division: string; articleCode: string; pairsPerCarton: number; sizeFrom: string; sizeTo: string; note: string }
+
+/** Typed pairs per size → the same pairs already in the master, else a new assortment (owner, 22 Nov 2026). */
+export async function createTypedAssortment(tx: DbOrTx, actor: Actor, line: TypedCartonKind, code: string, entered: { segment: string; sizes: AssortmentSize[] }, from: string): Promise<number> {
   const range = expandSizeRange(line.sizeFrom, line.sizeTo)
   const sizes = range.ok ? range.sizes : [line.sizeFrom]
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('carton_assortments'))`)
@@ -71,7 +79,7 @@ async function createFromCarton(tx: DbOrTx, actor: Actor, line: LockedLine, code
   const others = await tx.execute(sql`SELECT 1 FROM carton_assortments WHERE active AND division = ${line.division} AND packing = ${line.pairsPerCarton} AND code = ${code} LIMIT 1`)
   const v = validateAssortment({
     division: line.division, segment: entered.segment, packing: Number(line.pairsPerCarton), code, sizes: entered.sizes,
-    note: `Entered at ${from} (bill ${line.refNo})`, onlyFor: others.rows.length ? line.articleCode : '',
+    note: line.note, onlyFor: others.rows.length ? line.articleCode : '',
   })
   if (v.errors.length) throw new Error(v.errors.join(' '))
   if (v.value.sizes.some((s) => !sizes.includes(s.size))) throw new Error(`Only sizes ${sizes.join(', ')} belong to this carton.`)

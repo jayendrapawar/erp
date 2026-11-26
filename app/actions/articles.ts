@@ -354,6 +354,8 @@ type LinkResult = { ok: true; articleId: number } | { ok: false; error: 'SIZE_NO
 interface LinkInput {
   rawQr: string; artName: string; colorName: string; sizesText: string; addScannedSize: boolean; confirmWarnings: boolean
   flag?: string; notes?: string; saveScan?: boolean; clientEventId?: string
+  /** Warehouse Scanner stocktake session (rack count) of the scan. */
+  sessionId?: number | null
   /** Gents / Ladies / Kids / Baby — asked on the New Article form. */
   segment?: string
   /** Sparx / Flite PU / Flite EVA / Bahamas — asked on the New Article form (suggested from the code). */
@@ -488,7 +490,7 @@ async function linkOrCreateArticleOnce(input: LinkInput): Promise<LinkResult> {
 
       let scanEventId: number | null = null
       if (input.saveScan !== false) {
-        const scan = await recordBoxScan(tx, actor, { clientEventId: input.clientEventId ?? randomUUID(), rawInput: input.rawQr, flag: input.flag, notes: input.notes })
+        const scan = await recordBoxScan(tx, actor, { clientEventId: input.clientEventId ?? randomUUID(), rawInput: input.rawQr, flag: input.flag, notes: input.notes, sessionId: input.sessionId ?? null })
         if (scan.status === 'duplicate') throw new LinkAbort({ ok: false, error: 'DUPLICATE_QR' })
         if (scan.status === 'rejected') throw new LinkAbort({ ok: false, error: 'INVALID_QR' })
         scanEventId = scan.event.id

@@ -106,7 +106,7 @@ async function trySyncEntry(entry: OfflineEntry): Promise<'success' | 'duplicate
   const notes = entry.notes?.replace(/\[Flag:[^\]]*\]/, '').trim() || null
 
   if (entry.entryType === 'scan' && entry.rawQrCode) {
-    const res = await recordScan(entry.rawQrCode, { clientEventId: entry.tempId, flag, notes, deviceAt: new Date(entry.savedAt).toISOString(), offline: true })
+    const res = await recordScan(entry.rawQrCode, { clientEventId: entry.tempId, flag, notes, deviceAt: new Date(entry.savedAt).toISOString(), offline: true, sessionId: entry.sessionId ?? null })
     if (res.ok)                           return 'success'
     if (res.error === DUPLICATE_QR_ERROR) return 'duplicate'
     return `Server error: ${res.message}`
@@ -123,6 +123,7 @@ async function trySyncEntry(entry: OfflineEntry): Promise<'success' | 'duplicate
     mrp: entry.mrp ?? null,
     mfgMonth: entry.mfgMonth ?? null,
     mfgYear: entry.mfgYear ?? null,
+    sessionId: entry.sessionId ?? null,
     offline: true,
   })
   if (res.ok) return 'success'

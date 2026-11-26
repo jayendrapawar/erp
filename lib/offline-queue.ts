@@ -24,6 +24,7 @@ export interface OfflineEntry {
   quantity:     number
   notes?:       string
   flag?:        string
+  sessionId?:   number              // stocktake session (rack count) the scan belongs to
   // meta
   scannedByName: string             // persisted from session so sync labels rows correctly
   savedAt:       number             // Date.now()

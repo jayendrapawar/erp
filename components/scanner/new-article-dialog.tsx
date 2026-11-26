@@ -17,6 +17,8 @@ type Props = {
   existingName?: string
   /** Scanner flag for the saved scan. */
   flag?: string
+  /** Warehouse Scanner stocktake session (rack count) of the saved scan. */
+  sessionId?: number | null
   /** Device-generated id of the scan being saved (makes retries safe). */
   clientEventId?: string
   saveScan?: boolean
@@ -28,7 +30,7 @@ type Props = {
   onLinked: () => Promise<void>
 }
 
-export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clientEventId, saveScan = true, initialSizes, closeLabel = 'Close (scan is saved without article details)', onClose, onSaveLater, onLinked }: Props) {
+export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, sessionId, clientEventId, saveScan = true, initialSizes, closeLabel = 'Close (scan is saved without article details)', onClose, onSaveLater, onLinked }: Props) {
   const [articleName, setArticleName] = useState(existingName ?? '')
   const [colourChoice, setColourChoice] = useState('')
   const [otherColour, setOtherColour] = useState('')
@@ -132,6 +134,7 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, clie
         addScannedSize,
         confirmWarnings,
         flag,
+        sessionId,
         clientEventId,
         saveScan,
       })

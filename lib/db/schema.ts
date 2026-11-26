@@ -504,13 +504,46 @@ export const scanEvents = pgTable('scan_events', {
   voidedBy:      text('voidedBy').references(() => user.id, { onDelete: 'set null' }),
   voidReason:    text('voidReason'),
   legacyScanId:  integer('legacyScanId'),
+  /** Stocktake session (rack count) the scan belongs to. Migration 0021. */
+  sessionId:     integer('sessionId').references(() => stocktakeSessions.id),
 })
 
 export type ScanEvent = typeof scanEvents.$inferSelect
 
+// --- Warehouse Scanner: racks and stocktake sessions (migration 0021) ---
+
+/** Racks / areas counted in the Warehouse Scanner. Kept by admin and supervisor. */
+export const racks = pgTable('racks', {
+  id:        serial('id').primaryKey(),
+  name:      text('name').notNull(),
+  active:    boolean('active').notNull().default(true),
+  sortOrder: integer('sortOrder').notNull().default(0),
+  createdBy: text('createdBy').references(() => user.id, { onDelete: 'set null' }),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/** One godown stocktake: everyone scanning joins the open one. At most one open (migration 0022). */
+export const stocktakeSessions = pgTable('stocktake_sessions', {
+  id:             serial('id').primaryKey(),
+  /** Old per-rack counts only; one godown stocktake has none (migration 0022). */
+  rackId:         integer('rackId').references(() => racks.id),
+  status:         text('status').$type<'open' | 'finished'>().notNull().default('open'),
+  startedBy:      text('startedBy').references(() => user.id, { onDelete: 'set null' }),
+  startedByName:  text('startedByName').notNull().default(''),
+  startedAt:      timestamp('startedAt', { withTimezone: true }).notNull().defaultNow(),
+  finishedAt:     timestamp('finishedAt', { withTimezone: true }),
+  finishedBy:     text('finishedBy').references(() => user.id, { onDelete: 'set null' }),
+  finishedByName: text('finishedByName'),
+  note:           text('note').notNull().default(''),
+}, (t) => [
+  // One open godown stocktake at a time (migration 0022).
+  uniqueIndex('stocktake_sessions_one_open').on(t.status).where(sql`status = 'open'`),
+])
+
 export type Provenance = 'scanned' | 'unscanned' | 'carton'
 export type MovementType =
-  | 'stocktake_scan' | 'stocktake_manual' | 'legacy_import' | 'adjustment' | 'reversal'
+  | 'stocktake_scan' | 'stocktake_manual' | 'stocktake_carton' | 'legacy_import' | 'adjustment' | 'reversal'
   | 'transfer' | 'provenance_transfer' | 'receipt' | 'dispatch' | 'return'
 
 // Append-only. stock_balances is maintained from this table by a database trigger.
@@ -695,7 +728,10 @@ export const cartonReceipts = pgTable('carton_receipts', {
   sizeTo:        text('sizeTo').notNull(),
   packLetter:    text('packLetter').notNull().default(''),
   mrp:           numeric('mrp', { precision: 10, scale: 2 }),
-  match:         text('match').$type<'matched' | 'unexpected'>().notNull(),
+  match:         text('match').$type<'matched' | 'unexpected' | 'stocktake'>().notNull(),
+  /** Rack name of a stocktake carton. Migration 0021. */
+  flag:          text('flag'),
+  sessionId:     integer('sessionId').references(() => stocktakeSessions.id),
   billId:        integer('billId').references(() => purchaseBills.id),
   billLineId:    integer('billLineId').references(() => purchaseBillLines.id),
   assortmentId:  integer('assortmentId').references(() => cartonAssortments.id),
