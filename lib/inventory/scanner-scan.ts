@@ -58,6 +58,8 @@ export interface ScannerScanInput {
   deviceAt?: string | null
   /** The user may create articles and has not chosen "save for later": ask before saving an unknown box. */
   askIfUnknown?: boolean
+  /** Optional rack / area name the scan is tagged with. */
+  flag?: string | null
   offline?: boolean
 }
 
@@ -75,7 +77,7 @@ export async function scannerScan(db: Db, actor: Actor, input: ScannerScanInput)
   }
   const deviceAt = input.deviceAt ? new Date(input.deviceAt) : null
   const out = await recordBoxScan(db, actor, {
-    clientEventId: input.clientEventId, rawInput: input.raw, sessionId: input.sessionId,
+    clientEventId: input.clientEventId, rawInput: input.raw, sessionId: input.sessionId, flag: input.flag ?? null,
     deviceAt: deviceAt && !Number.isNaN(deviceAt.getTime()) ? deviceAt : null,
     source: input.offline ? 'offline_sync' : 'app',
   })

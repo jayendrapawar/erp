@@ -1,16 +1,15 @@
 /**
- * Warehouse Scanner: racks and stocktake sessions (owner, 26 Nov 2026; migration 0021).
+ * Warehouse Scanner: the godown stocktake and racks (owner, 26 Nov 2026; migrations 0021, 0022).
  *
- *  - Racks are a fixed list kept by admin and supervisor (permission racks.manage). Never deleted:
- *    a rack no longer used is switched off.
- *  - A session is one count of one rack. Choosing a rack joins its open session or starts one, so
- *    several people can count the same rack together. One open session per rack (unique index).
- *  - Every scan, manual entry and counted carton carries the session; its flag is the rack name
- *    (taken from the session on the server, never from the device).
- *  - Finishing: the person who started it, or anyone with scan.void.any (admin, supervisor).
- *    Scans saved offline while the session was open still join it when they sync.
+ *  - The godown has no fixed areas: loose pairs, open cartons and sealed cartons are mixed. So there
+ *    is ONE open stocktake; everyone scanning joins it. It starts by itself when the scanner opens and
+ *    none is open (unique index: one open at a time). Admin / supervisor (scan.void.any) finish it.
+ *  - Racks are an optional list kept by admin and supervisor (racks.manage). Never deleted: switched
+ *    off. A scan may carry a rack / area name (flag); none is needed.
+ *  - Every scan, manual entry and counted carton carries the stocktake. Scans saved offline while it
+ *    was open still join it when they sync. Old per-rack counts (0021) keep their rack.
  *
- * Totals per session are aggregated in SQL (indexes on "sessionId"); nothing is cached.
+ * Totals per stocktake are aggregated in SQL (indexes on "sessionId"); nothing is cached.
  */
 
 import { sql } from 'drizzle-orm'
@@ -36,7 +35,8 @@ export interface SessionTotals {
 }
 
 export interface SessionInfo {
-  id: number; rackId: number; rackName: string; status: 'open' | 'finished'
+  /** Old per-rack counts only; the godown stocktake has none. */
+  id: number; rackId: number | null; rackName: string | null; status: 'open' | 'finished'
   startedByName: string; startedBy: string | null; startedAt: string
   finishedAt: string | null; finishedByName: string | null
   totals: SessionTotals
@@ -44,13 +44,22 @@ export interface SessionInfo {
 
 const EMPTY: SessionTotals = { pairs: 0, boxes: 0, manualPairs: 0, cartons: 0, cartonPairs: 0, missing: 0, people: 0 }
 
-/** The session's id and rack name, stamped on a scan (inside the caller's transaction). */
-export async function sessionStamp(db: DbOrTx, sessionId: number | null | undefined): Promise<{ sessionId: number; flag: string } | null> {
+/**
+ * The stocktake stamped on a scan (inside the caller's transaction). `flag` is the rack of an old
+ * per-rack count, else null (the scan's own optional area is used).
+ */
+export async function sessionStamp(db: DbOrTx, sessionId: number | null | undefined): Promise<{ sessionId: number; flag: string | null } | null> {
   if (!sessionId || !Number.isInteger(sessionId)) return null
-  const r = await db.execute<{ id: number; name: string }>(sql`
-    SELECT s.id, r.name FROM stocktake_sessions s JOIN racks r ON r.id = s."rackId" WHERE s.id = ${sessionId}`)
+  const r = await db.execute<{ id: number; name: string | null }>(sql`
+    SELECT s.id, r.name FROM stocktake_sessions s LEFT JOIN racks r ON r.id = s."rackId" WHERE s.id = ${sessionId}`)
   const row = r.rows[0]
-  return row ? { sessionId: Number(row.id), flag: String(row.name) } : null
+  return row ? { sessionId: Number(row.id), flag: row.name ?? null } : null
+}
+
+/** The open stocktake's id, or null. One statement. */
+export async function openStocktakeId(db: DbOrTx): Promise<number | null> {
+  const r = await db.execute<{ id: number }>(sql`SELECT id FROM stocktake_sessions WHERE status = 'open' LIMIT 1`)
+  return r.rows[0] ? Number(r.rows[0].id) : null
 }
 
 // ── Racks ────────────────────────────────────────────────────────────────────
@@ -119,14 +128,14 @@ export async function sessionTotals(db: DbOrTx, ids: number[]): Promise<Map<numb
   return out
 }
 
-type SessionRow = { id: number; rackId: number; rackName: string; status: 'open' | 'finished'; startedBy: string | null; startedByName: string; startedAt: string; finishedAt: string | null; finishedByName: string | null }
+type SessionRow = { id: number; rackId: number | null; rackName: string | null; status: 'open' | 'finished'; startedBy: string | null; startedByName: string; startedAt: string; finishedAt: string | null; finishedByName: string | null }
 
 const SESSION_COLS = sql`s.id, s."rackId", r.name AS "rackName", s.status, s."startedBy", s."startedByName", s."startedAt", s."finishedAt", s."finishedByName"`
 
 async function withTotals(db: DbOrTx, rows: SessionRow[]): Promise<SessionInfo[]> {
   const totals = await sessionTotals(db, rows.map((r) => Number(r.id)))
   return rows.map((x) => ({
-    id: Number(x.id), rackId: Number(x.rackId), rackName: String(x.rackName), status: x.status,
+    id: Number(x.id), rackId: x.rackId != null ? Number(x.rackId) : null, rackName: x.rackName ?? null, status: x.status,
     startedBy: x.startedBy ?? null, startedByName: String(x.startedByName ?? ''), startedAt: new Date(x.startedAt).toISOString(),
     finishedAt: x.finishedAt ? new Date(x.finishedAt).toISOString() : null, finishedByName: x.finishedByName ?? null,
     totals: totals.get(Number(x.id)) ?? EMPTY,
@@ -134,48 +143,50 @@ async function withTotals(db: DbOrTx, rows: SessionRow[]): Promise<SessionInfo[]
 }
 
 export async function getSession(db: DbOrTx, id: number): Promise<SessionInfo | null> {
-  const r = await db.execute<SessionRow>(sql`SELECT ${SESSION_COLS} FROM stocktake_sessions s JOIN racks r ON r.id = s."rackId" WHERE s.id = ${id}`)
+  const r = await db.execute<SessionRow>(sql`SELECT ${SESSION_COLS} FROM stocktake_sessions s LEFT JOIN racks r ON r.id = s."rackId" WHERE s.id = ${id}`)
   return r.rows[0] ? (await withTotals(db, r.rows))[0] : null
 }
 
 /** Recent sessions (open first, then newest), with totals. Two statements. */
 export async function listSessions(db: DbOrTx, limit = 40): Promise<SessionInfo[]> {
   const r = await db.execute<SessionRow>(sql`
-    SELECT ${SESSION_COLS} FROM stocktake_sessions s JOIN racks r ON r.id = s."rackId"
+    SELECT ${SESSION_COLS} FROM stocktake_sessions s LEFT JOIN racks r ON r.id = s."rackId"
      ORDER BY (s.status = 'open') DESC, s.id DESC LIMIT ${Math.min(Math.max(limit, 1), 100)}`)
   return withTotals(db, r.rows)
 }
 
-/** Choosing a rack: join its open session, or start one. One transaction (2–3 statements). */
-export async function startOrJoinSession(db: Db, actor: Actor, rackId: number): Promise<{ session: SessionInfo; started: boolean }> {
-  const out = await db.transaction(async (tx) => {
-    const rack = await tx.execute<{ active: boolean; name: string }>(sql`SELECT active, name FROM racks WHERE id = ${rackId}`)
-    if (!rack.rows[0]) throw new SessionError('Rack not found.')
-    if (!rack.rows[0].active) throw new SessionError(`Rack "${rack.rows[0].name}" is switched off.`)
+/**
+ * The open godown stocktake; started now when none is open. The open one is found first (one
+ * statement); only when there is none: one transaction to insert (a concurrent start wins the
+ * unique index and this one joins it).
+ */
+export async function ensureOpenStocktake(db: Db, actor: Actor): Promise<{ id: number; started: boolean }> {
+  const open = await openStocktakeId(db)
+  if (open != null) return { id: open, started: false }
+  return db.transaction(async (tx) => {
     const ins = await tx.execute<{ id: number }>(sql`
-      INSERT INTO stocktake_sessions ("rackId", "startedBy", "startedByName") VALUES (${rackId}, ${actor.id}, ${actor.name})
-      ON CONFLICT ("rackId") WHERE status = 'open' DO NOTHING RETURNING id`)
+      INSERT INTO stocktake_sessions ("startedBy", "startedByName") VALUES (${actor.id}, ${actor.name})
+      ON CONFLICT (status) WHERE status = 'open' DO NOTHING RETURNING id`)
     if (ins.rows[0]) {
       const id = Number(ins.rows[0].id)
-      await audit(tx, { actor, action: 'stocktake.started', entityType: 'stocktake_session', entityId: id, after: { rackId, rack: rack.rows[0].name } })
+      await audit(tx, { actor, action: 'stocktake.started', entityType: 'stocktake_session', entityId: id })
       return { id, started: true }
     }
-    const open = await tx.execute<{ id: number }>(sql`SELECT id FROM stocktake_sessions WHERE "rackId" = ${rackId} AND status = 'open'`)
-    if (!open.rows[0]) throw new SessionError('Could not start the count. Try again.')
-    return { id: Number(open.rows[0].id), started: false }
+    const again = await openStocktakeId(tx)
+    if (again == null) throw new SessionError('Could not start the stocktake. Try again.')
+    return { id: again, started: false }
   })
-  const session = await getSession(db, out.id)
-  return { session: session!, started: out.started }
 }
 
-/** Finish a count. The starter, or anyone with scan.void.any. One transaction. */
+/** Finish the stocktake: admin / supervisor (scan.void.any) only. One transaction. */
 export async function finishSession(db: Db, actor: Actor, opts: { sessionId: number; canFinishAny: boolean; note?: string }): Promise<SessionInfo> {
   await db.transaction(async (tx) => {
-    const r = await tx.execute<{ status: string; startedBy: string | null }>(sql`SELECT status, "startedBy" FROM stocktake_sessions WHERE id = ${opts.sessionId} FOR UPDATE`)
+    const r = await tx.execute<{ status: string }>(sql`SELECT status FROM stocktake_sessions WHERE id = ${opts.sessionId} FOR UPDATE`)
     const s = r.rows[0]
-    if (!s) throw new SessionError('Count not found.')
+    if (!s) throw new SessionError('Stocktake not found.')
     if (s.status === 'finished') return
-    if (!opts.canFinishAny && s.startedBy !== actor.id) throw new SessionError('Only the person who started this count, or a supervisor, can finish it.')
+    // Everyone scans into the same stocktake: one person finishing it would end it for all.
+    if (!opts.canFinishAny) throw new SessionError('Only an admin or supervisor can finish the stocktake.')
     await tx.execute(sql`
       UPDATE stocktake_sessions SET status = 'finished', "finishedAt" = now(), "finishedBy" = ${actor.id}, "finishedByName" = ${actor.name},
              note = ${String(opts.note ?? '').trim().slice(0, 300)}

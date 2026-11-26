@@ -1,13 +1,14 @@
 'use server'
 
-// Warehouse Scanner: racks and stocktake sessions (lib/inventory/stocktake-sessions.ts).
-// Opening the screen is ONE request (getScannerBoot); its reads run in parallel on the server.
+// Warehouse Scanner: the godown stocktake and racks (lib/inventory/stocktake-sessions.ts).
+// Opening the screen is ONE request (getScannerBoot): the open stocktake (if any), its totals, my
+// scans in it and the optional racks list. Opening creates nothing: the first scan starts a stocktake.
 
 import { db } from '@/lib/db'
 import { AuthError, requirePermission } from '@/lib/authz'
 import { hasPermission } from '@/lib/permissions'
 import {
-  SessionError, finishSession, getSession, listRacks, listSessions, saveRack, sessionFeed, startOrJoinSession,
+  SessionError, finishSession, openStocktakeId, getSession, listRacks, listSessions, saveRack, sessionFeed,
   type FeedItem, type Rack, type SessionInfo,
 } from '@/lib/inventory/stocktake-sessions'
 
@@ -15,12 +16,11 @@ export interface ScannerUser { id: string; name: string; canCreateArticles: bool
 
 export interface ScannerBoot {
   user: ScannerUser
+  /** Optional areas a scan can be tagged with. */
   racks: Rack[]
-  /** Open counts (any rack), with totals. */
-  open: SessionInfo[]
-  /** The count this device was in, when still known (open or finished). */
+  /** The open godown stocktake; null when none is open (the first scan starts one). */
   session: SessionInfo | null
-  /** My scans in that count, newest first. */
+  /** My scans in it, newest first. */
   feed: FeedItem[]
 }
 
@@ -33,15 +33,10 @@ function fail(e: unknown, fallback: string): { ok: false; message: string } {
   return { ok: false, message: fallback }
 }
 
-export async function getScannerBoot(sessionId: number | null): Promise<ScannerBoot> {
+export async function getScannerBoot(): Promise<ScannerBoot> {
   const u = await requirePermission('scan.record')
-  const id = Number.isInteger(sessionId) ? Number(sessionId) : null
-  const [racks, sessions, session, feed] = await Promise.all([
-    listRacks(db),
-    listSessions(db, 30),
-    id ? getSession(db, id) : Promise.resolve(null),
-    id ? sessionFeed(db, u.id, id, 40) : Promise.resolve([] as FeedItem[]),
-  ])
+  const [openId, racks] = await Promise.all([openStocktakeId(db), listRacks(db)])
+  const [session, feed] = openId == null ? [null, [] as FeedItem[]] : await Promise.all([getSession(db, openId), sessionFeed(db, u.id, openId, 40)])
   return {
     user: {
       id: u.id, name: u.name,
@@ -49,43 +44,34 @@ export async function getScannerBoot(sessionId: number | null): Promise<ScannerB
       canVoidAny: hasPermission(u.roles, 'scan.void.any'),
       canManageRacks: hasPermission(u.roles, 'racks.manage'),
     },
-    racks, open: sessions.filter((s) => s.status === 'open'), session, feed,
+    racks, session, feed,
   }
 }
 
-/** Choose a rack: join its open count or start one. Returns the count and my scans in it. */
-export async function startOrJoinAction(rackId: number): Promise<Result<{ session: SessionInfo; started: boolean; feed: FeedItem[] }>> {
-  try {
-    const u = await requirePermission('scan.record')
-    const { session, started } = await startOrJoinSession(db, { id: u.id, name: u.name }, rackId)
-    const feed = started ? [] : await sessionFeed(db, u.id, session.id, 40)
-    return { ok: true, data: { session, started, feed } }
-  } catch (e) { return fail(e, 'Could not start the count. Try again.') }
-}
-
-/** Fresh totals (and my list) of a count: after reconnecting, a new-article link, or ↻. */
+/** Fresh totals (and my list) of a stocktake: after reconnecting, a new-article link, or ↻. */
 export async function refreshSessionAction(sessionId: number): Promise<Result<{ session: SessionInfo | null; feed: FeedItem[] }>> {
   try {
     const u = await requirePermission('scan.record')
     const [session, feed] = await Promise.all([getSession(db, sessionId), sessionFeed(db, u.id, sessionId, 40)])
     return { ok: true, data: { session, feed } }
-  } catch (e) { return fail(e, 'Could not load the count. Try again.') }
+  } catch (e) { return fail(e, 'Could not load the stocktake. Try again.') }
 }
 
+/** Admin / supervisor: finish the godown stocktake. */
 export async function finishSessionAction(sessionId: number, note: string): Promise<Result<SessionInfo>> {
   try {
     const u = await requirePermission('scan.record')
     const s = await finishSession(db, { id: u.id, name: u.name }, { sessionId, note, canFinishAny: hasPermission(u.roles, 'scan.void.any') })
     return { ok: true, data: s }
-  } catch (e) { return fail(e, 'Could not finish the count. Try again.') }
+  } catch (e) { return fail(e, 'Could not finish the stocktake. Try again.') }
 }
 
-/** Counts → recent sessions with totals (open first). */
+/** Stocktakes → recent ones with totals (open first). */
 export async function listSessionsAction(): Promise<Result<SessionInfo[]>> {
   try {
     await requirePermission('scan.record')
     return { ok: true, data: await listSessions(db, 50) }
-  } catch (e) { return fail(e, 'Could not load the counts.') }
+  } catch (e) { return fail(e, 'Could not load the stocktakes.') }
 }
 
 export async function listAllRacksAction(): Promise<Result<Rack[]>> {

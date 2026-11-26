@@ -14,6 +14,7 @@ import {
   checkStocktakeCarton, countStocktakeCarton, recentStocktakeCartons, undoStocktakeCarton,
   type StocktakeCartonRow, type StocktakeCheck, type StocktakeCount, type StocktakeCountInput,
 } from '@/lib/inventory/stocktake-carton'
+import { ensureOpenStocktake, openStocktakeId } from '@/lib/inventory/stocktake-sessions'
 import { DUPLICATE_QR_ERROR, INVALID_QR_ERROR } from '@/lib/errors'
 import type { ScanEvent } from '@/lib/db/schema'
 
@@ -117,7 +118,8 @@ export async function recordScan(rawQrCode: string, opts: RecordScanOptions = {}
       notes: opts.notes,
       deviceAt: opts.deviceAt ? new Date(opts.deviceAt) : null,
       source: opts.offline ? 'offline_sync' : 'app',
-      sessionId: opts.sessionId ?? null,
+      // Saved offline before a stocktake existed: the open one.
+      sessionId: opts.sessionId ?? await openStocktakeId(db),
     })
     if (out.status === 'duplicate') return { ok: false, error: DUPLICATE_QR_ERROR, scannedByName: out.original.userName, scannedAt: out.original.createdAt }
     if (out.status === 'rejected') return { ok: false, error: out.reason === 'carton' ? 'CARTON_QR' : INVALID_QR_ERROR, message: out.message }
@@ -146,11 +148,13 @@ export interface ManualEntryForm {
   sessionId?: number | null
 }
 
-export type ManualEntryResult = { ok: true; data: ScanView; replay: boolean } | { ok: false; error: 'FORBIDDEN' | 'INVALID' | 'ERROR'; message: string }
+export type ManualEntryResult = { ok: true; data: ScanView; replay: boolean; sessionId: number | null } | { ok: false; error: 'FORBIDDEN' | 'INVALID' | 'ERROR'; message: string }
 
 export async function addManualEntry(input: ManualEntryForm): Promise<ManualEntryResult> {
   try {
     const u = await requirePermission('scan.record')
+    // Live: the OPEN stocktake (started now when none is open). Synced from a phone: the one it was typed in.
+    const sessionId = input.offline ? (input.sessionId ?? await openStocktakeId(db)) : (await ensureOpenStocktake(db, { id: u.id, name: u.name })).id
     const { event, replay } = await recordManualEntry(db, { id: u.id, name: u.name }, {
       clientEventId: input.clientEventId ?? randomUUID(),
       articleCode: input.artNumber,
@@ -163,10 +167,10 @@ export async function addManualEntry(input: ManualEntryForm): Promise<ManualEntr
       mfgMonth: input.mfgMonth,
       mfgYear: input.mfgYear,
       source: input.offline ? 'offline_sync' : 'app',
-      sessionId: input.sessionId ?? null,
+      sessionId,
     })
     // No revalidatePath: it re-rendered the scanner page on the server after every scan (Reports is dynamic).
-    return { ok: true, data: await withNames(event), replay }
+    return { ok: true, data: await withNames(event), replay, sessionId }
   } catch (e) {
     if (e instanceof AuthError) return { ok: false, error: 'FORBIDDEN', message: 'Your account is not allowed to record stock.' }
     if (e instanceof Error && /required|whole number/.test(e.message)) return { ok: false, error: 'INVALID', message: e.message }
@@ -234,12 +238,14 @@ export async function checkStocktakeCartonAction(rawQr: string): Promise<Stockta
 }
 
 /** Count the confirmed carton into stock (one transaction; safe to retry with the same clientEventId). */
-export async function countStocktakeCartonAction(input: StocktakeCountInput): Promise<StocktakeCount> {
+export async function countStocktakeCartonAction(input: StocktakeCountInput): Promise<StocktakeCount & { sessionId?: number }> {
   try {
     const u = await requirePermission('scan.record')
-    const out = await countStocktakeCarton(db, { id: u.id, name: u.name }, input)
-
-    return out
+    const actor = { id: u.id, name: u.name }
+    // Always the OPEN stocktake (started now when none is open), like a live pair scan.
+    const sessionId = (await ensureOpenStocktake(db, actor)).id
+    const out = await countStocktakeCarton(db, actor, { ...input, sessionId })
+    return { ...out, sessionId }
   } catch (e) {
     if (!(e instanceof AuthError)) console.error('countStocktakeCarton failed', e)
     return { status: 'rejected', message: screenMessage(e, 'The carton could not be saved. Try again.') }

@@ -16,7 +16,7 @@
 const CACHE_VERSION  = 'v5'
 const CACHE_NAME     = `shayona-${CACHE_VERSION}`
 const STATIC_CACHE   = `shayona-static-${CACHE_VERSION}`
-const PAGES_CACHE    = `shayona-pages-${CACHE_VERSION}`
+const PAGES_CACHE    = `shayona-pages-${CACHE_VERSION}` // components/scanner-page.tsx saves /scanner here too: change both
 // Owned by the page (lib/use-catalogue-cache.ts), not by this worker: kept when the worker updates.
 const ORDER_CATALOGUE_CACHE = 'shayona-order-catalogue-v1'
 

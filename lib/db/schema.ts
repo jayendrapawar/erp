@@ -523,10 +523,11 @@ export const racks = pgTable('racks', {
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 })
 
-/** One count of one rack. At most one open session per rack. */
+/** One godown stocktake: everyone scanning joins the open one. At most one open (migration 0022). */
 export const stocktakeSessions = pgTable('stocktake_sessions', {
   id:             serial('id').primaryKey(),
-  rackId:         integer('rackId').notNull().references(() => racks.id),
+  /** Old per-rack counts only; one godown stocktake has none (migration 0022). */
+  rackId:         integer('rackId').references(() => racks.id),
   status:         text('status').$type<'open' | 'finished'>().notNull().default('open'),
   startedBy:      text('startedBy').references(() => user.id, { onDelete: 'set null' }),
   startedByName:  text('startedByName').notNull().default(''),
@@ -536,7 +537,8 @@ export const stocktakeSessions = pgTable('stocktake_sessions', {
   finishedByName: text('finishedByName'),
   note:           text('note').notNull().default(''),
 }, (t) => [
-  uniqueIndex('stocktake_sessions_one_open').on(t.rackId).where(sql`status = 'open'`),
+  // One open godown stocktake at a time (migration 0022).
+  uniqueIndex('stocktake_sessions_one_open').on(t.status).where(sql`status = 'open'`),
 ])
 
 export type Provenance = 'scanned' | 'unscanned' | 'carton'

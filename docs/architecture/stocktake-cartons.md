@@ -12,9 +12,9 @@ being refused. Scanner machine: a 2D / QR scanner (USB or Bluetooth, keyboard ty
    (the article's, from the master) + size code; "only for" and segment decide; most specific wins.
    Pairs per carton are not on the label: when earlier invoices show **one** value for this article +
    range, only assortments with those pairs are proposed and typed pairs must add up to it.
-3. The worker presses **Count carton (+N pairs)**, chooses another assortment, or types the pairs per
-   size (saved to Master → Assortments exactly as at receiving). **Don't count** drops a label
-   scanned by mistake. Cartons scanned meanwhile wait in turn; the camera pauses while one waits.
+3. The card asks **is this carton sealed?** **Sealed — count +N pairs** (after confirming, choosing another assortment, or typing the pairs per
+   size — saved to Master → Assortments exactly as at receiving). **Open — I'll scan its pairs** saves nothing for the carton: its pairs are scanned one by one, like loose pairs. A label
+   scanned by mistake is answered the same way. Cartons scanned meanwhile wait in turn; the camera pauses while one waits.
 4. Saved: `carton_receipts` row with `match = 'stocktake'` (no bill), the count (session) and rack name, the assortment
    used; +pairs per size in `stock_movements` as provenance **carton**, movement **stocktake_carton**.
 

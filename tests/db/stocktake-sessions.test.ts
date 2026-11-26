@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { sql } from 'drizzle-orm'
 import { createHarness, harnessEnabled, type Harness } from './_harness'
-import { finishSession, listRacks, saveRack, sessionFeed, sessionTotals, startOrJoinSession, SessionError } from '../../lib/inventory/stocktake-sessions'
+import { ensureOpenStocktake, finishSession, listRacks, openStocktakeId, saveRack, sessionFeed, sessionTotals, SessionError } from '../../lib/inventory/stocktake-sessions'
 import { scannerScan } from '../../lib/inventory/scanner-scan'
 import { recordManualEntry } from '../../lib/inventory/scan-service'
 import { countStocktakeCarton } from '../../lib/inventory/stocktake-carton'
@@ -14,11 +14,10 @@ const BOX_8 = 'A1PUG105G-BRBR0008-0726R10MA0-339.50-1010-Z76BC-1006101798'
 const BOX_NEW = 'A1PXZ777G-BKBK0007-0726R10MA0-299.00-1010-Z76BD-1006101797'
 const CARTON = 'PUG105GBRBR0610A339.500109202610101000000041'
 
-describe('warehouse scanner: racks and stocktake sessions (integration)', { skip: !harnessEnabled() && 'set TEST_DB_ENV_FILE=.env.local to run' }, () => {
+describe('warehouse scanner: godown stocktake, optional areas (integration)', { skip: !harnessEnabled() && 'set TEST_DB_ENV_FILE=.env.local to run' }, () => {
   let h: Harness
   const ravi: Actor = { id: 'u-ravi', name: 'Ravi' }
   const amit: Actor = { id: 'u-amit', name: 'Amit' }
-  let rackA = 0
   let sessionId = 0
   let gentsId = 0
 
@@ -36,26 +35,25 @@ describe('warehouse scanner: racks and stocktake sessions (integration)', { skip
   test('racks: add, no two with the same name, rename, switch off', async () => {
     const r = await saveRack(h.db, ravi, { name: '  Rack  A ' })
     assert.equal(r.name, 'Rack A')
-    rackA = r.id
     await assert.rejects(saveRack(h.db, ravi, { name: 'rack a' }), SessionError)
     const b = await saveRack(h.db, ravi, { name: 'Rack B' })
     await saveRack(h.db, ravi, { id: b.id, name: 'Rack B2', active: false })
     assert.deepEqual((await listRacks(h.db)).map((x) => x.name), ['Rack A'])
     assert.deepEqual((await listRacks(h.db, { all: true })).map((x) => [x.name, x.active]), [['Rack A', true], ['Rack B2', false]])
-    await assert.rejects(startOrJoinSession(h.db, ravi, b.id), /switched off/)
   })
 
-  test('choosing a rack starts a count; a second person joins the same count', async () => {
-    const first = await startOrJoinSession(h.db, ravi, rackA)
+  test('opening the scanner starts the godown stocktake; everyone else joins the same one', async () => {
+    assert.equal(await openStocktakeId(h.db), null)
+    const first = await ensureOpenStocktake(h.db, ravi)
     assert.equal(first.started, true)
-    sessionId = first.session.id
-    const second = await startOrJoinSession(h.db, amit, rackA)
-    assert.deepEqual([second.started, second.session.id], [false, sessionId])
+    sessionId = first.id
+    const [a, b] = await Promise.all([ensureOpenStocktake(h.db, amit), ensureOpenStocktake(h.db, ravi)])
+    assert.deepEqual([a, b], [{ id: sessionId, started: false }, { id: sessionId, started: false }])
   })
 
-  test('one request per scan: saved with the session and the rack name; duplicates and unknown articles', async () => {
+  test('one request per scan: saved with the stocktake and the optional area; duplicates and unknown articles', async () => {
     const id = randomUUID()
-    const r = await scannerScan(h.db, ravi, { raw: BOX_7, clientEventId: id, sessionId, askIfUnknown: true })
+    const r = await scannerScan(h.db, ravi, { raw: BOX_7, clientEventId: id, sessionId, flag: 'Rack A', askIfUnknown: true })
     assert.equal(r.kind, 'saved')
     if (r.kind !== 'saved') return
     assert.deepEqual([r.item.articleName, r.item.colourName, r.item.eventId, r.item.resolution], ['PUG-105', 'Brown', id, 'resolved'])
@@ -76,9 +74,11 @@ describe('warehouse scanner: racks and stocktake sessions (integration)', { skip
   })
 
   test('session totals: boxes + typed pairs + carton pairs, people, missing', async () => {
-    await scannerScan(h.db, amit, { raw: BOX_8, clientEventId: randomUUID(), sessionId })
+    const noArea = await scannerScan(h.db, amit, { raw: BOX_8, clientEventId: randomUUID(), sessionId })
+    assert.ok(noArea.kind === 'saved')
+    if (noArea.kind === 'saved') assert.equal((await h.db.execute<{ flag: string | null }>(sql`SELECT flag FROM scan_events WHERE id = ${noArea.item.id}`)).rows[0].flag, null)
     await recordManualEntry(h.db, amit, { clientEventId: randomUUID(), articleCode: 'PUG105G', colourCode: 'BRBR', sizeLabel: '9', quantity: 3, sessionId })
-    const c = await countStocktakeCarton(h.db, ravi, { rawInput: CARTON, clientEventId: randomUUID(), sessionId, answer: { assortmentId: gentsId } })
+    const c = await countStocktakeCarton(h.db, ravi, { rawInput: CARTON, clientEventId: randomUUID(), sessionId, flag: 'Rack A', answer: { assortmentId: gentsId } })
     assert.equal(c.status, 'counted')
     const flag = (await h.db.execute<{ flag: string; sessionId: number }>(sql`SELECT flag, "sessionId" FROM carton_receipts WHERE match = 'stocktake'`)).rows[0]
     assert.deepEqual([flag.flag, Number(flag.sessionId)], ['Rack A', sessionId])
@@ -90,12 +90,12 @@ describe('warehouse scanner: racks and stocktake sessions (integration)', { skip
     assert.equal(feed[0].detail, '6×6 7×6 8×6 9×6 10×6')
   })
 
-  test('finishing: the starter or a supervisor; then a new count starts for the rack', async () => {
-    await assert.rejects(finishSession(h.db, amit, { sessionId, canFinishAny: false }), /Only the person who started/)
-    const done = await finishSession(h.db, ravi, { sessionId, canFinishAny: false, note: 'all shelves' })
-    assert.ok(done.status === 'finished' && done.finishedByName === 'Ravi')
-    const next = await startOrJoinSession(h.db, amit, rackA)
-    assert.ok(next.started && next.session.id !== sessionId)
+  test('finishing: admin / supervisor only; the next opening starts a new stocktake', async () => {
+    await assert.rejects(finishSession(h.db, ravi, { sessionId, canFinishAny: false }), /Only an admin or supervisor/)
+    const done = await finishSession(h.db, amit, { sessionId, canFinishAny: true, note: 'whole godown' })
+    assert.ok(done.status === 'finished' && done.finishedByName === 'Amit' && done.rackId === null)
+    const next = await ensureOpenStocktake(h.db, ravi)
+    assert.ok(next.started && next.id !== sessionId)
     // A scan saved offline during the finished count still joins it when it syncs.
     const late = await scannerScan(h.db, amit, { raw: 'A1PUG105G-BRBR0010-0726R10MA0-339.50-1010-Z76BE-1006101796', clientEventId: randomUUID(), sessionId, offline: true })
     assert.equal(late.kind, 'saved')

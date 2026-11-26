@@ -2,9 +2,9 @@
 
 // Warehouse Scanner: count a sealed carton at stocktake (lib/inventory/stocktake-carton.ts).
 // Shows the proposed pairs per size; the worker confirms it, chooses another, or types the pairs.
-// "Don't count" drops a carton label scanned by mistake (nothing is saved).
+// "Open — I'll scan its pairs": an open carton is not counted; its pairs are scanned one by one.
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { SEGMENTS, describeOnlyFor, formatSizes } from '@/lib/catalog/assortments'
 import type { AssortmentAnswer } from '@/lib/purchases/assortment-entry'
 import type { StocktakeCartonAsk } from '@/lib/inventory/stocktake-carton'
@@ -35,6 +35,9 @@ export function StocktakeCartonCard({ ask, waiting, busy, error, onCount, onCanc
   const typedOk = total > 0 && (ask.invoicePairs == null || total === ask.invoicePairs) && (single || Boolean(segment))
   const ready = !busy && (chosen != null || (choice === 'new' && typedOk))
   const countPairs = chosen ? chosen.packing : total
+  // On a phone the card can open under the bottom menu bar: bring its Sealed / Open buttons into view.
+  const actionsRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { actionsRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }) }, [])
 
   function count() {
     if (!ready) return
@@ -45,12 +48,12 @@ export function StocktakeCartonCard({ ask, waiting, busy, error, onCount, onCanc
   return (
     <section data-form className="space-y-3 rounded-xl border-2 border-sky-500/60 bg-sky-50/50 p-4 dark:bg-sky-950/20" aria-label="Count carton">
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-300">Carton — count for stocktake</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-300">Carton label — is this carton sealed?</p>
         <p className="text-sm font-semibold" data-no-translate>{ask.label}</p>
         <p className="text-xs text-muted-foreground" data-no-translate>
           {[ask.articleName, ask.mrp != null ? `MRP ₹${ask.mrp.toFixed(2)}` : null, ask.division, ask.invoicePairs ? `${ask.invoicePairs} pairs per carton on earlier invoices` : null].filter(Boolean).join(' · ')}
         </p>
-        <p className="mt-1 text-[11px] text-muted-foreground">Count only a sealed carton. If it was opened and its boxes were scanned, don&apos;t count it.</p>
+        <p className="mt-1 text-[11px] text-muted-foreground">Sealed: its pairs are counted from the pairs per size below. Open: the carton is not counted — scan each pair inside it.</p>
         {ask.warnings.map((w) => <p key={w} className="mt-1 text-xs text-amber-700 dark:text-amber-400">{w}</p>)}
       </div>
 
@@ -111,12 +114,12 @@ export function StocktakeCartonCard({ ask, waiting, busy, error, onCount, onCanc
       </div>
 
       {error && <p role="alert" className="rounded-lg bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">{error}</p>}
-      <div className="flex gap-2">
-        <button data-primary onClick={count} disabled={!ready} className="flex-1 rounded-lg bg-foreground px-3 py-2.5 text-sm font-semibold text-background hover:opacity-90 disabled:opacity-50">
-          {busy ? 'Saving…' : countPairs > 0 ? `Count carton (+${countPairs} pairs)` : 'Count carton'}
+      <div ref={actionsRef} className="flex scroll-mb-[calc(5rem+env(safe-area-inset-bottom))] flex-col gap-2 sm:flex-row">
+        <button data-primary onClick={count} disabled={!ready} className="flex-1 rounded-lg bg-foreground px-3 py-3 text-sm font-semibold text-background hover:opacity-90 disabled:opacity-50">
+          {busy ? 'Saving…' : countPairs > 0 ? `Sealed — count +${countPairs} pairs` : 'Sealed — count it'}
         </button>
-        <button type="button" onClick={onCancel} disabled={busy} className="rounded-lg border border-border px-3 py-2.5 text-sm font-semibold hover:bg-muted disabled:opacity-50">
-          Don&apos;t count
+        <button type="button" onClick={onCancel} disabled={busy} className="flex-1 rounded-lg border border-border px-3 py-3 text-sm font-semibold hover:bg-muted disabled:opacity-50">
+          Open — I&apos;ll scan its pairs
         </button>
       </div>
       {waiting > 0 && <p className="text-[11px] text-muted-foreground">{`${waiting} more carton(s) scanned — they come next.`}</p>}
