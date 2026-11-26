@@ -68,6 +68,7 @@ export const PERMISSIONS = {
   'payments.view': ['admin', 'accountant', 'salesman'],
   'payments.record': ['admin', 'accountant'],
   'flags.create': SCANNING,
+  'racks.manage': ['admin', 'supervisor'], // Warehouse Scanner racks list (migration 0021)
   'audit.view': ['admin'],
 } as const satisfies Record<string, readonly Role[]>
 

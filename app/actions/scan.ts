@@ -10,6 +10,10 @@ import { hasPermission } from '@/lib/permissions'
 import { normalizeArticleValue } from '@/lib/article-utils'
 import { parseQr } from '@/lib/qr/parser'
 import { recentScansForUser, recordBoxScan, recordManualEntry, voidScanEvent } from '@/lib/inventory/scan-service'
+import {
+  checkStocktakeCarton, countStocktakeCarton, recentStocktakeCartons, undoStocktakeCarton,
+  type StocktakeCartonRow, type StocktakeCheck, type StocktakeCount, type StocktakeCountInput,
+} from '@/lib/inventory/stocktake-carton'
 import { DUPLICATE_QR_ERROR, INVALID_QR_ERROR } from '@/lib/errors'
 import type { ScanEvent } from '@/lib/db/schema'
 
@@ -99,6 +103,8 @@ export interface RecordScanOptions {
   notes?: string | null
   deviceAt?: string | null
   offline?: boolean
+  /** Stocktake session (rack count). */
+  sessionId?: number | null
 }
 
 export async function recordScan(rawQrCode: string, opts: RecordScanOptions = {}): Promise<RecordScanResult> {
@@ -111,10 +117,11 @@ export async function recordScan(rawQrCode: string, opts: RecordScanOptions = {}
       notes: opts.notes,
       deviceAt: opts.deviceAt ? new Date(opts.deviceAt) : null,
       source: opts.offline ? 'offline_sync' : 'app',
+      sessionId: opts.sessionId ?? null,
     })
     if (out.status === 'duplicate') return { ok: false, error: DUPLICATE_QR_ERROR, scannedByName: out.original.userName, scannedAt: out.original.createdAt }
     if (out.status === 'rejected') return { ok: false, error: out.reason === 'carton' ? 'CARTON_QR' : INVALID_QR_ERROR, message: out.message }
-    revalidatePath('/dashboard')
+    // No revalidatePath: it re-rendered the scanner page on the server after every scan (Reports is dynamic).
     return { ok: true, data: await withNames(out.event), replay: out.replay }
   } catch (e) {
     if (e instanceof AuthError) return { ok: false, error: 'FORBIDDEN', message: 'Your account is not allowed to record scans.' }
@@ -135,6 +142,8 @@ export interface ManualEntryForm {
   mfgMonth?: number | null
   mfgYear?: number | null
   offline?: boolean
+  /** Stocktake session (rack count). */
+  sessionId?: number | null
 }
 
 export type ManualEntryResult = { ok: true; data: ScanView; replay: boolean } | { ok: false; error: 'FORBIDDEN' | 'INVALID' | 'ERROR'; message: string }
@@ -154,8 +163,9 @@ export async function addManualEntry(input: ManualEntryForm): Promise<ManualEntr
       mfgMonth: input.mfgMonth,
       mfgYear: input.mfgYear,
       source: input.offline ? 'offline_sync' : 'app',
+      sessionId: input.sessionId ?? null,
     })
-    revalidatePath('/dashboard')
+    // No revalidatePath: it re-rendered the scanner page on the server after every scan (Reports is dynamic).
     return { ok: true, data: await withNames(event), replay }
   } catch (e) {
     if (e instanceof AuthError) return { ok: false, error: 'FORBIDDEN', message: 'Your account is not allowed to record stock.' }
@@ -203,6 +213,56 @@ export async function getRecentScans(limit = 50): Promise<ScanView[]> {
   return rows.map((r) => toView(r.event, { artName: r.artName, colorName: r.colorName, division: r.division }))
 }
 
+// ── Stocktake cartons (lib/inventory/stocktake-carton.ts) ─────────────────
+
+/** Messages written for the screen (ours, or the assortment rules'); database errors stay generic. */
+function screenMessage(e: unknown, fallback: string): string {
+  if (e instanceof AuthError) return 'Your account is not allowed to count stock.'
+  if (e instanceof Error && !('code' in e) && e.message.length < 300) return e.message
+  return fallback
+}
+
+/** A carton label was scanned: what fits inside it (one read; nothing saved). */
+export async function checkStocktakeCartonAction(rawQr: string): Promise<StocktakeCheck> {
+  try {
+    await requirePermission('scan.record')
+    return await checkStocktakeCarton(db, rawQr)
+  } catch (e) {
+    if (!(e instanceof AuthError)) console.error('checkStocktakeCarton failed', e)
+    return { status: 'rejected', message: screenMessage(e, 'The carton could not be checked. Try again.') }
+  }
+}
+
+/** Count the confirmed carton into stock (one transaction; safe to retry with the same clientEventId). */
+export async function countStocktakeCartonAction(input: StocktakeCountInput): Promise<StocktakeCount> {
+  try {
+    const u = await requirePermission('scan.record')
+    const out = await countStocktakeCarton(db, { id: u.id, name: u.name }, input)
+
+    return out
+  } catch (e) {
+    if (!(e instanceof AuthError)) console.error('countStocktakeCarton failed', e)
+    return { status: 'rejected', message: screenMessage(e, 'The carton could not be saved. Try again.') }
+  }
+}
+
+export async function getRecentStocktakeCartons(): Promise<StocktakeCartonRow[]> {
+  const u = await requirePermission('scan.record')
+  return recentStocktakeCartons(db, u.id, 30)
+}
+
+export async function undoStocktakeCartonAction(receiptId: number, reason: string): Promise<{ ok: true } | { ok: false; message: string }> {
+  try {
+    const u = await requirePermission('scan.void.own')
+    const out = await undoStocktakeCarton(db, { id: u.id, name: u.name }, { receiptId, reason: reason.trim() || 'Undone from the scanner', canVoidAny: hasPermission(u.roles, 'scan.void.any') })
+
+    return out
+  } catch (e) {
+    if (!(e instanceof AuthError)) console.error('undoStocktakeCarton failed', e)
+    return { ok: false, message: screenMessage(e, 'The carton could not be undone. Try again.') }
+  }
+}
+
 export type DeleteScanResult =
   | { ok: true; reversed: boolean; articleDeactivated?: { artCode: string; colorCode: string } }
   | { ok: false; message: string }
@@ -218,7 +278,7 @@ export async function deleteScan(scanId: number, opts: { reason?: string; remove
     canRemoveArticle: hasPermission(u.roles, 'articles.delete'),
   })
   if (!out.ok) return { ok: false, message: out.message }
-  revalidatePath('/dashboard')
+
   if (out.articleDeactivated) revalidatePath('/master')
   return { ok: true, reversed: out.reversed, articleDeactivated: out.articleDeactivated }
 }

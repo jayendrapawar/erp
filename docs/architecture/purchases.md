@@ -90,6 +90,9 @@ first). One active receipt per carton label.
 
 - Warehouse scanner: a box whose size has carton stock moves **carton → scanned** (−1 carton,
   +1 scanned) instead of adding a pair; undoing that scan moves it back.
+- Warehouse scanner, carton label: a sealed carton already on the shelf is **counted at stocktake**
+  (no bill, `match = 'stocktake'`); its label then cannot be received here. See
+  `docs/architecture/stocktake-cartons.md`.
 - Billing: a box not scanned in individually comes out of carton stock before hand-counted stock.
 - Inventory shows "Carton received" movements; carton stock is valued at the carton label's MRP.
 

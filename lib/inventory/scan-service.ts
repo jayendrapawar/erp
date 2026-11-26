@@ -6,7 +6,7 @@
  *    lost response) returns the original result and never adds stock twice.
  *  - A label whose format carries a unique id can have only one ACTIVE stocktake scan.
  *    A second attempt is refused, names the original scanner and is written to the audit log.
- *  - Carton labels are refused here; they belong to the separate carton module.
+ *  - Carton labels are refused here; sealed cartons are counted by stocktake-carton.ts.
  *  - A scan whose article/colour/size is not in the master is still saved, as a
  *    "missing article" scan with no stock movement. Linking the article later posts it.
  *  - Resolved QR scans post +1 'scanned' stock. Manual entries post 'unscanned' stock.
@@ -23,6 +23,7 @@ import { normalizeArticleValue } from '@/lib/article-utils'
 import { flattenFields, parseQr, type QrParseResult } from '@/lib/qr/parser'
 import { mainLocationId, postMovement, reverseMovement } from './ledger'
 import { bumpCatalogueVersion } from '@/lib/catalog/version'
+import { sessionStamp } from './stocktake-sessions'
 
 const NORM = (col: unknown) => sql`upper(regexp_replace(btrim(${col}), '\\s+', ' ', 'g'))`
 
@@ -61,6 +62,8 @@ export interface BoxScanInput {
   deviceAt?: Date | null
   locationId?: number | null
   legacyScanId?: number | null
+  /** Stocktake session (rack count). Its rack name becomes the flag. */
+  sessionId?: number | null
   /** Legacy import only: keep the original scan time. */
   createdAt?: Date | null
 }
@@ -78,7 +81,7 @@ export async function recordBoxScan(db: DbOrTx, actor: Actor, input: BoxScanInpu
 
   if (parse.kind === 'carton') {
     await audit(db, { actor, action: 'scan.rejected', entityType: 'scan_input', entityId: input.clientEventId, after: { raw: input.rawInput, formatId: parse.formatId }, reason: 'carton label in box scanner' })
-    return { status: 'rejected', reason: 'carton', message: 'This is an outer-carton label. Scan the individual footwear boxes, or use Carton Checking.', parse }
+    return { status: 'rejected', reason: 'carton', message: 'This is an outer-carton label. Scan it in the Warehouse Scanner to count the sealed carton, or scan the individual boxes.', parse }
   }
   if (parse.status === 'unrecognised' || parse.status === 'invalid') {
     await audit(db, { actor, action: 'scan.rejected', entityType: 'scan_input', entityId: input.clientEventId, after: { raw: input.rawInput, issues: parse.issues }, reason: parse.status })
@@ -95,6 +98,7 @@ export async function recordBoxScan(db: DbOrTx, actor: Actor, input: BoxScanInpu
     const size = parse.fields.size?.value ?? ''
     const res = await resolveSku(tx, art, colour, size)
     const locationId = input.locationId ?? await mainLocationId(tx)
+    const stamp = await sessionStamp(tx, input.sessionId)
 
     const inserted = await tx.insert(scanEvents).values({
       clientEventId: input.clientEventId,
@@ -118,7 +122,8 @@ export async function recordBoxScan(db: DbOrTx, actor: Actor, input: BoxScanInpu
       articleId: res.articleId,
       skuId: res.skuId,
       locationId,
-      flag: input.flag || null,
+      flag: stamp?.flag ?? (input.flag || null),
+      sessionId: stamp?.sessionId ?? null,
       notes: input.notes || null,
       userId: actor.id,
       userName: actor.name,
@@ -160,6 +165,8 @@ export interface ManualEntryInput {
   source?: 'app' | 'offline_sync' | 'legacy_import'
   locationId?: number | null
   legacyScanId?: number | null
+  /** Stocktake session (rack count). Its rack name becomes the flag. */
+  sessionId?: number | null
   createdAt?: Date | null
 }
 
@@ -177,6 +184,7 @@ export async function recordManualEntry(db: DbOrTx, actor: Actor, input: ManualE
     const replay = await findByClientEvent(tx, input.clientEventId)
     if (replay) return { event: replay, replay: true }
     const res = await resolveSku(tx, code, colour, size)
+    const stamp = await sessionStamp(tx, input.sessionId)
     const [event] = await tx.insert(scanEvents).values({
       clientEventId: input.clientEventId,
       entryType: 'manual',
@@ -193,7 +201,8 @@ export async function recordManualEntry(db: DbOrTx, actor: Actor, input: ManualE
       articleId: res.articleId,
       skuId: res.skuId,
       locationId: input.locationId ?? await mainLocationId(tx),
-      flag: input.flag || null,
+      flag: stamp?.flag ?? (input.flag || null),
+      sessionId: stamp?.sessionId ?? null,
       notes: input.notes || null,
       userId: actor.id,
       userName: actor.name,

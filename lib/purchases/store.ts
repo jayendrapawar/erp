@@ -233,7 +233,8 @@ async function listBillsById(db: DbOrTx, billId: number) {
 
 /** Received cartons, newest first: of one bill, the unexpected ones, or all. One query. */
 export async function listReceipts(db: DbOrTx, f: { billId?: number; unexpected?: boolean; limit?: number } = {}): Promise<ReceiptRow[]> {
-  const conds = [sql`c.status = 'active'`]
+  // Cartons counted at stocktake (Warehouse Scanner) are not receipts.
+  const conds = [sql`c.status = 'active'`, sql`c.match <> 'stocktake'`]
   if (f.billId) conds.push(sql`c."billId" = ${f.billId}`)
   if (f.unexpected) conds.push(sql`c.match = 'unexpected'`)
   const r = await db.execute<Record<string, unknown>>(sql`
@@ -380,12 +381,15 @@ export async function receiveCarton(db: Db, actor: Actor, input: { rawInput: str
   return db.transaction(async (tx) => {
     const replay = await tx.execute<{ id: number; match: string; billId: number | null }>(sql`SELECT id, match, "billId" FROM carton_receipts WHERE "clientEventId" = ${input.clientEventId}::uuid`)
     if (replay.rows[0]) return outcomeFor(tx, Number(replay.rows[0].id), label, warnings)
-    const held = await tx.execute<{ userName: string; createdAt: string; refNo: string | null }>(sql`
-      SELECT c."userName", c."createdAt", b."refNo" FROM carton_receipts c LEFT JOIN purchase_bills b ON b.id = c."billId"
+    const held = await tx.execute<{ userName: string; createdAt: string; refNo: string | null; match: string }>(sql`
+      SELECT c."userName", c."createdAt", b."refNo", c.match FROM carton_receipts c LEFT JOIN purchase_bills b ON b.id = c."billId"
       WHERE c."dedupeKey" = ${key} AND c.status = 'active' LIMIT 1`)
     if (held.rows[0]) {
       const h = held.rows[0]
-      return { status: 'duplicate', label, message: `Already received${h.refNo ? ` on bill ${h.refNo}` : ''} by ${h.userName || 'someone'} at ${new Date(h.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}.` } as const
+      const at = new Date(h.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+      // A carton counted at stocktake (Warehouse Scanner) is already in stock: receiving it would count it twice.
+      if (h.match === 'stocktake') return { status: 'duplicate', label, message: `Already counted in stocktake by ${h.userName || 'someone'} at ${at} — it is in stock. Undo it in the Warehouse Scanner first if it belongs to a bill.` } as const
+      return { status: 'duplicate', label, message: `Already received${h.refNo ? ` on bill ${h.refNo}` : ''} by ${h.userName || 'someone'} at ${at}.` } as const
     }
     // Oldest open line that still expects a carton like this one; lock it so two receivers cannot over-receive.
     const cand = await tx.execute<{ id: number; billId: number; refNo: string; mrp: string; cartons: number; received: number; lineNo: number; division: string; pairsPerCarton: number; assortmentId: number | null }>(sql`
@@ -519,7 +523,7 @@ export async function voidCartonReceipt(db: Db, actor: Actor, receiptId: number,
     if (!c || c.status !== 'active') throw new Error('Receipt not found or already undone.')
     const moves = (await tx.execute<{ id: number; skuId: number; locationId: number; quantity: number }>(sql`
       SELECT m.id, m."skuId", m."locationId", m.quantity FROM stock_movements m
-      WHERE m."sourceType" = 'carton_receipt' AND m."sourceId" = ${String(receiptId)} AND m."movementType" = 'receipt'
+      WHERE m."sourceType" = 'carton_receipt' AND m."sourceId" = ${String(receiptId)} AND m."movementType" IN ('receipt', 'stocktake_carton')
         AND NOT EXISTS (SELECT 1 FROM stock_movements x WHERE x."reversalOfId" = m.id)`)).rows
     if (moves.length) {
       const skus = [...new Set(moves.map((m) => Number(m.skuId)))].sort((a, b) => a - b)

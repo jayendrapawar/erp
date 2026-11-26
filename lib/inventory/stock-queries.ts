@@ -214,7 +214,7 @@ export interface MovementFilters {
 }
 
 const KIND_TYPES: Record<Exclude<MovementKind, 'other'>, string[]> = {
-  scan: ['stocktake_scan', 'stocktake_manual', 'legacy_import'],
+  scan: ['stocktake_scan', 'stocktake_manual', 'stocktake_carton', 'legacy_import'],
   received: ['receipt'],
   billed: ['dispatch'],
   undo: ['reversal'],
@@ -230,7 +230,7 @@ export async function listMovements(db: DbOrTx, f: MovementFilters): Promise<{ r
   const conds: SQL[] = [sql`TRUE`]
   if (f.kind && f.kind !== 'all') {
     conds.push(f.kind === 'other'
-      ? sql`m."movementType" NOT IN ('stocktake_scan','stocktake_manual','legacy_import','receipt','dispatch','reversal','adjustment')`
+      ? sql`m."movementType" NOT IN ('stocktake_scan','stocktake_manual','stocktake_carton','legacy_import','receipt','dispatch','reversal','adjustment')`
       : sql`m."movementType" IN (SELECT json_array_elements_text(${JSON.stringify(KIND_TYPES[f.kind])}::json))`)
   }
   if (f.articleId) conds.push(sql`s."articleId" = ${f.articleId}`)

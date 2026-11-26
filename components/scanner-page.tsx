@@ -1,1606 +1,634 @@
 'use client'
 
-import { playAlreadyScanned, playNewArticle, playScanOk } from '@/lib/scan-sound'
-import jsQR from 'jsqr'
-import { User } from 'lucide-react'
-import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
-import { createFlag } from '@/app/actions/flags'
-import { addManualEntry, checkScanAgainstMaster, deleteScan, getRecentScans, getScannerContext, recordScan, type ScannerContext } from '@/app/actions/scan'
-import { NewArticleDialog } from '@/components/scanner/new-article-dialog'
-import { PageNav } from '@/components/page-nav'
-import { DashboardPage } from '@/components/dashboard-page'
-import { DEFAULT_MANUAL_FORM, SCAN_INTERVAL_MS, SCAN_MAX_DIM } from '@/components/scanner/constants'
-import { getCachedUser, getDailyScanCount, getStoredActiveFlag, incrementDailyScanCount, saveStoredActiveFlag, setCachedUser } from '@/components/scanner/storage'
-import type { ManualFormState, RecentScan } from '@/components/scanner/types'
-import { FlagSelector, ScanSummaryCard } from '@/components/scanner/ui'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { DUPLICATE_QR_ERROR } from '@/lib/errors'
-import { useLanguage } from '@/lib/language-context'
-import { cacheFlags, enqueuePendingFlag, getCachedFlags } from '@/lib/offline-flags'
-import { enqueue, getQueue, removeFromQueue, type OfflineEntry } from '@/lib/offline-queue'
-import { isCartonQr, isValidWarehouseQr, parseQr, type ParsedQr } from '@/lib/qr-parser'
-import { syncFlags, syncQueue, type SyncResult } from '@/lib/sync-engine'
-import { useOnline } from '@/lib/use-online'
-import { useScannerScreen } from '@/lib/shortcuts'
-import { DialogKeys } from '@/components/dialog-keys'
+// Warehouse Scanner (rework, owner 26 Nov 2026; docs/architecture/warehouse-scanner.md).
+// One scan screen, phone first: choose the rack → scan (scanner machine, camera or photo) → the
+// count and the list update at once → Finish the count. One request per scan
+// (POST /api/scanner/scan); scans never wait for each other. Offline scans stay on the phone and
+// are sent when the internet is back.
 
-const CARTON_MESSAGE = 'This is an outer-carton label. Scan the individual footwear boxes instead.'
-const MISSING_MESSAGE = 'Saved. This article or size is not in the master yet; an admin will link it.'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
+import { Camera, CameraOff, Flashlight, ImageUp, Keyboard, ListChecks, MoreHorizontal, RefreshCw, Settings2, WifiOff, BarChart3 } from 'lucide-react'
+import { playAlreadyScanned, playNewArticle, playScanOk } from '@/lib/scan-sound'
+import { addManualEntry, countStocktakeCartonAction, deleteScan, undoStocktakeCartonAction } from '@/app/actions/scan'
+import { getScannerBoot, refreshSessionAction, startOrJoinAction, type ScannerBoot, type ScannerUser } from '@/app/actions/scanner'
+import type { FeedItem, Rack, SessionInfo, SessionTotals } from '@/lib/inventory/stocktake-sessions'
+import type { ScanReply } from '@/lib/inventory/scanner-scan'
+import type { StocktakeCartonAsk } from '@/lib/inventory/stocktake-carton'
+import type { AssortmentAnswer } from '@/lib/purchases/assortment-entry'
+import { formatSizes } from '@/lib/catalog/assortments'
+import { isCartonQr, isValidWarehouseQr, parseQr, type ParsedQr } from '@/lib/qr-parser'
+import { enqueue, getQueue, removeFromQueue, type OfflineEntry } from '@/lib/offline-queue'
+import { syncQueue } from '@/lib/sync-engine'
+import { useOnline } from '@/lib/use-online'
+import { useScanForwarder, useScannerScreen } from '@/lib/shortcuts'
+import { PageNav } from '@/components/page-nav'
+import { NewArticleDialog } from '@/components/scanner/new-article-dialog'
+import { StocktakeCartonCard } from '@/components/scanner/stocktake-carton-card'
+import { decodeQrImage, useQrScanner } from '@/components/scanner/use-qr-scanner'
+import { RackPicker } from '@/components/scanner/rack-picker'
+import { RackManager } from '@/components/scanner/rack-manager'
+import { ScanFeed, entryFromItem, feedTitle, type FeedEntry } from '@/components/scanner/scan-feed'
+import { ManualEntryDialog, type ManualValues } from '@/components/scanner/manual-entry-dialog'
+import { CountsDialog, FinishCount } from '@/components/scanner/counts-dialog'
+import { Sheet, fieldCls, primaryBtn, secondaryBtn, timeIST } from '@/components/scanner/sheet'
+
+const CURRENT_KEY = 'shayona.scanner.count'
+type Current = { id: number; rackName: string }
+type Flash = { tone: 'ok' | 'warn' | 'err'; text: string }
+type SheetName = null | 'manual' | 'counts' | 'racks' | 'offline' | 'more'
+type CartonAsk = { id: string; raw: string; ask: StocktakeCartonAsk }
+
+const EMPTY_TOTALS: SessionTotals = { pairs: 0, boxes: 0, manualPairs: 0, cartons: 0, cartonPairs: 0, missing: 0, people: 0 }
+
+function readCurrent(): Current | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(CURRENT_KEY) ?? 'null')
+    return v && Number.isInteger(v.id) && typeof v.rackName === 'string' ? { id: v.id, rackName: v.rackName } : null
+  } catch { return null }
+}
+function writeCurrent(c: Current | null) {
+  try { if (c) localStorage.setItem(CURRENT_KEY, JSON.stringify(c)); else localStorage.removeItem(CURRENT_KEY) } catch { /* storage unavailable */ }
+}
+const isTouch = () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+
+/** Server rows replace saved local rows; rows still saving / offline / refused stay (by clientEventId). */
+function mergeFeed(local: FeedEntry[], server: FeedItem[]): FeedEntry[] {
+  const fromServer = server.map(entryFromItem)
+  const known = new Set(fromServer.map((e) => e.key))
+  const keep = local.filter((e) => !known.has(e.key) && e.state !== 'saved' && e.state !== 'missing')
+  return [...keep, ...fromServer].sort((a, b) => b.at - a.at).slice(0, 100)
+}
 
 export function ScannerPage() {
-  // Scanner screen: plain-key shortcuts are off (docs/architecture/keyboard.md).
+  // Plain-key shortcuts are off on this screen so a scanner machine's keys always reach the Scan box.
   useScannerScreen()
-  const { t } = useLanguage()
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const scanCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const lastScanTimeRef = useRef<number>(0)
-  const [isCameraActive, setIsCameraActive] = useState(false)
-  const [isFlashlightOn, setIsFlashlightOn] = useState(false)
-  const [manualForm, setManualForm] = useState<ManualFormState>({ ...DEFAULT_MANUAL_FORM })
-  const [manualLoading, setManualLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const flashlightStreamRef = useRef<MediaStream | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [uploadProcessing, setUploadProcessing] = useState(false)
-  const [successMsg, setSuccessMsg] = useState<string | null>(null)
-  const [warnMsg, setWarnMsg] = useState<string | null>(null)
-  const [infoMsg, setInfoMsg] = useState<string | null>(null)
-  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const scanningRef = useRef(false)
-  const scanPausedRef = useRef(false)
-  const articleDialogOpenRef = useRef(false)
-  const scanDecisionPendingRef = useRef(false)
-  const [qrDetected, setQrDetected] = useState(false)
-  const [scannerCtx, setScannerCtx] = useState<ScannerContext | null>(null)
-  const [deleteReason, setDeleteReason] = useState('')
-  const [removeCreatedArticle, setRemoveCreatedArticle] = useState(false)
-  const [newArticleDialog, setNewArticleDialog] = useState<{
-    rawQr: string
-    clientEventId: string
-    parsed: ParsedQr
-    mode: 'unknown' | 'new_colour'
-    existingName?: string
-    flag?: string
-  } | null>(null)
 
-  const [flags, setFlags]             = useState<string[]>([])
-  const [activeFlag, setActiveFlag]   = useState<string>('')
-  const [flagsLoading, setFlagsLoading] = useState(true)
-  const [newFlagInput, setNewFlagInput] = useState('')
-  const [showNewFlagInput, setShowNewFlagInput] = useState(false)
-  const [newFlagSaving, setNewFlagSaving] = useState(false)
+  const [user, setUser] = useState<ScannerUser | null>(null)
+  const [racks, setRacks] = useState<Rack[]>([])
+  const [open, setOpen] = useState<SessionInfo[]>([])
+  const [loading, setLoading] = useState(true)
+  const [pickError, setPickError] = useState('')
+  const [busyRackId, setBusyRackId] = useState<number | null>(null)
 
-  const activeFlagRef = useRef<string>('')
-  const userNameRef   = useRef<string>('')
-
-  const [dailyScanCount, setDailyScanCount] = useState<number>(0)
-  const [userName, setUserName] = useState<string>('')
-  const [recentScans, setRecentScans] = useState<RecentScan[]>([])
-  const [recentLoading, setRecentLoading] = useState(false)
-  const [lastCameraScan, setLastCameraScan] = useState<RecentScan | null>(null)
-  const [lastManualEntry, setLastManualEntry] = useState<RecentScan | null>(null)
-  const [lastOfflineScan, setLastOfflineScan] = useState<OfflineEntry | null>(null)
-  const [lastOfflineManual, setLastOfflineManual] = useState<OfflineEntry | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<RecentScan | null>(null)
-  const [deleteLoading, setDeleteLoading] = useState(false)
-  const [deleteConfirmText, setDeleteConfirmText] = useState('')
-
+  const [current, setCurrentState] = useState<Current | null>(null)
+  const currentRef = useRef<Current | null>(null)
+  const [session, setSession] = useState<SessionInfo | null>(null)
+  const [feed, setFeed] = useState<FeedEntry[]>([])
+  const [flash, setFlash] = useState<Flash | null>(null)
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [sheet, setSheet] = useState<SheetName>(null)
+  const [finishing, setFinishing] = useState<SessionInfo | null>(null)
   const [offlineQueue, setOfflineQueue] = useState<OfflineEntry[]>([])
-  const [isSyncing, setIsSyncing] = useState(false)
-  const [syncResult, setSyncResult] = useState<SyncResult | null>(null)
-  const syncResultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [syncing, setSyncing] = useState(false)
 
-  const refreshOfflineQueue = useCallback(async () => {
+  // Codes already counted on this phone in this count (instant "already scanned" without a request).
+  const seenRef = useRef(new Map<string, string>()) // identity → clientEventId
+
+  // Boxes whose article is new (admin): the new-article dialog.
+  const [newArticle, setNewArticle] = useState<{ raw: string; id: string; parsed: ParsedQr; mode: 'unknown' | 'new_colour'; existingName?: string } | null>(null)
+  // Cartons waiting to be counted (first scanned first).
+  const [cartons, setCartons] = useState<CartonAsk[]>([])
+  const cartonKeysRef = useRef(new Set<string>())
+  const [cartonBusy, setCartonBusy] = useState(false)
+  const [cartonError, setCartonError] = useState('')
+  // Undo one row.
+  const [undo, setUndo] = useState<FeedItem | null>(null)
+  const [undoReason, setUndoReason] = useState('')
+  const [undoBusy, setUndoBusy] = useState(false)
+  const [undoError, setUndoError] = useState('')
+
+  // The camera keeps running but decodes nothing while a card or dialog is open.
+  const modalOpen = Boolean(newArticle || cartons.length || sheet || undo || finishing)
+  const modalOpenRef = useRef(false)
+  useEffect(() => { modalOpenRef.current = modalOpen }, [modalOpen])
+
+  const setCurrent = useCallback((c: Current | null) => {
+    currentRef.current = c
+    setCurrentState(c)
+    writeCurrent(c)
+    seenRef.current.clear()
+  }, [])
+
+  const say = useCallback((tone: Flash['tone'], text: string) => {
+    if (flashTimer.current) clearTimeout(flashTimer.current)
+    setFlash({ tone, text })
+    flashTimer.current = setTimeout(() => setFlash(null), tone === 'ok' ? 3000 : 6000)
+  }, [])
+
+  const addTotals = useCallback((d: Partial<SessionTotals>) => {
+    setSession((s) => {
+      if (!s) return s
+      const t = { ...s.totals }
+      for (const [k, v] of Object.entries(d) as Array<[keyof SessionTotals, number]>) t[k] = Math.max(0, t[k] + v)
+      return { ...s, totals: t }
+    })
+  }, [])
+
+  const patchEntry = useCallback((key: string, patch: Partial<FeedEntry>) => {
+    setFeed((f) => f.map((e) => (e.key === key ? { ...e, ...patch } : e)))
+  }, [])
+  const pushEntry = useCallback((e: FeedEntry) => setFeed((f) => [e, ...f.filter((x) => x.key !== e.key)].slice(0, 100)), [])
+
+  const refreshOffline = useCallback(async () => { try { setOfflineQueue(await getQueue()) } catch { /* IndexedDB unavailable */ } }, [])
+
+  const applySession = useCallback((s: SessionInfo, items: FeedItem[]) => {
+    setCurrent({ id: s.id, rackName: s.rackName })
+    setSession(s)
+    setFeed((f) => mergeFeed(currentRef.current?.id === s.id ? f : [], items))
+  }, [setCurrent])
+
+  /** Fresh totals and my list (other people's scans included in the totals). One request. */
+  const refreshSession = useCallback(async () => {
+    const c = currentRef.current
+    if (!c || !navigator.onLine) return
     try {
-      const q = await getQueue()
-      setOfflineQueue(q)
-    } catch {
-    }
-  }, [])
-
-  const refreshFlags = useCallback(async (online: boolean) => {
-    if (online) {
-      try {
-        const latest = await syncFlags()
-        const deduped = [...new Set(latest)]
-        setFlags(deduped)
-        await cacheFlags(deduped)
-        setActiveFlag((prev) => {
-          const kept = deduped.includes(prev) ? prev : (deduped[0] ?? '')
-          if (kept !== prev) saveStoredActiveFlag(kept)
-          return kept
-        })
-      } catch {
-        const cached = await getCachedFlags()
-        if (cached.length) setFlags(cached)
+      const r = await refreshSessionAction(c.id)
+      if (!r.ok || currentRef.current?.id !== c.id) return
+      if (!r.data.session) { setCurrent(null); return }
+      setSession(r.data.session)
+      setFeed((f) => mergeFeed(f, r.data.feed))
+      if (r.data.session.status === 'finished') {
+        say('warn', `The count of ${r.data.session.rackName} was finished by ${r.data.session.finishedByName ?? 'someone'}. Choose a rack to go on.`)
+        setCurrent(null)
       }
-    } else {
-      const cached = await getCachedFlags()
-      if (cached.length) setFlags(cached)
-    }
-    setFlagsLoading(false)
-  }, [])
+    } catch { /* shown on the next refresh */ }
+  }, [say, setCurrent])
+
+  const loadBoot = useCallback(async (sessionId: number | null) => {
+    setLoading(true); setPickError('')
+    try {
+      const b: ScannerBoot = await getScannerBoot(sessionId)
+      setUser(b.user); setRacks(b.racks); setOpen(b.open)
+      if (sessionId != null) {
+        if (b.session?.status === 'open') applySession(b.session, b.feed)
+        else {
+          if (b.session) say('warn', `The count of ${b.session.rackName} was finished by ${b.session.finishedByName ?? 'someone'}.`)
+          setCurrent(null)
+        }
+      }
+    } catch {
+      setPickError('Could not load. Check the internet and try again.')
+    } finally { setLoading(false) }
+  }, [applySession, say, setCurrent])
 
   const handleSync = useCallback(async () => {
-    const q = await getQueue()
-    const pending = q.filter((e) => e.status === 'pending' || e.status === 'syncing')
-    if (pending.length === 0) {
-      await refreshFlags(true)
-      return
-    }
-
-    setIsSyncing(true)
+    const q = await getQueue().catch(() => [] as OfflineEntry[])
+    if (!q.some((e) => e.status === 'pending' || e.status === 'syncing')) return
+    setSyncing(true)
     try {
-      const result = await syncQueue()
-      setSyncResult(result)
-      if (syncResultTimerRef.current) clearTimeout(syncResultTimerRef.current)
-      syncResultTimerRef.current = setTimeout(() => setSyncResult(null), 6000)
-      await refreshOfflineQueue()
-      if (result.synced > 0) loadRecentScans()
-      await refreshFlags(true)
-    } finally {
-      setIsSyncing(false)
-    }
-  }, [refreshFlags, refreshOfflineQueue])
+      const r = await syncQueue()
+      if (r.synced) say('ok', `${r.synced} scan(s) saved from this phone.`)
+      if (r.duplicates) say('warn', `${r.duplicates} scan(s) from this phone were already counted.`)
+      await refreshOffline()
+      await refreshSession()
+    } finally { setSyncing(false) }
+  }, [refreshOffline, refreshSession, say])
 
-  const isOnline = useOnline(handleSync)
+  const online = useOnline(() => { void handleSync(); if (!currentRef.current) void loadBoot(null) })
 
-  const loadRecentScans = useCallback(async () => {
-    setRecentLoading(true)
-    try {
-      const data = await getRecentScans(50)
-      setRecentScans(data)
-    } catch {
-    } finally {
-      setRecentLoading(false)
-    }
+  // Opening the screen: one request (racks, open counts, my count and my scans in it).
+  useEffect(() => {
+    const c = readCurrent()
+    if (c) { currentRef.current = c; setCurrentState(c) }
+    void refreshOffline()
+    if (!navigator.onLine) { setLoading(false); return }
+    void loadBoot(c?.id ?? null).then(() => handleSync())
   }, [])
 
+  // Back to this screen (phone unlocked, tab switched): fresh totals, one request. No polling.
   useEffect(() => {
-    setDailyScanCount(getDailyScanCount())
-
-    const cached = getCachedUser()
-    if (cached) setUserName(cached)
-
-    getCachedFlags().then((cached) => {
-      if (cached.length) {
-        setFlags(cached)
-        const storedActive = getStoredActiveFlag()
-        setActiveFlag(cached.includes(storedActive) ? storedActive : cached[0] ?? '')
-      }
-    }).catch(() => {})
-
-    refreshFlags(navigator.onLine)
-
-    getScannerContext()
-      .then((ctx) => {
-        if (ctx.name) {
-          setUserName(ctx.name)
-          setCachedUser(ctx.name)
-        }
-        setScannerCtx(ctx)
-      })
-      .catch(() => {})
-
-    loadRecentScans()
-    refreshOfflineQueue()
-
-    if (navigator.onLine) {
-      getQueue().then((q) => {
-        if (q.some((e) => e.status === 'pending')) {
-          handleSync()
-        }
-      }).catch(() => {})
-    }
-
-  }, [handleSync, loadRecentScans, refreshFlags, refreshOfflineQueue])
-
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === 'visible' && navigator.onLine) {
-        refreshFlags(true)
-      }
-    }
+    const onVisible = () => { if (document.visibilityState === 'visible') void refreshSession() }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [refreshFlags])
+  }, [refreshSession])
 
-  useEffect(() => { activeFlagRef.current = activeFlag }, [activeFlag])
-  useEffect(() => { userNameRef.current   = userName   }, [userName])
+  // ── Scanning ────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    return () => {
-      scanningRef.current = false
-      if (successTimerRef.current) clearTimeout(successTimerRef.current)
-      if (syncResultTimerRef.current) clearTimeout(syncResultTimerRef.current)
-      if (flashlightStreamRef.current) {
-        flashlightStreamRef.current.getTracks().forEach((t) => t.stop())
-        flashlightStreamRef.current = null
-      }
-    }
-  }, [])
-
-  function showSuccess(msg: string) {
-    if (successTimerRef.current) clearTimeout(successTimerRef.current)
-    setError(null)
-    setWarnMsg(null)
-    setSuccessMsg(msg)
-    successTimerRef.current = setTimeout(() => setSuccessMsg(null), 3000)
-  }
-
-  function showWarning(msg: string) {
-    if (successTimerRef.current) clearTimeout(successTimerRef.current)
-    setError(null)
-    setSuccessMsg(null)
-    setWarnMsg(msg)
-    successTimerRef.current = setTimeout(() => setWarnMsg(null), 5000)
-  }
-
-  function showInfo(msg: string) {
-    if (successTimerRef.current) clearTimeout(successTimerRef.current)
-    setError(null)
-    setSuccessMsg(null)
-    setWarnMsg(null)
-    setInfoMsg(msg)
-    successTimerRef.current = setTimeout(() => setInfoMsg(null), 4000)
-  }
-
-  function showError(msg: string) {
-    if (successTimerRef.current) clearTimeout(successTimerRef.current)
-    setSuccessMsg(null)
-    setWarnMsg(null)
-    setInfoMsg(null)
-    setError(msg)
-  }
-
-  const startCamera = useCallback(async () => {
+  async function postScan(raw: string, id: string, extra: { saveUnknown?: boolean } = {}): Promise<ScanReply | 'offline'> {
+    const c = currentRef.current!
     try {
-      setError(null)
-      setSuccessMsg(null)
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: 'environment',
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
+      const res = await fetch('/api/scanner/scan', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw, clientEventId: id, sessionId: c.id, deviceAt: new Date().toISOString(), ...extra }),
       })
-      if (!videoRef.current) {
-        stream.getTracks().forEach((t) => t.stop())
-        return
-      }
-      videoRef.current.srcObject = stream
-      streamRef.current = stream
-      setIsCameraActive(true)
-      scanningRef.current = true
-      const video = videoRef.current
-      const startLoop = () => scanLoop(video)
-      if (video.readyState >= 2) {
-        startLoop()
-      } else {
-        video.addEventListener('loadeddata', startLoop, { once: true })
-      }
-    } catch (err) {
-      showError(t('cameraPermissionError'))
-      console.error('Camera error:', err)
-    }
-  }, [t])
-
-  async function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/bmp']
-    if (!allowed.includes(file.type)) {
-      showError(t('invalidImageFile'))
-      if (fileInputRef.current) fileInputRef.current.value = ''
-      return
-    }
-
-    setUploadProcessing(true)
-    setSuccessMsg(null)
-    setError(null)
-
-    try {
-      let bitmap: ImageBitmap
-      try {
-        bitmap = await createImageBitmap(file)
-      } catch {
-        showError(t('invalidImageFile'))
-        bitmap = null as unknown as ImageBitmap
-      }
-      if (!bitmap) return
-
-      const canvas = document.createElement('canvas')
-      canvas.width = bitmap.width
-      canvas.height = bitmap.height
-      const ctx = canvas.getContext('2d')!
-      ctx.drawImage(bitmap, 0, 0)
-      bitmap.close()
-
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-      const code = jsQR(imageData.data, imageData.width, imageData.height)
-
-      if (!code) {
-        showError(t('uploadQRError'))
-        return
-      }
-
-      await handleCameraScan(code.data)
-    } catch (err) {
-      showError(t('uploadQRError'))
-      console.error('Image upload scan error:', err)
-    } finally {
-      setUploadProcessing(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    }
+      if (res.status >= 500) return 'offline'
+      return (await res.json()) as ScanReply
+    } catch { return 'offline' }
   }
 
-  async function toggleFlashlight() {
-    if (!isFlashlightOn) {
-      try {
-        let track: MediaStreamTrack | undefined
-        if (streamRef.current) {
-          track = streamRef.current.getVideoTracks()[0]
-        } else {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment' },
-            audio: false,
-          })
-          flashlightStreamRef.current = stream
-          track = stream.getVideoTracks()[0]
-        }
-        if (!track) return
-        await track.applyConstraints({ advanced: [{ torch: true } as MediaTrackConstraintSet] })
-        setIsFlashlightOn(true)
-      } catch (err) {
-        console.error('Torch not supported:', err)
-        if (flashlightStreamRef.current) {
-          flashlightStreamRef.current.getTracks().forEach((t) => t.stop())
-          flashlightStreamRef.current = null
-        }
-        showInfo(t('flashlightNotSupported'))
-      }
-    } else {
-      const track =
-        (streamRef.current ?? flashlightStreamRef.current)?.getVideoTracks()[0]
-      if (track) {
-        track.applyConstraints({ advanced: [{ torch: false } as MediaTrackConstraintSet] }).catch(() => {})
-      }
-      if (flashlightStreamRef.current) {
-        flashlightStreamRef.current.getTracks().forEach((t) => t.stop())
-        flashlightStreamRef.current = null
-      }
-      setIsFlashlightOn(false)
-    }
-  }
-
-  function stopCamera() {
-    scanningRef.current = false
-    if (streamRef.current) {
-      const cameraTrack = streamRef.current.getVideoTracks()[0]
-      if (cameraTrack && isFlashlightOn && !flashlightStreamRef.current) {
-        navigator.mediaDevices
-          .getUserMedia({ video: { facingMode: 'environment' }, audio: false })
-          .then((stream) => {
-            flashlightStreamRef.current = stream
-            const tr = stream.getVideoTracks()[0]
-            if (tr) tr.applyConstraints({ advanced: [{ torch: true } as MediaTrackConstraintSet] }).catch(() => {})
-          })
-          .catch(() => { setIsFlashlightOn(false) })
-      }
-      streamRef.current.getTracks().forEach((track) => track.stop())
-      streamRef.current = null
-    }
-    setIsCameraActive(false)
-  }
-
-  function scanLoop(video: HTMLVideoElement) {
-    if (!scanningRef.current) return
-    if (video.videoWidth === 0 || video.videoHeight === 0) {
-      requestAnimationFrame(() => scanLoop(video))
-      return
-    }
-
-    if (scanPausedRef.current) {
-      requestAnimationFrame(() => scanLoop(video))
-      return
-    }
-
-    const now = performance.now()
-    if (now - lastScanTimeRef.current < SCAN_INTERVAL_MS) {
-      requestAnimationFrame(() => scanLoop(video))
-      return
-    }
-    lastScanTimeRef.current = now
-
-    let sc = scanCanvasRef.current
-    const scale = Math.min(1, SCAN_MAX_DIM / Math.max(video.videoWidth, video.videoHeight))
-    const sw = Math.round(video.videoWidth * scale)
-    const sh = Math.round(video.videoHeight * scale)
-    if (!sc || sc.width !== sw || sc.height !== sh) {
-      sc = document.createElement('canvas')
-      sc.width = sw
-      sc.height = sh
-      scanCanvasRef.current = sc
-    }
-    const sctx = sc.getContext('2d', { willReadFrequently: true })
-    if (!sctx) {
-      requestAnimationFrame(() => scanLoop(video))
-      return
-    }
-
-    sctx.drawImage(video, 0, 0, sw, sh)
-
-    try {
-      const imageData = sctx.getImageData(0, 0, sw, sh)
-      const code = jsQR(imageData.data, imageData.width, imageData.height)
-      if (code) {
-        scanPausedRef.current = true
-        setQrDetected(true)
-        setTimeout(() => {
-          if (!articleDialogOpenRef.current && !scanDecisionPendingRef.current) scanPausedRef.current = false
-          if (!articleDialogOpenRef.current) setQrDetected(false)
-        }, 2000)
-        handleCameraScan(code.data)
-      }
-    } catch (err) {
-      console.error('Camera QR scan error:', err)
-    }
-    requestAnimationFrame(() => scanLoop(video))
-  }
-
-  async function handleCameraScan(qrCode: string) {
-    if (isCartonQr(qrCode)) {
-      showWarning(CARTON_MESSAGE)
-      return
-    }
-    if (!isValidWarehouseQr(qrCode)) {
-      showWarning('QR code format not recognised.')
-      return
-    }
-    // One id per physical scan, created on the device: retries can never add the box twice.
-    const clientEventId = crypto.randomUUID()
-
-    if (!navigator.onLine) {
-      const parsed = parseQr(qrCode)
-      const queue = await getQueue()
-      const dup = parsed.identity
-        ? queue.find((e) => e.rawQrCode && parseQr(e.rawQrCode).identity === parsed.identity)
-        : undefined
-      if (dup) {
-        showWarning(dup.scannedByName ? `${t('duplicateByUser')} ${dup.scannedByName}` : t('duplicateQR'))
-        playAlreadyScanned()
-        return
-      }
-      playScanOk()
-      const entry: OfflineEntry = {
-        tempId:        clientEventId,
-        entryType:     'scan',
-        rawQrCode:     qrCode,
-        artNumber:     parsed.articleCode,
-        colorNumber:   parsed.colorCode,
-        sizeNumber:    parsed.size,
-        division:      parsed.division || undefined,
-        mrp:           parsed.mrp || undefined,
-        mfgMonth:      parsed.mfgMonth || undefined,
-        mfgYear:       parsed.mfgYear || undefined,
-        quantity:      1,
-        flag:          activeFlagRef.current || undefined,
-        scannedByName: userNameRef.current || getCachedUser(),
-        savedAt:       Date.now(),
-        status:        'pending',
-      }
-      await enqueue(entry)
-      await refreshOfflineQueue()
-      setLastOfflineScan(entry)
-      setDailyScanCount(incrementDailyScanCount())
-      showSuccess(t('offlineSaved'))
-      return
-    }
-    scanPausedRef.current = true
-    scanDecisionPendingRef.current = true
-    try {
-      let masterCheck
-      try {
-        masterCheck = await checkScanAgainstMaster(qrCode)
-      } catch (error) {
-        console.error('Article check unavailable:', error)
-        await saveCameraScanNormally(qrCode, clientEventId)
-        return
-      }
-      if (masterCheck.status === 'duplicate') {
-        showWarning(masterCheck.scannedByName ? t('duplicateByUser') + ' ' + masterCheck.scannedByName : t('duplicateQR'))
-        playAlreadyScanned()
-        return
-      }
-      if (masterCheck.status === 'carton' || masterCheck.status === 'invalid') {
-        showWarning(masterCheck.status === 'carton' ? CARTON_MESSAGE : masterCheck.message)
-        return
-      }
-      if ((masterCheck.status === 'unknown' || masterCheck.status === 'new_colour') && !masterCheck.canCreate) {
-        // Only admins create master data. Everyone else's scan is kept as a missing article.
-        await saveCameraScanNormally(qrCode, clientEventId, MISSING_MESSAGE)
-        return
-      }
-      if (masterCheck.status === 'unknown' || masterCheck.status === 'new_colour') {
-        const parsed = parseQr(qrCode)
-        articleDialogOpenRef.current = true
-        playNewArticle()
-        setNewArticleDialog({
-          rawQr: qrCode,
-          clientEventId,
-          parsed,
-          mode: masterCheck.status,
-          flag: activeFlagRef.current || undefined,
-          ...(masterCheck.status === 'new_colour' ? { existingName: masterCheck.artName } : {}),
-        })
-        return
-      }
-      await saveCameraScanNormally(qrCode, clientEventId)
-    } finally {
-      scanDecisionPendingRef.current = false
-      if (!articleDialogOpenRef.current) setTimeout(() => {
-        if (!articleDialogOpenRef.current && !scanDecisionPendingRef.current) {
-          scanPausedRef.current = false
-          setQrDetected(false)
-        }
-      }, 2000)
-    }
-  }
-
-  async function saveCameraScanNormally(qrCode: string, clientEventId: string, successMessage?: string): Promise<boolean> {
-    try {
-      const res = await recordScan(qrCode, { clientEventId, flag: activeFlagRef.current || null, deviceAt: new Date().toISOString() })
-      if (!res.ok) {
-        if (res.error === DUPLICATE_QR_ERROR) {
-          const who = res.scannedByName
-          showWarning(who ? `${t('duplicateByUser')} ${who}` : t('duplicateQR'))
-          playAlreadyScanned()
-        } else if (res.error === 'ERROR') showError(t('scanRecordError'))
-        else showWarning(res.message)
-        return false
-      }
-      completeCameraScan(res.data, successMessage ?? (res.data.resolution === 'resolved' ? t('cameraScanSuccess') : MISSING_MESSAGE))
-      return true
-    } catch {
-      showError(t('scanRecordError'))
-      return false
-    }
-  }
-
-  function completeCameraScan(scan: Omit<RecentScan, 'masterArtName' | 'masterColorName'> & Partial<Pick<RecentScan, 'masterArtName' | 'masterColorName'>>, message: string) {
-    setLastCameraScan({ ...scan, masterArtName: scan.masterArtName ?? '—', masterColorName: scan.masterColorName ?? '—' })
-    setDailyScanCount(incrementDailyScanCount())
-    // A box whose article / size is not in the master gets the new-article chime instead of the beep.
-    if (message === MISSING_MESSAGE || scan.resolution !== 'resolved') playNewArticle()
-    else playScanOk()
-    showSuccess(message)
-    loadRecentScans()
-  }
-
-  function resumeAfterArticleDialog() {
-    articleDialogOpenRef.current = false
-    scanDecisionPendingRef.current = false
-    scanPausedRef.current = true
-    setNewArticleDialog(null)
-    setTimeout(() => {
-      if (!articleDialogOpenRef.current && !scanDecisionPendingRef.current) {
-        scanPausedRef.current = false
-        setQrDetected(false)
-      }
-    }, 2000)
-  }
-
-  async function savePendingScanForLater(qrCode: string, clientEventId: string): Promise<boolean> {
-    try {
-      const result = await recordScan(qrCode, { clientEventId, flag: activeFlagRef.current || null })
-      if (!result.ok) {
-        if (result.error === DUPLICATE_QR_ERROR) {
-          const who = result.scannedByName
-          showWarning(who ? `${t('duplicateByUser')} ${who}` : t('duplicateQR'))
-          playAlreadyScanned()
-          resumeAfterArticleDialog()
-          return true
-        }
-        showError(t('scanRecordError'))
-        return false
-      }
-      completeCameraScan(result.data, t('cameraScanSuccess'))
-      resumeAfterArticleDialog()
-      return true
-    } catch {
-      showError(t('scanRecordError'))
-      return false
-    }
-  }
-
-  async function finishArticleLink(qrCode: string) {
-    let savedScan: RecentScan | undefined
-    try {
-      const recent = await getRecentScans(50)
-      setRecentScans(recent)
-      savedScan = recent.find((scan) => scan.rawQrCode === qrCode)
-    } catch {
-      // The link action already saved the scan; recent history can refresh later.
-    }
-    setLastCameraScan(savedScan ?? null)
-    setDailyScanCount(incrementDailyScanCount())
+  async function keepOnPhone(raw: string, id: string, p: ParsedQr) {
+    const c = currentRef.current!
+    await enqueue({
+      tempId: id, entryType: 'scan', rawQrCode: raw, artNumber: p.articleCode, colorNumber: p.colorCode, sizeNumber: p.size,
+      mrp: p.mrp || undefined, mfgMonth: p.mfgMonth || undefined, mfgYear: p.mfgYear || undefined, quantity: 1,
+      flag: c.rackName, sessionId: c.id, scannedByName: user?.name ?? '', savedAt: Date.now(), status: 'pending',
+    })
+    void refreshOffline()
+    patchEntry(id, { state: 'offline', detail: 'No internet — kept on this phone, sent when online.' })
+    addTotals({ boxes: 1, pairs: 1 })
     playScanOk()
-    showSuccess('Article linked and scan saved.')
-    resumeAfterArticleDialog()
   }
 
-  async function handleManualForm(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    setManualLoading(true)
-    setSuccessMsg(null)
-    setWarnMsg(null)
-    setError(null)
-
-    try {
-      if (!navigator.onLine) {
-        const art      = manualForm.artNumber.trim().toUpperCase()
-        const color    = manualForm.colorNumber.trim().toUpperCase()
-        const size     = manualForm.sizeNumber.trim().toUpperCase()
-        const mrpVal   = manualForm.mrp ? parseFloat(manualForm.mrp) : undefined
-        const divVal   = manualForm.division || undefined
-        const monthVal = manualForm.mfgMonth ? parseInt(manualForm.mfgMonth) : undefined
-        const yearVal  = manualForm.mfgYear  ? parseInt(manualForm.mfgYear)  : undefined
-        const qty      = manualForm.quantity || 1
-
-        const queue = await getQueue()
-        const dup = queue.find(
-          (e) =>
-            e.status     === 'pending' &&
-            e.entryType  === 'manual' &&
-            e.artNumber  === art   && e.colorNumber === color && e.sizeNumber === size &&
-            e.division   === divVal &&
-            e.mrp        === mrpVal &&
-            e.mfgMonth   === monthVal && e.mfgYear === yearVal
-        )
-        if (dup) {
-          await enqueue({ ...dup, quantity: dup.quantity + qty })
-          await refreshOfflineQueue()
-          setLastOfflineManual({ ...dup, quantity: dup.quantity + qty })
-          setManualForm((prev) => ({ ...prev, sizeNumber: '', quantity: '' }))
-          showSuccess(t('offlineSaved'))
-          return
-        }
-
-        const entry: OfflineEntry = {
-          tempId:        crypto.randomUUID(),
-          entryType:     'manual',
-          artNumber:     art,
-          colorNumber:   color,
-          sizeNumber:    size,
-          quantity:      qty,
-          mrp:           mrpVal,
-          notes:         manualForm.notes.trim() || undefined,
-          flag:          activeFlag || undefined,
-          division:      divVal,
-          mfgMonth:      monthVal,
-          mfgYear:       yearVal,
-          scannedByName: userName || getCachedUser(),
-          savedAt:       Date.now(),
-          status:        'pending',
-        }
-        await enqueue(entry)
-        await refreshOfflineQueue()
-        setLastOfflineManual(entry)
-        setManualForm((prev) => ({ ...prev, sizeNumber: '', quantity: '' }))
-        showSuccess(t('offlineSaved'))
+  function handleReply(raw: string, id: string, p: ParsedQr, r: ScanReply) {
+    switch (r.kind) {
+      case 'saved': {
+        const e = entryFromItem(r.item)
+        patchEntry(id, { ...e, key: id })
+        if (!r.replay) addTotals({ boxes: 1, pairs: 1, missing: r.item.resolution === 'resolved' ? 0 : 1 })
+        if (r.item.resolution === 'resolved') playScanOk(); else playNewArticle()
         return
       }
-
-      const res = await addManualEntry({
-        clientEventId: crypto.randomUUID(),
-        artNumber: manualForm.artNumber,
-        colorNumber: manualForm.colorNumber,
-        sizeNumber: manualForm.sizeNumber,
-        quantity: manualForm.quantity || 1,
-        notes: manualForm.notes.trim() || null,
-        flag: activeFlag || null,
-        mrp: manualForm.mrp ? parseFloat(manualForm.mrp) : null,
-        mfgMonth: manualForm.mfgMonth ? parseInt(manualForm.mfgMonth) : null,
-        mfgYear: manualForm.mfgYear ? parseInt(manualForm.mfgYear) : null,
-      })
-      if (!res.ok) {
-        if (res.error === 'ERROR') showError(t('scanRecordError'))
-        else showWarning(res.message)
+      case 'duplicate':
+        patchEntry(id, { state: 'duplicate', detail: `Already scanned by ${r.scannedByName}${r.scannedAt ? ` at ${timeIST(r.scannedAt)}` : ''}.` })
+        playAlreadyScanned()
         return
-      }
-      setLastManualEntry(res.data)
-      setManualForm((prev) => ({ ...prev, sizeNumber: '', quantity: '' }))
-      showSuccess(t('manualEntrySuccess'))
-      loadRecentScans()
-    } catch (err) {
-      showError(t('scanRecordError'))
-      console.error('addManualEntry error:', err)
-    } finally {
-      setManualLoading(false)
+      case 'rejected':
+        seenRef.current.delete(p.identity)
+        patchEntry(id, { state: 'error', detail: r.message })
+        playAlreadyScanned()
+        return
+      case 'unknown':
+        patchEntry(id, { state: 'asking', detail: r.mode === 'new_colour' ? `New colour of ${r.existingName ?? 'a known article'} — fill in the details.` : 'New article — fill in the details.' })
+        setNewArticle({ raw, id, parsed: p, mode: r.mode, existingName: r.existingName })
+        playNewArticle()
+        return
+      case 'carton':
+        setFeed((f) => f.filter((e) => e.key !== id))
+        takeCartonCheck(raw, r.check)
+        return
     }
   }
 
-  async function handleDeleteConfirm() {
-    if (!deleteTarget) return
-    setDeleteLoading(true)
-    try {
-      const deleteResult = await deleteScan(deleteTarget.id, {
-        reason: deleteReason.trim() || 'Undone from the scanner',
-        removeCreatedArticle,
-      })
-      if (!deleteResult.ok) {
-        showWarning(deleteResult.message)
-        return
-      }
-      setRecentScans((prev) => prev.filter((s) => s.id !== deleteTarget.id))
-      setDeleteTarget(null)
-      setDeleteConfirmText('')
-      setDeleteReason('')
-      setRemoveCreatedArticle(false)
-      showSuccess(deleteResult.articleDeactivated
-        ? 'Scan undone. Article ' + deleteResult.articleDeactivated.artCode + ' / ' + deleteResult.articleDeactivated.colorCode + ' was deactivated.'
-        : 'Scan undone. The stock was reversed and the scan is kept in the history.')
-    } catch {
-    } finally {
-      setDeleteLoading(false)
-    }
-  }
-
-  async function handleDismissOfflineError(tempId: string) {
-    await removeFromQueue(tempId)
-    await refreshOfflineQueue()
-  }
-
-
-  async function handleAddFlag() {
-    const trimmed = newFlagInput.trim()
-
-    const alreadyExists = flags.some((f) => f.toLowerCase() === trimmed.toLowerCase())
-    if (!trimmed || alreadyExists) {
-      if (alreadyExists && trimmed) {
-        const existing = flags.find((f) => f.toLowerCase() === trimmed.toLowerCase())!
-        setActiveFlag(existing)
-        saveStoredActiveFlag(existing)
-      }
-      setShowNewFlagInput(false)
-      setNewFlagInput('')
+  async function handleCode(rawIn: string) {
+    const raw = rawIn.trim()
+    if (!raw) return
+    if (!currentRef.current) { say('err', 'Choose the rack you are counting first.'); playAlreadyScanned(); return }
+    if (isCartonQr(raw)) { void handleCarton(raw); return }
+    if (!isValidWarehouseQr(raw)) { say('err', 'This QR code is not a box or carton label.'); playAlreadyScanned(); return }
+    const p = parseQr(raw)
+    if (p.identity && seenRef.current.has(p.identity)) {
+      say('warn', `${p.articleCode} ${p.colorCode} size ${p.size} is already in your list — not counted again.`)
+      playAlreadyScanned()
       return
     }
+    const id = crypto.randomUUID()
+    if (p.identity) seenRef.current.set(p.identity, id)
+    pushEntry({ key: id, state: 'saving', title: feedTitle({ type: 'box', articleCode: p.articleCode, colourCode: p.colorCode, size: p.size }), detail: '', at: Date.now() })
+    if (!navigator.onLine) { await keepOnPhone(raw, id, p); return }
+    const r = await postScan(raw, id)
+    if (r === 'offline') { await keepOnPhone(raw, id, p); return }
+    handleReply(raw, id, p, r)
+  }
 
-    setNewFlagSaving(true)
-    try {
-      if (navigator.onLine) {
-        const res = await createFlag(trimmed)
-        if (res.ok) {
-          const deduped = [...new Set(res.flags)]
-          setFlags(deduped)
-          await cacheFlags(deduped)
-          setActiveFlag(trimmed)
-          saveStoredActiveFlag(trimmed)
-        }
-      } else {
-        await enqueuePendingFlag(trimmed)
-        const newList = [...new Set([...flags, trimmed])]
-        setFlags(newList)
-        await cacheFlags(newList)
-        setActiveFlag(trimmed)
-        saveStoredActiveFlag(trimmed)
-      }
-    } finally {
-      setNewFlagSaving(false)
-      setShowNewFlagInput(false)
-      setNewFlagInput('')
+  // New-article dialog (admin): linked → the scan was saved with it; closed → saved as a missing article.
+  async function saveNewArticleLater(): Promise<boolean> {
+    const n = newArticle
+    if (!n) return true
+    const r = await postScan(n.raw, n.id, { saveUnknown: true })
+    setNewArticle(null)
+    if (r === 'offline') { await keepOnPhone(n.raw, n.id, n.parsed); return true }
+    handleReply(n.raw, n.id, n.parsed, r)
+    return r.kind !== 'rejected'
+  }
+  async function newArticleLinked() {
+    setNewArticle(null)
+    addTotals({ boxes: 1, pairs: 1 })
+    playScanOk()
+    say('ok', 'Article saved and the box counted.')
+    await refreshSession()
+  }
+
+  // ── Cartons ─────────────────────────────────────────────────────────────
+
+  function takeCartonCheck(raw: string, out: Extract<ScanReply, { kind: 'carton' }>['check']) {
+    if (out.status === 'confirm') {
+      setCartons((q) => (q.some((x) => x.raw === raw) ? q : [...q, { id: crypto.randomUUID(), raw, ask: out }]))
+      playScanOk()
+      return
     }
+    cartonKeysRef.current.delete(raw)
+    say(out.status === 'duplicate' ? 'warn' : 'err', out.status === 'duplicate' ? `${out.label}: ${out.message}` : out.message)
+    playAlreadyScanned()
   }
 
-
-  function Banners() {
-    return (
-      <>
-        {successMsg && (
-          <div className="rounded-md bg-green-100 dark:bg-green-500/15 px-3 py-2 text-sm text-green-800 dark:text-green-300 border border-green-300 dark:border-green-500/30">
-            {successMsg}
-          </div>
-        )}
-        {warnMsg && (
-          <div className="rounded-md bg-yellow-100 dark:bg-yellow-500/15 px-3 py-2 text-sm text-yellow-800 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-500/30">
-            {warnMsg}
-          </div>
-        )}
-        {infoMsg && (
-          <div className="rounded-md bg-blue-100 dark:bg-blue-500/15 px-3 py-2 text-sm text-blue-800 dark:text-blue-300 border border-blue-300 dark:border-blue-500/30">
-            {infoMsg}
-          </div>
-        )}
-        {error && (
-          <div role="alert" className="rounded-md bg-destructive/15 px-3 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
-      </>
-    )
+  async function handleCarton(raw: string) {
+    if (!navigator.onLine) { say('err', 'Counting a carton needs internet. Scan it again when you are online.'); playAlreadyScanned(); return }
+    if (cartonKeysRef.current.has(raw)) return // camera re-reads the label while it waits
+    cartonKeysRef.current.add(raw)
+    const r = await postScan(raw, crypto.randomUUID())
+    if (r === 'offline') { cartonKeysRef.current.delete(raw); say('err', 'The carton could not be checked. Scan it again.'); return }
+    if (r.kind === 'carton') takeCartonCheck(raw, r.check)
+    else { cartonKeysRef.current.delete(raw); say('err', r.kind === 'rejected' ? r.message : 'Not a carton label.') }
   }
 
-  const pendingCount   = offlineQueue.filter((e) => e.status === 'pending' || e.status === 'syncing').length
-  const errorCount     = offlineQueue.filter((e) => e.status === 'error').length
-  const totalOffline   = offlineQueue.length
+  function dropCarton() {
+    const c = cartons[0]
+    if (c) cartonKeysRef.current.delete(c.raw)
+    setCartons((q) => q.slice(1))
+    setCartonError('')
+  }
+
+  async function countCarton(answer: AssortmentAnswer) {
+    const c = cartons[0]
+    const cur = currentRef.current
+    if (!c || !cur || cartonBusy) return
+    setCartonBusy(true); setCartonError('')
+    try {
+      const out = await countStocktakeCartonAction({ rawInput: c.raw, clientEventId: c.id, sessionId: cur.id, answer })
+      if (out.status === 'rejected') { setCartonError(out.message); playAlreadyScanned(); return }
+      if (out.status === 'duplicate') { say('warn', `${out.label}: ${out.message}`); playAlreadyScanned() }
+      else {
+        const item: FeedItem = {
+          key: `carton:${out.receiptId}`, id: out.receiptId, eventId: c.id, type: 'carton', articleCode: c.ask.articleCode, colourCode: c.ask.colourCode,
+          size: c.ask.sizes.length > 1 ? `${c.ask.sizes[0]}–${c.ask.sizes[c.ask.sizes.length - 1]}` : c.ask.sizes[0], articleName: c.ask.articleName, colourName: null,
+          pairs: out.pairs, mrp: c.ask.mrp != null ? c.ask.mrp.toFixed(2) : null, resolution: 'resolved', userName: user?.name ?? '', at: new Date().toISOString(),
+          detail: formatSizes(out.sizes),
+        }
+        pushEntry(entryFromItem(item))
+        if (!out.replay) addTotals({ cartons: 1, cartonPairs: out.pairs, pairs: out.pairs })
+        playScanOk()
+      }
+      dropCarton()
+    } catch { setCartonError('Not saved — check the internet and try again.') } finally { setCartonBusy(false) }
+  }
+
+  // A carton waiting to be confirmed is not counted yet: warn before leaving.
+  useEffect(() => {
+    if (!cartons.length) return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [cartons.length])
+
+  // ── Inputs: camera, scanner machine, photo ──────────────────────────────
+
+  const { videoRef, active: camActive, error: camError, start: startCamera, stop: stopCamera, torch, torchSupported, setTorch } =
+    useQrScanner(handleCode, { hardware: false, paused: () => modalOpenRef.current })
+  const scanRef = useRef<HTMLInputElement>(null)
+  const [scanValue, setScanValue] = useState('')
+  const [scanFocused, setScanFocused] = useState(false)
+  useScanForwarder(scanRef, (ch) => setScanValue((v) => v + ch))
+  useEffect(() => { if (current && !isTouch()) setTimeout(() => scanRef.current?.focus({ preventScroll: true }), 30) }, [current])
+  function submitScanBox() { const code = scanValue.trim(); setScanValue(''); if (code) void handleCode(code) }
+  const photoRef = useRef<HTMLInputElement>(null)
+  async function onPhoto(file: File | undefined) {
+    if (photoRef.current) photoRef.current.value = ''
+    if (!file) return
+    try {
+      const code = await decodeQrImage(file)
+      if (code) void handleCode(code); else say('err', 'No QR code found in the photo. Try a sharper, closer photo.')
+    } catch { say('err', 'This file could not be read as a photo.') }
+  }
+  // Leaving the count (rack changed) stops the camera.
+  useEffect(() => { if (!current) stopCamera() }, [current, stopCamera])
+
+  // ── Rack ────────────────────────────────────────────────────────────────
+
+  async function pickRack(r: Rack) {
+    setBusyRackId(r.id); setPickError('')
+    try {
+      const out = await startOrJoinAction(r.id)
+      if (!out.ok) { setPickError(out.message); return }
+      setFeed([])
+      applySession(out.data.session, out.data.feed)
+      say('ok', out.data.started ? `Count of ${r.name} started.` : `Joined the count of ${r.name}.`)
+    } catch { setPickError('Could not open the rack. Check the internet and try again.') } finally { setBusyRackId(null) }
+  }
+  function changeRack() {
+    stopCamera()
+    setCurrent(null); setSession(null); setFeed([])
+    void loadBoot(null)
+  }
+
+  // ── Manual entry ────────────────────────────────────────────────────────
+
+  async function saveManual(v: ManualValues): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
+    const c = currentRef.current
+    if (!c) return { ok: false, message: 'Choose a rack first.' }
+    const id = crypto.randomUUID()
+    const title = feedTitle({ type: 'manual', articleCode: v.art, colourCode: v.colour, size: v.size })
+    if (!navigator.onLine) {
+      await enqueue({
+        tempId: id, entryType: 'manual', artNumber: v.art, colorNumber: v.colour, sizeNumber: v.size, quantity: v.qty, mrp: v.mrp ?? undefined,
+        mfgMonth: v.mfgMonth ?? undefined, mfgYear: v.mfgYear ?? undefined, notes: v.notes || undefined, flag: c.rackName, sessionId: c.id,
+        scannedByName: user?.name ?? '', savedAt: Date.now(), status: 'pending',
+      })
+      void refreshOffline()
+      pushEntry({ key: id, state: 'offline', title, detail: `${v.qty} pair(s) typed by hand — sent when online.`, at: Date.now() })
+      addTotals({ manualPairs: v.qty, pairs: v.qty })
+      return { ok: true, message: `Kept on this phone: ${title} · ${v.qty} pair(s).` }
+    }
+    try {
+      const r = await addManualEntry({
+        clientEventId: id, artNumber: v.art, colorNumber: v.colour, sizeNumber: v.size, quantity: v.qty, notes: v.notes || null,
+        mrp: v.mrp, mfgMonth: v.mfgMonth, mfgYear: v.mfgYear, sessionId: c.id,
+      })
+      if (!r.ok) return { ok: false, message: r.message }
+      const d = r.data
+      pushEntry(entryFromItem({
+        key: `scan:${d.id}`, id: d.id, eventId: id, type: 'manual', articleCode: d.artNumber, colourCode: d.colorNumber, size: d.sizeNumber,
+        articleName: d.masterArtName === '—' ? null : d.masterArtName, colourName: d.masterColorName === '—' ? null : d.masterColorName,
+        pairs: d.quantity, mrp: d.mrp, resolution: d.resolution, userName: d.scannedByName, at: new Date(d.scannedAt).toISOString(), detail: null,
+      }))
+      if (!r.replay) addTotals({ manualPairs: d.quantity, pairs: d.quantity, missing: d.resolution === 'resolved' ? 0 : 1 })
+      playScanOk()
+      return { ok: true, message: `Added: ${title} · ${d.quantity} pair(s).${d.resolution === 'resolved' ? '' : ' Not in the article master yet — an admin will link it.'}` }
+    } catch { return { ok: false, message: 'Not saved — check the internet and try again.' } }
+  }
+
+  // ── Undo ────────────────────────────────────────────────────────────────
+
+  async function doUndo() {
+    const u = undo
+    if (!u) return
+    setUndoBusy(true); setUndoError('')
+    try {
+      const reason = undoReason.trim()
+      const r = u.type === 'carton' ? await undoStocktakeCartonAction(u.id, reason) : await deleteScan(u.id, { reason })
+      if (!r.ok) { setUndoError(r.message); return }
+      setFeed((f) => f.filter((e) => e.key !== u.eventId))
+      for (const [k, v] of seenRef.current) if (v === u.eventId) seenRef.current.delete(k)
+      addTotals(u.type === 'carton' ? { cartons: -1, cartonPairs: -u.pairs, pairs: -u.pairs }
+        : u.type === 'manual' ? { manualPairs: -u.pairs, pairs: -u.pairs, missing: u.resolution === 'resolved' ? 0 : -1 }
+        : { boxes: -1, pairs: -1, missing: u.resolution === 'resolved' ? 0 : -1 })
+      say('ok', `Undone: ${feedTitle(u)}.`)
+      setUndo(null); setUndoReason('')
+    } catch { setUndoError('Not undone — check the internet and try again.') } finally { setUndoBusy(false) }
+  }
+
+  const pending = offlineQueue.filter((e) => e.status === 'pending' || e.status === 'syncing').length
+  const totals = session?.totals ?? EMPTY_TOTALS
+  const flashCls = { ok: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300', warn: 'border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-200', err: 'border-red-500/40 bg-red-500/10 text-red-800 dark:text-red-300' }
 
   return (
     <main className="min-h-screen bg-background p-3 sm:p-4 md:p-6">
-      <div className="mx-auto max-w-6xl space-y-4 sm:space-y-6">
-
-        {/* ── Offline banner ─────────────────────────────────────────────── */}
-        {!isOnline && (
-          <div className="flex items-start gap-3 rounded-lg border border-yellow-300 dark:border-yellow-500/30 bg-yellow-50 dark:bg-yellow-500/15 px-4 py-3 text-sm text-yellow-800 dark:text-yellow-300">
-            {/* wifi-off icon */}
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-              className="h-4 w-4 shrink-0 mt-0.5">
-              <line x1="1" y1="1" x2="23" y2="23" />
-              <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55" />
-              <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39" />
-              <path d="M10.71 5.05A16 16 0 0 1 22.56 9" />
-              <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88" />
-              <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
-              <line x1="12" y1="20" x2="12.01" y2="20" />
-            </svg>
-            <span>{t('offlineBanner')}</span>
+      <div className="mx-auto max-w-3xl space-y-3">
+        <header className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <h1 className="truncate text-xl font-bold tracking-tight sm:text-2xl">Warehouse Scanner</h1>
+            {!online && <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300"><WifiOff className="h-3 w-3" />Offline</span>}
           </div>
-        )}
+          <PageNav />
+        </header>
 
-        {/* ── Sync in-progress banner ────────────────────────────────────── */}
-        {isSyncing && (
-          <div className="flex items-center gap-3 rounded-lg border border-blue-200 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/15 px-4 py-3 text-sm text-blue-700 dark:text-blue-300">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-              className="h-4 w-4 shrink-0 animate-spin">
-              <polyline points="23 4 23 10 17 10" />
-              <polyline points="1 20 1 14 7 14" />
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-            </svg>
-            {t('syncing')}
-          </div>
-        )}
+        {flash && <div role="status" className={`rounded-xl border px-3 py-2.5 text-sm font-medium ${flashCls[flash.tone]}`}>{flash.text}</div>}
 
-        {/* ── Sync result banner ─────────────────────────────────────────── */}
-        {syncResult && !isSyncing && (
-          <div className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm ${
-            syncResult.duplicates > 0 || syncResult.errors > 0
-              ? 'border-yellow-300 dark:border-yellow-500/30 bg-yellow-50 dark:bg-yellow-500/15 text-yellow-800 dark:text-yellow-300'
-              : 'border-green-300 dark:border-green-500/30 bg-green-50 dark:bg-green-500/15 text-green-800 dark:text-green-300'
-          }`}>
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-              className="h-4 w-4 shrink-0 mt-0.5">
-              {syncResult.duplicates === 0 && syncResult.errors === 0
-                ? <><polyline points="20 6 9 17 4 12" /></>
-                : <><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></>
-              }
-            </svg>
-            <span>
-              {syncResult.synced > 0 && syncResult.duplicates === 0 && syncResult.errors === 0
-                ? t('syncSuccess')
-                : `${t('syncPartial')} ${syncResult.synced > 0 ? `${syncResult.synced} synced. ` : ''}${syncResult.duplicates > 0 ? `${syncResult.duplicates} ${t('syncDuplicates')} ` : ''}${syncResult.errors > 0 ? `${syncResult.errors} failed (will retry).` : ''}`
-              }
-            </span>
-          </div>
-        )}
-
-        {/* ── Pending offline items pill (shown when online + have pending) */}
-        {isOnline && pendingCount > 0 && !isSyncing && (
-          <div className="flex items-center justify-between gap-3 rounded-lg border border-blue-200 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/15 px-4 py-2.5 text-sm text-blue-700 dark:text-blue-300">
-            <span>⚡ {pendingCount} {t('offlinePending')}</span>
-            <Button size="sm" variant="outline" className="h-7 text-xs border-blue-300 dark:border-blue-500/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100"
-              onClick={handleSync} disabled={isSyncing}>
-              {t('retrySync')}
-            </Button>
-          </div>
-        )}
-
-        {/* Header */}
-        <div className="flex flex-col gap-0.5">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight">{t('warehouseScanner')}</h1>
-              {!isOnline && (
-                <span className="shrink-0 rounded-full bg-yellow-100 dark:bg-yellow-500/15 border border-yellow-300 dark:border-yellow-500/30 px-2 py-0.5 text-[10px] font-semibold text-yellow-700 dark:text-yellow-300 uppercase tracking-wide">
-                  {t('offlineBadge')}
-                </span>
-              )}
-            </div>
-            <PageNav />
-          </div>
-          {userName && (
-            <div className="flex items-center gap-1 ml-auto mt-0.5">
-              <div className="flex h-4 w-4 items-center justify-center rounded-full bg-blue-600 text-white">
-                <User className="h-2.5 w-2.5" />
+        {!current ? (
+          <RackPicker racks={racks} open={open} busyRackId={busyRackId} error={pickError} loading={loading} online={online}
+            canManage={Boolean(user?.canManageRacks)} onPick={pickRack} onRefresh={() => loadBoot(null)} onManage={() => setSheet('racks')} />
+        ) : (
+          <>
+            {/* The count: rack, totals, finish */}
+            <section className="rounded-2xl border border-sky-500/40 bg-sky-500/5 p-3" aria-label="This count">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-300">Counting</p>
+                  <p className="truncate text-lg font-bold" data-no-translate>{current.rackName}</p>
+                  {session && <p className="text-[11px] text-muted-foreground">{`Since ${timeIST(session.startedAt)} · ${session.startedByName}${totals.people > 1 ? ` · ${totals.people} people` : ''}`}</p>}
+                </div>
+                <div className="text-right">
+                  <p className="text-3xl font-bold leading-none">{totals.pairs}</p>
+                  <p className="text-[11px] text-muted-foreground">pairs</p>
+                </div>
               </div>
-              <span className="text-xs font-semibold text-muted-foreground">{userName}</span>
-            </div>
-          )}
-        </div>
-
-        <Tabs
-          defaultValue="camera"
-          className="w-full"
-          onValueChange={(tab) => {
-            // The camera starts only when "Scan with camera" is tapped.
-            if (tab !== 'camera') stopCamera()
-          }}
-        >
-          <TabsList className="flex w-full">
-            <TabsTrigger value="camera" className="text-[11px] sm:text-sm truncate">{t('cameraTab')}</TabsTrigger>
-            <TabsTrigger value="manual" className="text-[11px] sm:text-sm truncate">{t('manualTab')}</TabsTrigger>
-            <TabsTrigger value="recent" className="text-[11px] sm:text-sm truncate">{t('recentScansTab')}</TabsTrigger>
-            <TabsTrigger value="dashboard" className="text-[11px] sm:text-sm truncate">Dashboard</TabsTrigger>
-            {totalOffline > 0 && (
-              <TabsTrigger value="offline" className="text-xs sm:text-sm px-1 sm:px-3">
-                {/* Mobile: wifi-off icon + badge only; Desktop: full label */}
-                <span className="flex items-center gap-1">
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                    className="h-3.5 w-3.5 shrink-0">
-                    <line x1="1" y1="1" x2="23" y2="23" />
-                    <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55" />
-                    <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39" />
-                    <path d="M10.71 5.05A16 16 0 0 1 22.56 9" />
-                    <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88" />
-                    <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
-                    <line x1="12" y1="20" x2="12.01" y2="20" />
-                  </svg>
-                  <span className="hidden sm:inline">{t('offlineQueueTitle')}</span>
-                  <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-yellow-500 px-1 text-[10px] font-bold text-white">
-                    {totalOffline}
-                  </span>
-                </span>
-              </TabsTrigger>
-            )}
-          </TabsList>
-
-          {/* ── Camera Tab ──────────────────────────────────────────────── */}
-          <TabsContent value="camera" className="space-y-4">
-            <Card>
-              <CardHeader className="px-3 py-3 sm:px-6 sm:py-4">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <CardTitle className="text-sm sm:text-base lg:text-lg truncate">{t('qrCodeScanner')}</CardTitle>
-                      {dailyScanCount > 0 && (
-                        <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-green-500 px-1.5 text-xs font-bold text-white">
-                          {dailyScanCount}
-                        </span>
-                      )}
-                    </div>
-                    <CardDescription className="text-xs sm:text-sm truncate">{t('qrScannerDesc')}</CardDescription>
-                  </div>
-                  <div className="flex items-center gap-1 sm:gap-1.5 rounded-full border px-2 sm:px-3 py-1 sm:py-1.5 bg-background shadow-sm shrink-0">
-                    <span className="text-[10px] sm:text-xs font-medium text-muted-foreground">OFF</span>
-                    <button
-                      type="button"
-                      aria-label="Toggle flashlight"
-                      onClick={toggleFlashlight}
-                      className={`relative inline-flex h-6 w-11 sm:h-7 sm:w-14 items-center rounded-full transition-colors focus-visible:outline-none ${
-                        isFlashlightOn ? 'bg-green-500' : 'bg-muted'
-                      }`}
-                    >
-                      <span
-                        className={`inline-flex h-5 w-5 sm:h-6 sm:w-6 items-center justify-center rounded-full bg-white shadow transition-transform ${
-                          isFlashlightOn ? 'translate-x-5 sm:translate-x-7' : 'translate-x-0.5'
-                        }`}
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-                          stroke={isFlashlightOn ? '#16a34a' : '#9ca3af'} strokeWidth="2"
-                          strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5">
-                          <path d="M18 6l-6 6" />
-                          <path d="M7 17l1.5-1.5" />
-                          <path d="M10.5 20.5l1-1" />
-                          <path d="M3.5 14.5l1-1" />
-                          <path d="M6 11l-2.5 2.5a4.95 4.95 0 0 0 7 7L13 18" />
-                          <path d="M22 2l-7 7" />
-                        </svg>
-                      </span>
-                    </button>
-                    <span className={`text-[10px] sm:text-xs font-medium ${isFlashlightOn ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'}`}>ON</span>
-                  </div>
-                </div>
-                {/* ── Flag selector row — below title/description ── */}
-                <div className="pt-2">
-                  <FlagSelector
-                    activeFlag={activeFlag}
-                    flags={flags}
-                    flagsLoading={flagsLoading}
-                    newFlagInput={newFlagInput}
-                    newFlagSaving={newFlagSaving}
-                    showNewFlagInput={showNewFlagInput}
-                    onActiveFlagChange={(value) => {
-                      setActiveFlag(value)
-                      saveStoredActiveFlag(value)
-                      setShowNewFlagInput(false)
-                    }}
-                    onAddFlag={handleAddFlag}
-                    onCancelNewFlag={() => {
-                      setShowNewFlagInput(false)
-                      setNewFlagInput('')
-                    }}
-                    onNewFlagInputChange={setNewFlagInput}
-                    onShowNewFlagInput={() => setShowNewFlagInput(true)}
-                  />
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <button type="button" onClick={isCameraActive ? stopCamera : startCamera}
-                  className={`w-full rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors ${isCameraActive ? 'border border-border hover:bg-muted' : 'bg-foreground text-background hover:opacity-90'}`}>
-                  {isCameraActive ? 'Stop camera' : 'Scan with camera'}
-                </button>
-                <div className={`relative bg-black rounded-lg overflow-hidden aspect-[4/3] sm:aspect-video ${isCameraActive ? '' : 'hidden'}`}>
-                  <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
-                  <canvas ref={canvasRef} className="hidden" />
-                  {/* Scanning active overlay */}
-                  {isCameraActive && (
-                    <div className="absolute inset-0 pointer-events-none">
-                      <div className={`absolute inset-0 rounded-lg border-4 transition-colors duration-200 ${
-                        qrDetected ? 'border-green-400 animate-pulse' : 'border-white/20'
-                      }`} />
-                      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-black/60 text-white/70 text-xs font-medium px-3 py-1 rounded-full">
-                        {t('cameraScanning')}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
-                <Button
-                  variant="outline"
-                  className="w-full"
-                  disabled={uploadProcessing || isCameraActive}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  {uploadProcessing ? t('uploadQRProcessing') : t('uploadQRImage')}
-                </Button>
-                <Banners />
-                {lastCameraScan && (
-                  <ScanSummaryCard label="Last Scanned" {...lastCameraScan} mrp={lastCameraScan.mrp} />
-                )}
-                {lastOfflineScan && !lastCameraScan && (
-                  <ScanSummaryCard label="Last Scanned (Offline)" {...lastOfflineScan} />
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* ── Manual Entry Tab ─────────────────────────────────────────── */}
-          <TabsContent value="manual" className="space-y-3">
-            <Card>
-              <CardHeader className="px-4 py-3 sm:px-6 sm:py-4">
-                <CardTitle className="text-base">{t('manualEntryTitle')}</CardTitle>
-                <CardDescription className="text-xs">{t('manualEntryDesc')}</CardDescription>
-                {/* ── Flag selector row ── */}
-                <div className="pt-2">
-                  <FlagSelector
-                    activeFlag={activeFlag}
-                    flags={flags}
-                    flagsLoading={flagsLoading}
-                    newFlagInput={newFlagInput}
-                    newFlagSaving={newFlagSaving}
-                    showNewFlagInput={showNewFlagInput}
-                    onActiveFlagChange={(value) => {
-                      setActiveFlag(value)
-                      saveStoredActiveFlag(value)
-                      setShowNewFlagInput(false)
-                    }}
-                    onAddFlag={handleAddFlag}
-                    onCancelNewFlag={() => {
-                      setShowNewFlagInput(false)
-                      setNewFlagInput('')
-                    }}
-                    onNewFlagInputChange={setNewFlagInput}
-                    onShowNewFlagInput={() => setShowNewFlagInput(true)}
-                  />
-                </div>
-              </CardHeader>
-              <CardContent className="px-4 pb-4 sm:px-6">
-                <form onSubmit={handleManualForm} className="space-y-3">
-                  {/* Row 1 — Art · Color */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <Label htmlFor="m-artNumber" className="text-xs">{t('artNumber')}</Label>
-                      <Input
-                        id="m-artNumber"
-                        placeholder={t('artNumberPlaceholder')}
-                        value={manualForm.artNumber}
-                        onChange={(e) => setManualForm((prev) => ({ ...prev, artNumber: e.target.value }))}
-                        disabled={manualLoading}
-                        className="h-8 text-sm"
-                        required
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label htmlFor="m-colorNumber" className="text-xs">{t('colorNumber')}</Label>
-                      <Input
-                        id="m-colorNumber"
-                        placeholder={t('colorNumberPlaceholder')}
-                        value={manualForm.colorNumber}
-                        onChange={(e) => setManualForm((prev) => ({ ...prev, colorNumber: e.target.value }))}
-                        disabled={manualLoading}
-                        className="h-8 text-sm"
-                        required
-                      />
-                    </div>
-                  </div>
-                  {/* Row 2 — Size · Qty */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <Label htmlFor="m-sizeNumber" className="text-xs">{t('sizeNumber')}</Label>
-                      <Input
-                        id="m-sizeNumber"
-                        type="number"
-                        step="1"
-                        min="0"
-                        placeholder={t('sizeNumberPlaceholder')}
-                        value={manualForm.sizeNumber}
-                        onChange={(e) => setManualForm((prev) => ({ ...prev, sizeNumber: e.target.value === '' ? '' : String(parseInt(e.target.value) || '') }))}
-                        disabled={manualLoading}
-                        className="h-8 text-sm"
-                        required
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label htmlFor="m-quantity" className="text-xs">{t('quantity')}</Label>
-                      <Input
-                        id="m-quantity"
-                        type="number"
-                        min="1"
-                        placeholder="1"
-                        value={manualForm.quantity}
-                        onChange={(e) =>
-                          setManualForm((prev) => ({ ...prev, quantity: e.target.value === '' ? '' : parseInt(e.target.value) || 1 }))
-                        }
-                        disabled={manualLoading}
-                        className="h-8 text-sm"
-                      />
-                    </div>
-                  </div>
-                  {/* Row 3 — MRP · Division */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <Label htmlFor="m-mrp" className="text-xs">{t('mrpCol')}</Label>
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground"> ₹</span>
-                        <Input
-                          id="m-mrp"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          placeholder="0.00"
-                          value={manualForm.mrp}
-                          onChange={(e) => setManualForm((prev) => ({ ...prev, mrp: e.target.value }))}
-                          disabled={manualLoading}
-                          className="h-8 text-sm pl-6"
-                        />
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <Label htmlFor="m-division" className="text-xs">Division</Label>
-                      <select
-                        id="m-division"
-                        value={manualForm.division}
-                        onChange={(e) => setManualForm((prev) => ({ ...prev, division: e.target.value }))}
-                        disabled={manualLoading}
-                        className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-0 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <option value="">Division</option>
-                        <option value="Flite PU">Flite PU</option>
-                        <option value="Flite EVA">Flite EVA</option>
-                        <option value="Sparx">Sparx</option>
-                        <option value="Bahamas">Bahamas</option>
-                      </select>
-                    </div>
-                  </div>
-                  {/* Row 4 — Mfg Month · Mfg Year */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <Label htmlFor="m-mfgMonth" className="text-xs">Mfg Month</Label>
-                      <Input
-                        id="m-mfgMonth"
-                        type="number"
-                        min="1"
-                        max="12"
-                        step="1"
-                        placeholder="MM"
-                        value={manualForm.mfgMonth}
-                        onChange={(e) => setManualForm((prev) => ({ ...prev, mfgMonth: e.target.value }))}
-                        disabled={manualLoading}
-                        className="h-8 text-sm"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label htmlFor="m-mfgYear" className="text-xs">Mfg Year</Label>
-                      <Input
-                        id="m-mfgYear"
-                        type="number"
-                        min="2000"
-                        max="2099"
-                        step="1"
-                        placeholder="YYYY"
-                        value={manualForm.mfgYear}
-                        onChange={(e) => setManualForm((prev) => ({ ...prev, mfgYear: e.target.value }))}
-                        disabled={manualLoading}
-                        className="h-8 text-sm"
-                      />
-                    </div>
-                  </div>
-                  {/* Row 5 — Notes full width */}
-                  <div className="space-y-1">
-                    <Label htmlFor="m-notes" className="text-xs">{t('notes')}</Label>
-                    <Input
-                      id="m-notes"
-                      placeholder={t('notesPlaceholder')}
-                      value={manualForm.notes}
-                      onChange={(e) => setManualForm((prev) => ({ ...prev, notes: e.target.value }))}
-                      disabled={manualLoading}
-                      className="h-8 text-sm"
-                    />
-                  </div>
-                  <Banners />
-                  <div className="flex gap-2 pt-1">
-                    <Button type="submit" className="flex-1 h-9 text-sm" disabled={manualLoading}>
-                      {manualLoading ? t('recording') : t('addEntry')}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="h-9 text-sm px-4 text-destructive hover:text-destructive"
-                      disabled={manualLoading}
-                      onClick={() => setManualForm({ ...DEFAULT_MANUAL_FORM })}
-                    >
-                      Clear All
-                    </Button>
-                  </div>
-                  {lastManualEntry && (
-                    <ScanSummaryCard label="Last Added" {...lastManualEntry} mrp={lastManualEntry.mrp} />
-                  )}
-                  {lastOfflineManual && !lastManualEntry && (
-                    <ScanSummaryCard label="Last Added (Offline)" {...lastOfflineManual} />
-                  )}
-                </form>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* ── Recent Scans Tab ─────────────────────────────────────────── */}
-          <TabsContent value="recent" className="space-y-4">
-            <Card>
-              <CardHeader className="px-3 sm:px-6">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <CardTitle className="text-base sm:text-lg">{t('recentScansTitle')}</CardTitle>
-                    <CardDescription className="text-xs sm:text-sm">{t('recentScansDesc')}</CardDescription>
-                  </div>
-                  <Button variant="outline" size="sm" onClick={loadRecentScans} disabled={recentLoading || !isOnline}>
-                    ↻
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="px-0 sm:px-6">
-                {!isOnline && recentScans.length === 0 ? (
-                  <p className="text-center py-8 text-sm text-muted-foreground px-3">
-                    You are offline. Previously loaded scans appear here once internet is available.
-                  </p>
-                ) : recentLoading ? (
-                  <p className="text-center py-8 text-sm text-muted-foreground">{t('loading')}</p>
-                ) : recentScans.length === 0 ? (
-                  <p className="text-center py-8 text-sm text-muted-foreground">{t('noRecentScans')}</p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="text-xs sm:text-sm px-3 sm:px-4">{t('entryTypeCol')}</TableHead>
-                          <TableHead className="text-xs sm:text-sm px-3 sm:px-4">{t('artNumberCol')}</TableHead>
-                          <TableHead className="text-xs sm:text-sm px-3 sm:px-4">{t('colorCol')}</TableHead>
-                          <TableHead className="text-xs sm:text-sm px-3 sm:px-4">{t('sizeCol')}</TableHead>
-                          <TableHead className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell">{t('divisionCol')}</TableHead>
-                          <TableHead className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell text-right">{t('mrpCol')}</TableHead>
-                          <TableHead className="text-xs sm:text-sm px-3 sm:px-4 text-right">{t('quantityCol')}</TableHead>
-                          <TableHead className="text-xs sm:text-sm px-3 sm:px-4">{t('scannedByCol')}</TableHead>
-                          <TableHead className="text-xs sm:text-sm px-3 sm:px-4 hidden md:table-cell">{t('lastScannedCol')}</TableHead>
-                          <TableHead className="px-3 sm:px-4" />
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {recentScans.map((scan, idx) => (
-                          <TableRow key={`${scan.id}-${scan.rawQrCode ?? idx}`}>
-                            <TableCell className="px-3 sm:px-4">
-                              <Badge variant={scan.entryType === 'scan' ? 'default' : 'secondary'} className="text-xs">
-                                {scan.entryType}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="px-3 sm:px-4">
-                              <div className="font-mono text-xs sm:text-sm font-semibold">{scan.artNumber || '-'}</div>
-                              <div className="text-[10px] text-muted-foreground">{scan.masterArtName ?? '—'}</div>
-                            </TableCell>
-                            <TableCell className="px-3 sm:px-4">
-                              <div className="font-mono text-xs sm:text-sm">{scan.colorNumber || '-'}</div>
-                              <div className="text-[10px] text-muted-foreground">{scan.masterColorName ?? '—'}</div>
-                            </TableCell>
-                            <TableCell className="font-mono text-xs sm:text-sm px-3 sm:px-4">
-                              {scan.sizeNumber || '-'}
-                            </TableCell>
-                            <TableCell className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell">
-                              {scan.division || '-'}
-                            </TableCell>
-                            <TableCell className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell text-right">
-                              {scan.mrp != null ? `₹${Number(scan.mrp).toFixed(2)}` : '-'}
-                            </TableCell>
-                            <TableCell className="text-right px-3 sm:px-4">
-                              <Badge variant="outline">{scan.quantity}</Badge>
-                            </TableCell>
-                            <TableCell className="text-xs sm:text-sm px-3 sm:px-4">
-                              {scan.scannedByName || '-'}
-                            </TableCell>
-                            <TableCell className="text-xs sm:text-sm text-muted-foreground px-3 sm:px-4 hidden md:table-cell">
-                              {new Date(scan.scannedAt).toLocaleDateString(undefined, {
-                                year: 'numeric', month: '2-digit', day: '2-digit',
-                                hour: '2-digit', minute: '2-digit',
-                              })}
-                            </TableCell>
-                            <TableCell className="px-3 sm:px-4">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 w-7 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                                onClick={() => setDeleteTarget(scan)}
-                              >
-                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-                                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                                  className="h-3.5 w-3.5">
-                                  <polyline points="3 6 5 6 21 6" />
-                                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                                  <path d="M10 11v6" />
-                                  <path d="M14 11v6" />
-                                  <path d="M9 6V4h6v2" />
-                                </svg>
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* ── Offline Queue Tab (only shown when queue has items) ───────── */}
-          {totalOffline > 0 && (
-            <TabsContent value="offline" className="space-y-4">
-              <Card>
-                <CardHeader className="px-3 sm:px-6">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <CardTitle className="text-base sm:text-lg flex items-center gap-2">
-                        {t('offlineQueueTitle')}
-                        {pendingCount > 0 && (
-                          <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-yellow-500 px-1.5 text-[11px] font-bold text-white">
-                            {pendingCount}
-                          </span>
-                        )}
-                      </CardTitle>
-                      <CardDescription className="text-xs sm:text-sm">{t('offlineQueueDesc')}</CardDescription>
-                    </div>
-                    {isOnline && pendingCount > 0 && (
-                      <Button size="sm" variant="outline" onClick={handleSync} disabled={isSyncing}>
-                        {isSyncing ? t('syncing') : t('retrySync')}
-                      </Button>
-                    )}
-                  </div>
-                </CardHeader>
-                <CardContent className="px-0 sm:px-6">
-                  {offlineQueue.length === 0 ? (
-                    <p className="text-center py-8 text-sm text-muted-foreground">{t('offlineQueueEmpty')}</p>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="text-xs px-3 sm:px-4">Status</TableHead>
-                            <TableHead className="text-xs px-3 sm:px-4">{t('entryTypeCol')}</TableHead>
-                            <TableHead className="text-xs px-3 sm:px-4">{t('artNumberCol')}</TableHead>
-                            <TableHead className="text-xs px-3 sm:px-4">{t('colorCol')}</TableHead>
-                            <TableHead className="text-xs px-3 sm:px-4">{t('sizeCol')}</TableHead>
-                            <TableHead className="text-xs px-3 sm:px-4 text-right">{t('quantityCol')}</TableHead>
-                            <TableHead className="text-xs px-3 sm:px-4 hidden sm:table-cell">Saved At</TableHead>
-                            <TableHead className="px-3 sm:px-4" />
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {offlineQueue.map((entry) => (
-                            <TableRow key={entry.tempId} className={entry.status === 'error' ? 'bg-destructive/5' : ''}>
-                              <TableCell className="px-3 sm:px-4">
-                                {entry.status === 'pending' && (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 dark:bg-yellow-500/15 border border-yellow-300 dark:border-yellow-500/30 px-2 py-0.5 text-[10px] font-semibold text-yellow-700 dark:text-yellow-300">
-                                    ⏳ {t('pendingSyncBadge')}
-                                  </span>
-                                )}
-                                {entry.status === 'syncing' && (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 dark:bg-blue-500/15 border border-blue-300 dark:border-blue-500/30 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300">
-                                    ↻ {t('syncing')}
-                                  </span>
-                                )}
-                                {entry.status === 'error' && (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-red-100 dark:bg-red-500/15 border border-red-300 dark:border-red-500/30 px-2 py-0.5 text-[10px] font-semibold text-red-700 dark:text-red-300" title={entry.errorMessage}>
-                                    ✕ Duplicate
-                                  </span>
-                                )}
-                              </TableCell>
-                              <TableCell className="px-3 sm:px-4">
-                                <Badge variant={entry.entryType === 'scan' ? 'default' : 'secondary'} className="text-xs">
-                                  {entry.entryType}
-                                </Badge>
-                              </TableCell>
-                              <TableCell className="font-mono text-xs font-semibold px-3 sm:px-4">
-                                {entry.artNumber || '-'}
-                              </TableCell>
-                              <TableCell className="font-mono text-xs px-3 sm:px-4">
-                                {entry.colorNumber || '-'}
-                              </TableCell>
-                              <TableCell className="font-mono text-xs px-3 sm:px-4">
-                                {entry.sizeNumber || '-'}
-                              </TableCell>
-                              <TableCell className="text-right px-3 sm:px-4">
-                                <Badge variant="outline">{entry.quantity}</Badge>
-                              </TableCell>
-                              <TableCell className="text-xs text-muted-foreground px-3 sm:px-4 hidden sm:table-cell">
-                                {new Date(entry.savedAt).toLocaleTimeString(undefined, {
-                                  hour: '2-digit', minute: '2-digit',
-                                })}
-                              </TableCell>
-                              <TableCell className="px-3 sm:px-4">
-                                {entry.status === 'error' && (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 text-xs text-muted-foreground hover:text-destructive"
-                                    onClick={() => handleDismissOfflineError(entry.tempId)}
-                                  >
-                                    {t('dismissError')}
-                                  </Button>
-                                )}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  )}
-                  {errorCount > 0 && (
-                    <p className="px-3 sm:px-4 pt-3 pb-1 text-xs text-destructive">
-                      {errorCount} duplicate item(s) could not be synced because they already exist in the database. Dismiss them to clear.
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-          )}
-
-          {/* ── Dashboard Tab ──────────────────────────────────────────────── */}
-          <TabsContent value="dashboard" className="mt-0">
-            <DashboardPage embedded />
-          </TabsContent>
-
-        </Tabs>
-
-        {newArticleDialog && (
-          <NewArticleDialog
-            rawQr={newArticleDialog.rawQr}
-            parsed={newArticleDialog.parsed}
-            mode={newArticleDialog.mode}
-            existingName={newArticleDialog.existingName}
-            flag={newArticleDialog.flag}
-            clientEventId={newArticleDialog.clientEventId}
-            onClose={() => { void savePendingScanForLater(newArticleDialog.rawQr, newArticleDialog.clientEventId) }}
-            onSaveLater={() => savePendingScanForLater(newArticleDialog.rawQr, newArticleDialog.clientEventId)}
-            onLinked={() => finishArticleLink(newArticleDialog.rawQr)}
-          />
-        )}
-
-        {/* ── Delete confirm dialog ─────────────────────────────────────── */}
-        {deleteTarget && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <DialogKeys onClose={() => setDeleteTarget(null)} />
-            <div className="w-full max-w-sm rounded-xl bg-background border shadow-lg p-6 space-y-4">
-              <div className="flex items-center gap-2">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-destructive/10">
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                    className="h-4 w-4 text-destructive">
-                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                    <line x1="12" y1="9" x2="12" y2="13" />
-                    <line x1="12" y1="17" x2="12.01" y2="17" />
-                  </svg>
-                </div>
-                <h2 className="text-base font-semibold">Undo this scan?</h2>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                This removes{' '}
-                <span className="font-mono font-semibold text-foreground">
-                  {[deleteTarget.artNumber, deleteTarget.colorNumber, deleteTarget.sizeNumber]
-                    .filter(Boolean)
-                    .join(' · ') || `#${deleteTarget.id}`}
-                </span>
-                {' '}from stock. The scan stays in the history, marked as undone.
+              <p className="mt-2 text-xs text-muted-foreground">
+                {`${totals.boxes} boxes · ${totals.cartons} cartons (${totals.cartonPairs} pairs) · ${totals.manualPairs} by hand`}
+                {totals.missing > 0 && <span className="text-amber-700 dark:text-amber-400">{` · ${totals.missing} not in master`}</span>}
+                {pending > 0 && <span className="text-amber-700 dark:text-amber-400">{` · ${pending} waiting on this phone`}</span>}
               </p>
-              <div className="space-y-1.5">
-                <Label htmlFor="delete-reason-input" className="text-xs text-muted-foreground">Reason</Label>
-                <Input
-                  id="delete-reason-input"
-                  placeholder="e.g. scanned the wrong box"
-                  value={deleteReason}
-                  onChange={(e) => setDeleteReason(e.target.value)}
-                  disabled={deleteLoading}
-                  autoComplete="off"
-                />
+              <div className="mt-2 flex gap-2">
+                <button type="button" onClick={changeRack} className="h-9 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-muted">Change rack</button>
+                <button type="button" onClick={() => session && setFinishing(session)} disabled={!session || !online} className="h-9 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-muted disabled:opacity-50">Finish count</button>
+                <button type="button" onClick={() => refreshSession()} disabled={!online} aria-label="Refresh totals" className="ml-auto h-9 rounded-lg border border-border px-2.5 hover:bg-muted disabled:opacity-50">
+                  <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+                </button>
               </div>
-              {scannerCtx?.canCreateArticles && (
-                <label className="flex items-start gap-2 text-xs text-muted-foreground">
-                  <input
-                    id="delete-remove-article"
-                    type="checkbox"
-                    className="mt-0.5"
-                    checked={removeCreatedArticle}
-                    onChange={(e) => setRemoveCreatedArticle(e.target.checked)}
-                    disabled={deleteLoading}
-                  />
-                  <span>Also remove the article this scan created (only allowed if nothing else uses it).</span>
-                </label>
-              )}
-              <div className="space-y-1.5">
-                <Label htmlFor="delete-confirm-input" className="text-xs text-muted-foreground">
-                  Type <span className="font-mono font-semibold text-foreground">DELETE</span> to confirm
-                </Label>
-                <Input
-                  id="delete-confirm-input"
-                  placeholder="Type DELETE here"
-                  value={deleteConfirmText}
-                  onChange={(e) => setDeleteConfirmText(e.target.value)}
-                  disabled={deleteLoading}
-                  autoFocus
-                  autoComplete="off"
-                />
-              </div>
-              <div className="flex gap-2 justify-end">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={deleteLoading}
-                  onClick={() => { setDeleteTarget(null); setDeleteConfirmText(''); setDeleteReason(''); setRemoveCreatedArticle(false) }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  disabled={deleteLoading || deleteConfirmText !== 'DELETE'}
-                  onClick={handleDeleteConfirm}
-                >
-                  {deleteLoading ? 'Undoing…' : 'Undo scan'}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
+            </section>
 
+            {/* Scanner machine (USB / Bluetooth): it types the code and presses Enter. */}
+            <form onSubmit={(e) => { e.preventDefault(); submitScanBox() }}>
+              <label htmlFor="warehouse-scan" className="sr-only">Scan box or carton</label>
+              <div className={`flex h-14 items-center gap-2.5 rounded-xl border-2 bg-background px-3 transition-colors ${scanFocused ? 'border-primary' : 'border-border'}`}>
+                <button type="button" onClick={() => scanRef.current?.focus()} aria-label={scanFocused ? 'Scanner ready' : 'Tap here to scan'}
+                  className={`h-3 w-3 shrink-0 rounded-full ${scanFocused ? 'bg-emerald-500 shadow-[0_0_0_4px_rgb(16_185_129/0.2)]' : 'bg-amber-500'}`} />
+                <input ref={scanRef} id="warehouse-scan" value={scanValue} onChange={(e) => setScanValue(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Tab' && scanValue.trim()) { e.preventDefault(); submitScanBox() } }}
+                  onFocus={() => setScanFocused(true)} onBlur={() => setScanFocused(false)}
+                  autoComplete="off" autoCorrect="off" autoCapitalize="characters" spellCheck={false} enterKeyHint="done"
+                  placeholder={scanFocused ? 'Scanner ready — scan a box or carton' : 'Tap here, then scan'}
+                  className="h-full min-w-0 flex-1 bg-transparent font-mono text-sm focus:outline-none" />
+              </div>
+            </form>
+
+            <div className="flex gap-2">
+              <button type="button" onClick={camActive ? stopCamera : startCamera} className={`${camActive ? secondaryBtn : primaryBtn} h-12 flex-1 text-base`}>
+                {camActive ? <><CameraOff className="h-5 w-5" /> Stop camera</> : <><Camera className="h-5 w-5" /> Scan with camera</>}
+              </button>
+              {camActive && torchSupported && (
+                <button type="button" onClick={() => setTorch(!torch)} aria-pressed={torch} aria-label="Torch"
+                  className={`h-12 rounded-lg border px-3 ${torch ? 'border-amber-400 bg-amber-400/20 text-amber-600 dark:text-amber-300' : 'border-border hover:bg-muted'}`}>
+                  <Flashlight className="h-5 w-5" />
+                </button>
+              )}
+            </div>
+            {camError && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{camError}</p>}
+            <div className={`relative overflow-hidden rounded-xl border border-border bg-black ${camActive ? '' : 'hidden'}`}>
+              <video ref={videoRef} playsInline muted className="max-h-[42vh] w-full object-cover" />
+              <div className="pointer-events-none absolute inset-6 rounded-xl border-2 border-white/40" />
+            </div>
+
+            {cartons[0] && (
+              <StocktakeCartonCard key={cartons[0].id} ask={cartons[0].ask} waiting={cartons.length - 1} busy={cartonBusy} error={cartonError}
+                onCount={countCarton} onCancel={dropCarton} />
+            )}
+
+            <div className="grid grid-cols-3 gap-2">
+              <button type="button" onClick={() => setSheet('manual')} className={`${secondaryBtn} flex-col gap-0.5 px-2 text-xs`}><Keyboard className="h-4 w-4" />By hand</button>
+              <button type="button" onClick={() => setSheet('counts')} disabled={!online} className={`${secondaryBtn} flex-col gap-0.5 px-2 text-xs`}><ListChecks className="h-4 w-4" />Counts</button>
+              <button type="button" onClick={() => setSheet('more')} className={`${secondaryBtn} relative flex-col gap-0.5 px-2 text-xs`}>
+                <MoreHorizontal className="h-4 w-4" />More
+                {offlineQueue.length > 0 && <span className="absolute right-2 top-1.5 rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-white">{offlineQueue.length}</span>}
+              </button>
+            </div>
+
+            <ScanFeed entries={feed} onUndo={(i) => { setUndo(i); setUndoReason(''); setUndoError('') }} />
+          </>
+        )}
       </div>
+
+      <input ref={photoRef} type="file" accept="image/*" className="hidden" onChange={(e) => onPhoto(e.target.files?.[0])} />
+
+      {sheet === 'manual' && current && <ManualEntryDialog rackName={current.rackName} onSave={saveManual} onClose={() => setSheet(null)} />}
+      {sheet === 'counts' && user && (
+        <CountsDialog currentId={current?.id ?? null} userId={user.id} canFinishAny={user.canVoidAny} onClose={() => setSheet(null)}
+          onFinish={(s) => { setSheet(null); setFinishing(s) }} />
+      )}
+      {sheet === 'racks' && <RackManager onClose={() => setSheet(null)} onChanged={() => { if (!currentRef.current) void loadBoot(null) }} />}
+      {sheet === 'more' && (
+        <Sheet title="More" onClose={() => setSheet(null)}>
+          <div className="grid gap-2">
+            <button type="button" onClick={() => { setSheet(null); photoRef.current?.click() }} className={`${secondaryBtn} justify-start`}><ImageUp className="h-4 w-4" />Scan from a photo</button>
+            <button type="button" onClick={() => setSheet('offline')} className={`${secondaryBtn} justify-start`}>
+              <WifiOff className="h-4 w-4" />{`Waiting on this phone (${offlineQueue.length})`}
+            </button>
+            {user?.canManageRacks && <button type="button" onClick={() => setSheet('racks')} className={`${secondaryBtn} justify-start`}><Settings2 className="h-4 w-4" />Manage racks</button>}
+            <Link href="/dashboard" className={`${secondaryBtn} justify-start`}><BarChart3 className="h-4 w-4" />Reports</Link>
+          </div>
+        </Sheet>
+      )}
+      {sheet === 'offline' && (
+        <Sheet title="Waiting on this phone" onClose={() => setSheet(null)}>
+          <p className="mb-2 text-xs text-muted-foreground">Scans saved without internet. They are sent by themselves when the internet is back.</p>
+          {offlineQueue.length === 0 ? <p className="py-6 text-center text-sm text-muted-foreground">Nothing waiting.</p> : (
+            <ul className="divide-y divide-border rounded-xl border border-border">
+              {offlineQueue.map((e) => (
+                <li key={e.tempId} className="flex items-center gap-2 px-3 py-2 text-sm">
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-mono font-semibold" data-no-translate>{`${e.artNumber} ${e.colorNumber} · ${e.sizeNumber}`}{e.quantity > 1 ? ` ×${e.quantity}` : ''}</span>
+                    <span className="block text-xs text-muted-foreground">{e.status === 'error' ? (e.errorMessage ?? 'Already counted') : `${e.flag ?? ''} · ${timeIST(new Date(e.savedAt).toISOString())}`}</span>
+                  </span>
+                  {e.status === 'error' && <button type="button" onClick={async () => { await removeFromQueue(e.tempId); void refreshOffline() }} className="rounded-md px-2 py-1 text-xs font-semibold hover:bg-muted">Remove</button>}
+                </li>
+              ))}
+            </ul>
+          )}
+          {pending > 0 && online && <button type="button" onClick={() => handleSync()} disabled={syncing} className={`${primaryBtn} mt-3 w-full`}>{syncing ? 'Sending…' : 'Send now'}</button>}
+        </Sheet>
+      )}
+      {finishing && (
+        <FinishCount session={finishing} canFinish={Boolean(user && (user.canVoidAny || finishing.startedBy === user.id))} onClose={() => setFinishing(null)}
+          onFinished={(s) => {
+            setFinishing(null)
+            say('ok', `Count of ${s.rackName} finished: ${s.totals.pairs} pairs.`)
+            if (currentRef.current?.id === s.id) changeRack()
+          }} />
+      )}
+      {undo && (
+        <Sheet title="Undo this scan?" onClose={() => setUndo(null)}>
+          <p className="text-sm text-muted-foreground">
+            <span className="font-mono font-semibold text-foreground" data-no-translate>{feedTitle(undo)}</span>
+            {` — ${undo.pairs} pair(s) come out of stock. It stays in the history, marked as undone.`}
+            {undo.type === 'carton' && ' Not possible once boxes from it were scanned or sold.'}
+          </p>
+          <label className="mt-3 block text-xs font-medium">Reason
+            <input value={undoReason} onChange={(e) => setUndoReason(e.target.value)} placeholder="e.g. scanned the wrong box" className={`${fieldCls} mt-1`} disabled={undoBusy} autoComplete="off" />
+          </label>
+          {undoError && <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">{undoError}</p>}
+          <div className="mt-3 flex gap-2">
+            <button type="button" data-primary data-destructive onClick={doUndo} disabled={undoBusy || undoReason.trim().length < 3}
+              className="inline-flex h-11 flex-1 items-center justify-center rounded-lg bg-red-600 px-4 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">
+              {undoBusy ? 'Undoing…' : 'Undo'}
+            </button>
+            <button type="button" data-autofocus onClick={() => setUndo(null)} className={secondaryBtn}>Cancel</button>
+          </div>
+        </Sheet>
+      )}
+      {newArticle && current && (
+        <NewArticleDialog rawQr={newArticle.raw} parsed={newArticle.parsed} mode={newArticle.mode} existingName={newArticle.existingName}
+          flag={current.rackName} sessionId={current.id} clientEventId={newArticle.id}
+          onClose={() => { void saveNewArticleLater() }} onSaveLater={saveNewArticleLater} onLinked={newArticleLinked} />
+      )}
     </main>
   )
 }
