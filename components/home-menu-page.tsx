@@ -1,129 +1,153 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { ScanBarcode, ShoppingCart, Receipt, Package, BookOpen, BarChart2 } from 'lucide-react'
-import type { AppRole } from '@/app/actions/users'
+import { ScanBarcode, ShoppingCart, Package, BookOpen, BarChart2, Boxes, Wallet } from 'lucide-react'
+import { hasPermission, parseRoles, type Permission } from '@/lib/permissions'
 import { PageNav } from '@/components/page-nav'
+import { useLanguage } from '@/lib/language-context'
+import type { TranslationKey } from '@/lib/translations'
 
 interface MenuItem {
-  label: string
-  description: string
+  label: TranslationKey
+  description: TranslationKey
   href: string
   icon: React.ElementType
   color: string
   border: string
-  badge?: string
-  roles: AppRole[]
+  badge?: TranslationKey
+  /** Shown when the user holds this permission (lib/permissions.ts). */
+  permission: Permission
 }
 
-// roles: which roles can see this tile. Empty = all roles.
 const MENU_ITEMS: MenuItem[] = [
   {
-    label: 'Scanner',
-    description: 'Scan warehouse inventory items',
+    label: 'scanner',
+    description: 'descScanner',
     href: '/scanner',
     icon: ScanBarcode,
     color: 'bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-400',
     border: 'border-blue-200 dark:border-blue-800',
-    roles: ['admin', 'accountant', 'salesman', 'picker', 'dispatcher', 'user'],
+    permission: 'scan.record',
   },
   {
-    label: 'Orders',
-    description: 'Manage sales, packing & dispatch',
+    label: 'navInventory',
+    description: 'descInventory',
+    href: '/inventory',
+    icon: Boxes,
+    color: 'bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400',
+    border: 'border-indigo-200 dark:border-indigo-800',
+    permission: 'inventory.view.all',
+  },
+  {
+    label: 'navOrders',
+    description: 'descOrders',
     href: '/orders',
     icon: ShoppingCart,
     color: 'bg-green-50 text-green-600 dark:bg-green-950 dark:text-green-400',
     border: 'border-green-200 dark:border-green-800',
-    badge: 'New',
-    roles: ['admin', 'accountant', 'salesman', 'picker', 'biller', 'dispatcher'],
+    permission: 'orders.view',
   },
   {
-    label: 'Billing',
-    description: 'Coming soon',
-    href: '#',
-    icon: Receipt,
-    color: 'bg-purple-50 text-purple-600 dark:bg-purple-950 dark:text-purple-400',
-    border: 'border-purple-200 dark:border-purple-800',
-    roles: ['admin', 'accountant'],
+    label: 'navPayments',
+    description: 'descPayments',
+    href: '/payments',
+    icon: Wallet,
+    color: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400',
+    border: 'border-emerald-200 dark:border-emerald-800',
+    permission: 'payments.view',
   },
   {
-    label: 'Purchases',
-    description: 'Track stock purchases and suppliers',
+    label: 'navPurchases',
+    description: 'descPurchases',
     href: '/purchases',
     icon: Package,
     color: 'bg-orange-50 text-orange-600 dark:bg-orange-950 dark:text-orange-400',
     border: 'border-orange-200 dark:border-orange-800',
-    roles: ['admin', 'accountant'],
+    permission: 'purchases.view',
   },
   {
-    label: 'Master',
-    description: 'Manage products, categories and suppliers',
+    label: 'navMaster',
+    description: 'descMaster',
     href: '/master',
     icon: BookOpen,
     color: 'bg-teal-50 text-teal-600 dark:bg-teal-950 dark:text-teal-400',
     border: 'border-teal-200 dark:border-teal-800',
-    roles: ['admin', 'accountant'],
+    permission: 'users.view',
   },
   {
-    label: 'Reports',
-    description: 'Inventory analytics and business reports',
+    label: 'navReports',
+    description: 'descReports',
     href: '/reports',
     icon: BarChart2,
     color: 'bg-rose-50 text-rose-600 dark:bg-rose-950 dark:text-rose-400',
     border: 'border-rose-200 dark:border-rose-800',
-    roles: ['admin', 'accountant'],
+    permission: 'users.view',
   },
 ]
 
 export function HomeMenuPage({ role }: { role: string }) {
   const router = useRouter()
-  const userRoles = role.split(',').map(r => r.trim())
-  const visible = MENU_ITEMS.filter(item => item.roles.some(r => userRoles.includes(r)))
+  const { t } = useLanguage()
+  const userRoles = parseRoles(role)
+  const visible = MENU_ITEMS.filter(item => hasPermission(userRoles, item.permission))
 
+  const rows = Math.max(1, Math.ceil(visible.length / 2))
+
+  // One screen on every phone: exactly the visible height (100dvh excludes the browser bars), no scrolling.
+  // Title and profile share the top row; the tiles share the rest of the height.
   return (
-    <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4 py-12">
-      {/* Top-right nav */}
-      <div className="fixed top-4 right-4 z-50">
+    <div className="flex h-[100dvh] flex-col overflow-y-auto bg-background px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <header className="mx-auto flex w-full max-w-md shrink-0 items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="truncate text-xl font-bold tracking-tight text-foreground sm:text-2xl">{t('appName')}</h1>
+          <p className="truncate text-xs text-muted-foreground sm:text-sm">{t('homeSubtitle')}</p>
+        </div>
         <PageNav hideHome />
-      </div>
-      <div className="w-full max-w-md">
-        <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold text-foreground tracking-tight">Shayona Inventory</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Select a module to get started</p>
-        </div>
+      </header>
 
-        <div className="grid grid-cols-2 gap-4">
-          {visible.map(({ label, description, href, icon: Icon, color, border, badge }) => {
-            const disabled = href === '#'
-            return (
-              <button
-                key={label}
-                onClick={() => { if (!disabled) router.push(href) }}
-                disabled={disabled}
-                className={`relative flex flex-col items-center gap-3 rounded-2xl border ${border} bg-card p-6 text-center shadow-sm transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                  disabled ? 'opacity-60 cursor-not-allowed' : 'hover:shadow-md active:scale-95'
-                }`}
-              >
-                {badge && (
-                  <span className="absolute top-2.5 right-2.5 rounded-full bg-green-500 px-1.5 py-0.5 text-[10px] font-semibold text-white leading-none">
-                    {badge}
-                  </span>
-                )}
-                {disabled && (
-                  <span className="absolute top-2.5 right-2.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground leading-none">
-                    Soon
-                  </span>
-                )}
-                <span className={`flex h-14 w-14 items-center justify-center rounded-xl ${color}`}>
-                  <Icon className="h-7 w-7" />
-                </span>
-                <span className="font-semibold text-foreground text-sm">{label}</span>
-                <span className="text-xs text-muted-foreground leading-snug">{description}</span>
-              </button>
-            )
-          })}
+      {visible.length === 0 ? (
+        <div className="mx-auto mt-6 w-full max-w-md rounded-2xl border border-border bg-card p-6 text-center text-sm text-muted-foreground">
+          {t('homeNoRole')}
         </div>
-      </div>
+      ) : (
+        <div className="mx-auto flex min-h-0 w-full max-w-md flex-1 items-center py-4">
+          <div
+            className="grid h-full w-full grid-cols-2 gap-3"
+            style={{ gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`, maxHeight: `${rows * 200}px` }}
+          >
+            {visible.map(({ label, description, href, icon: Icon, color, border, badge }) => {
+              const disabled = href === '#'
+              return (
+                <button
+                  key={label}
+                  onClick={() => { if (!disabled) router.push(href) }}
+                  disabled={disabled}
+                  className={`relative flex min-h-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-2xl border ${border} bg-card p-3 text-center shadow-sm transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    disabled ? 'opacity-60 cursor-not-allowed' : 'hover:shadow-md active:scale-95'
+                  }`}
+                >
+                  {badge && (
+                    <span className="absolute top-2.5 right-2.5 rounded-full bg-green-500 px-1.5 py-0.5 text-[10px] font-semibold text-white leading-none">
+                      {t(badge)}
+                    </span>
+                  )}
+                  {disabled && (
+                    <span className="absolute top-2.5 right-2.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground leading-none">
+                      {t('badgeSoon')}
+                    </span>
+                  )}
+                  <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl [@media(max-height:600px)]:h-10 [@media(max-height:600px)]:w-10 ${color}`}>
+                    <Icon className="h-6 w-6" />
+                  </span>
+                  <span className="text-sm font-semibold text-foreground">{t(label)}</span>
+                  {/* Short phones: the name alone keeps every tile on screen. */}
+                  <span className="line-clamp-2 text-xs leading-snug text-muted-foreground [@media(max-height:640px)]:hidden">{t(description)}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

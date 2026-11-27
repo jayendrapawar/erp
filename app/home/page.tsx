@@ -1,11 +1,5 @@
-import { headers } from 'next/headers'
-import { redirect } from 'next/navigation'
-import { auth } from '@/lib/auth'
-import { db } from '@/lib/db'
-import { user } from '@/lib/db/schema'
-import { eq } from 'drizzle-orm'
+import { requirePageUser } from '@/lib/authz'
 import { HomeMenuPage } from '@/components/home-menu-page'
-import { isRedirectError } from 'next/dist/client/components/redirect-error'
 import type { AppRole } from '@/app/actions/users'
 
 export const metadata = {
@@ -15,15 +9,8 @@ export const metadata = {
 
 export default async function Home() {
   let role: AppRole = 'user'
-  try {
-    const session = await auth.api.getSession({ headers: await headers() })
-    if (!session?.user) redirect('/sign-in')
-    const [u] = await db.select({ role: user.role }).from(user).where(eq(user.id, session.user.id)).limit(1)
-    role = (u?.role as AppRole) ?? 'user'
-  } catch (err) {
-    if (isRedirectError(err)) throw err
-    redirect('/sign-in')
-  }
+  const u = await requirePageUser()
+  role = (u.roles.join(',') || 'user') as AppRole
 
   return <HomeMenuPage role={role} />
 }

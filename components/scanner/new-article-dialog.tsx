@@ -1,33 +1,46 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { getColoursForName, linkOrCreateArticle, searchArticleNames } from '@/app/actions/articles'
+import { getArticleDefaults, getColoursForName, linkOrCreateArticle, searchArticleNames } from '@/app/actions/articles'
+import { DIVISIONS, SEGMENTS } from '@/lib/catalog/assortments'
 import type { ParsedQr } from '@/lib/qr-parser'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { suggestSizes } from './size-suggestions'
+import { DialogKeys } from '@/components/dialog-keys'
 
 type Props = {
   rawQr: string
   parsed: ParsedQr
   mode: 'unknown' | 'new_colour'
   existingName?: string
-  notes?: string
+  /** Scanner flag for the saved scan. */
+  flag?: string
+  /** Warehouse Scanner stocktake session (rack count) of the saved scan. */
+  sessionId?: number | null
+  /** Device-generated id of the scan being saved (makes retries safe). */
+  clientEventId?: string
   saveScan?: boolean
   initialSizes?: string
+  /** Text for the close (×) button; default says the scan is saved without details. */
+  closeLabel?: string
   onClose: () => void
   onSaveLater: () => Promise<boolean>
   onLinked: () => Promise<void>
 }
 
-export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, saveScan = true, initialSizes, onClose, onSaveLater, onLinked }: Props) {
+export function NewArticleDialog({ rawQr, parsed, mode, existingName, flag, sessionId, clientEventId, saveScan = true, initialSizes, closeLabel = 'Close (scan is saved without article details)', onClose, onSaveLater, onLinked }: Props) {
   const [articleName, setArticleName] = useState(existingName ?? '')
   const [colourChoice, setColourChoice] = useState('')
   const [otherColour, setOtherColour] = useState('')
+  const [segment, setSegment] = useState('')
+  const [division, setDivision] = useState('')
+  const [divisionSuggested, setDivisionSuggested] = useState(false)
   const [sizes, setSizes] = useState(initialSizes ?? suggestSizes(parsed.articleCode))
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [colours, setColours] = useState<string[]>([])
+  const [pendingColours, setPendingColours] = useState<string[]>([])
   const [selectedKnownName, setSelectedKnownName] = useState(Boolean(existingName))
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
@@ -42,13 +55,13 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, sav
   const hasKnownName = selectedKnownName || Boolean(matchingName)
   const showSizes = mode === 'unknown'
   const colourName = colours.length === 0 || colourChoice === '__other__' ? otherColour.trim() : colourChoice
-  const canSubmit = articleName.trim().length > 0 && colourName.length > 0 && (!showSizes || sizes.trim().length > 0)
+  const canSubmit = articleName.trim().length > 0 && colourName.length > 0 && segment.length > 0 && division.length > 0 && (!showSizes || sizes.trim().length > 0)
   const readOnlyRows = useMemo(() => [
     ['Article code', parsed.articleCode],
     ['Colour code', parsed.colorCode],
     ['Size', parsed.size],
     ['MRP', parsed.mrp ? String(parsed.mrp) : '—'],
-    ['Division', parsed.division || '—'],
+    ['Division hint (from code)', parsed.division || '—'],
   ], [parsed])
 
   useEffect(() => {
@@ -67,29 +80,36 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, sav
     const exactName = selectedKnownName ? articleName.trim() : matchingName
     if (!exactName) {
       setColours([])
+      setPendingColours([])
       setColourChoice('')
       return
     }
     let cancelled = false
     const timer = setTimeout(() => {
-      getColoursForName(exactName).then((values) => {
+      getColoursForName(exactName, parsed.articleCode).then((values) => {
         if (!cancelled) {
           const names = values.map((value) => value.colorName)
           setColours(names)
+          setPendingColours(values.filter((value) => value.pending).map((value) => value.colorName))
           setColourChoice((choice) => names.includes(choice) ? choice : '')
         }
       }).catch(() => { if (!cancelled) setColours([]) })
     }, 250)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [articleName, matchingName, selectedKnownName])
+  }, [articleName, matchingName, selectedKnownName, parsed.articleCode])
 
+  // Prefill segment and division from this article code (division suggested from the code if unknown).
   useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !loading) onClose()
-    }
-    window.addEventListener('keydown', closeOnEscape)
-    return () => window.removeEventListener('keydown', closeOnEscape)
-  }, [loading, onClose])
+    let cancelled = false
+    getArticleDefaults(parsed.articleCode).then((d) => {
+      if (cancelled) return
+      if (d.segment) setSegment((cur) => cur || d.segment!)
+      if (d.division) { setDivision((cur) => cur || d.division!); setDivisionSuggested(d.divisionSuggested) }
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [parsed.articleCode])
+
+  // Esc: <DialogKeys> (focus returns to the opener).
 
   useEffect(() => {
     if (!warning && !errorMessage) return
@@ -109,9 +129,13 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, sav
         artName: articleName.trim(),
         colorName: colourName,
         sizesText: sizes.trim(),
+        segment,
+        division,
         addScannedSize,
         confirmWarnings,
-        notes,
+        flag,
+        sessionId,
+        clientEventId,
         saveScan,
       })
       if (result.ok) {
@@ -128,6 +152,8 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, sav
           DUPLICATE_QR: 'This QR code has already been scanned.',
           SIZES_REQUIRED: 'Enter at least one size before creating this article.',
           NAME_REQUIRED: 'Enter both an article name and a colour name.',
+          SEGMENT_REQUIRED: 'Choose the segment (Gents, Ladies, Kids or Baby).',
+          DIVISION_REQUIRED: 'Choose the division.',
           ALREADY_EXISTS: 'An article with this article code and colour code already exists.',
           FORBIDDEN: 'You do not have access to link this article.',
           INVALID_QR: 'This QR code format is not recognised.',
@@ -166,13 +192,14 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, sav
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
+      <DialogKeys onClose={() => { if (!loading) onClose() }} />
       <div role="dialog" aria-modal="true" aria-labelledby="new-article-title" className="w-full max-w-lg max-h-[92dvh] overflow-y-auto rounded-xl border bg-background p-5 shadow-lg sm:p-6">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <h2 id="new-article-title" className="text-lg font-semibold">New Article Detected</h2>
             <p className="mt-1 text-sm text-muted-foreground">Add article details or save this scan to finish later.</p>
           </div>
-          <button type="button" aria-label="Close (scan is saved without article details)" title="Close (scan is saved without article details)" disabled={loading} onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xl hover:bg-muted disabled:opacity-50">×</button>
+          <button type="button" aria-label={closeLabel} title={closeLabel} disabled={loading} onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xl hover:bg-muted disabled:opacity-50">×</button>
         </div>
 
         <div className="mb-5 grid grid-cols-2 gap-2 rounded-lg bg-muted/50 p-3">
@@ -199,10 +226,34 @@ export function NewArticleDialog({ rawQr, parsed, mode, existingName, notes, sav
             <Label htmlFor="new-article-colour">Colour name</Label>
             {colours.length === 0 ? <Input id="new-article-colour" autoFocus={isLockedName} value={otherColour} onChange={(event) => setOtherColour(event.target.value)} disabled={loading} className="h-12 text-base" placeholder="Enter colour name" /> : <select id="new-article-colour" autoFocus={isLockedName} value={colourChoice} disabled={loading} onChange={(event) => { setColourChoice(event.target.value); if (event.target.value !== '__other__') setOtherColour('') }} className="h-12 w-full rounded-lg border border-input bg-background px-3 text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <option value="">Choose a colour</option>
-              {colours.map((colour) => <option key={colour} value={colour}>{colour}</option>)}
+              {pendingColours.length > 0 && <optgroup label="No colour code yet (this article)">
+                {pendingColours.map((colour) => <option key={`p-${colour}`} value={colour}>{colour}</option>)}
+              </optgroup>}
+              <optgroup label={pendingColours.length > 0 ? 'Other colours' : 'Colours'}>
+                {colours.filter((colour) => !pendingColours.includes(colour)).map((colour) => <option key={colour} value={colour}>{colour}</option>)}
+              </optgroup>
               <option value="__other__">Other</option>
             </select>}
+            {pendingColours.includes(colourChoice) && <p className="text-xs text-muted-foreground">{`This colour is in the master without a colour code. Saving gives it code ${parsed.colorCode}.`}</p>}
+            {pendingColours.length > 0 && !colourChoice && <p className="text-xs text-amber-700 dark:text-amber-400">Colours under &quot;No colour code yet&quot; are waiting for their code. If this box is one of them, choose it.</p>}
             {colourChoice === '__other__' && <Input autoFocus value={otherColour} onChange={(event) => setOtherColour(event.target.value)} disabled={loading} className="h-12 text-base" placeholder="Enter colour name" />}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="new-article-segment">Segment</Label>
+            <select id="new-article-segment" value={segment} disabled={loading} onChange={(event) => setSegment(event.target.value)} className="h-12 w-full rounded-lg border border-input bg-background px-3 text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <option value="">Choose a segment</option>
+              {SEGMENTS.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="new-article-division">Division</Label>
+            <select id="new-article-division" value={division} disabled={loading} onChange={(event) => { setDivision(event.target.value); setDivisionSuggested(false) }} className="h-12 w-full rounded-lg border border-input bg-background px-3 text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <option value="">Choose a division</option>
+              {DIVISIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+            {divisionSuggested && division && <p className="text-xs text-muted-foreground">Suggested from the article code. Change it if this article is from another division.</p>}
           </div>
 
           {showSizes && (

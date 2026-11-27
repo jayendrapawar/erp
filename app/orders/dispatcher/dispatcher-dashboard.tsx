@@ -1,9 +1,12 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { sizeWithCode } from '@/lib/orders/size-label'
+import { useRef, useState, useTransition } from 'react'
+import { useListKeys } from '@/lib/shortcuts/list'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
 import { markDispatched, markDelivered, getOrderWithItems } from '@/app/actions/orders'
 import { PageNav } from '@/components/page-nav'
+import { DialogKeys } from '@/components/dialog-keys'
 
 interface DispatchOrder {
   id: number; orderNumber: string; shopkeeperName: string; shopkeeperPhone: string | null
@@ -23,6 +26,7 @@ interface DetailItem {
   artNumber: string
   colorNumber: string | null
   sizeNumber: string | null
+  artCode?: string | null
   quantityOrdered: number
   quantityPacked: number
   status: string
@@ -31,6 +35,9 @@ interface DetailItem {
 export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId = '', embedded }: Props) {
   const [orders, setOrders] = useState(initialOrders)
   const [isPending, startTransition] = useTransition()
+  // Keyboard: ↑↓ / j k rows, Enter opens (lib/shortcuts/list.ts).
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Dispatch list' })
   const [activeId, setActiveId] = useState<number | null>(null)
 
   // Pickup confirmation modal state
@@ -134,24 +141,25 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
 
         <div className="grid grid-cols-4 gap-3 mb-6">
           <StatCard label="Active" value={counts.active} />
-          <StatCard label="Ready" value={counts.billed} color="text-blue-600" />
-          <StatCard label="Out for Delivery" value={counts.dispatched} color="text-orange-600" />
-          <StatCard label="My Bundles" value={counts.myBundlesOut} color="text-orange-600" />
+          <StatCard label="Ready" value={counts.billed} color="text-blue-600 dark:text-blue-400" />
+          <StatCard label="Out for Delivery" value={counts.dispatched} color="text-orange-600 dark:text-orange-400" />
+          <StatCard label="My Bundles" value={counts.myBundlesOut} color="text-orange-600 dark:text-orange-400" />
         </div>
 
-        <div className="space-y-3">
+        <div ref={listRef} className="space-y-3">
           {orders.length === 0 && (
             <div className="text-center py-12 text-muted-foreground text-sm">No orders to dispatch 🎉</div>
           )}
           {orders.map(order => (
             <div
               key={order.id}
+              data-list-row
               onClick={() => handleViewOrder(order)}
               className="w-full text-left rounded-xl border border-border bg-card p-4 hover:bg-muted/30 transition-colors cursor-pointer"
             >
               <div className="flex items-start justify-between gap-2 mb-3">
                 <div>
-                  <p className="font-medium text-sm">{order.shopkeeperName}</p>
+                  <button type="button" data-row-open onClick={e => { e.stopPropagation(); handleViewOrder(order) }} className="rounded text-left font-medium text-sm hover:underline">{order.shopkeeperName}</button>
                   {order.shopkeeperPhone && (
                     <span className="text-xs text-primary">{order.shopkeeperPhone}</span>
                   )}
@@ -196,11 +204,12 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
       {/* ── Order detail panel ── */}
       {detailOrder && (
         <div
-          className="fixed inset-0 z-40 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
           onClick={() => setDetailOrder(null)}
         >
+          <DialogKeys onClose={() => setDetailOrder(null)} />
           <div
-            className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85vh] sm:max-h-none overflow-y-auto shadow-2xl rounded-t-2xl sm:rounded-none"
+            className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85dvh] sm:max-h-none overflow-y-auto pb-[env(safe-area-inset-bottom)] shadow-2xl rounded-t-2xl sm:rounded-none"
             onClick={e => e.stopPropagation()}
           >
             {/* Mobile drag handle */}
@@ -255,7 +264,7 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
                   <p className="px-4 py-6 text-sm text-muted-foreground text-center">Loading items…</p>
                 )}
                 {detailError && (
-                  <p className="px-4 py-4 text-sm text-red-600">{detailError}</p>
+                  <p role="alert" className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>
                 )}
                 {!detailLoading && !detailError && detailItems.length === 0 && (
                   <p className="px-4 py-6 text-sm text-muted-foreground text-center">No items found.</p>
@@ -313,7 +322,7 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
                                         key={item.id}
                                         className="inline-flex items-baseline gap-0.5 tabular-nums whitespace-nowrap"
                                       >
-                                        <span className="text-xs text-muted-foreground">{item.sizeNumber ?? '—'}</span>
+                                        <span className="text-xs text-muted-foreground">{sizeWithCode(item, items)}</span>
                                         <span className="text-[10px] text-muted-foreground/50 mx-px">/</span>
                                         {/* ord = salesman → always muted */}
                                         <span className="text-xs font-bold text-muted-foreground">{item.quantityOrdered}</span>
@@ -398,6 +407,7 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
       {/* Pickup confirmation modal */}
       {pickupModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <DialogKeys onClose={closePickupModal} />
           <div className="w-full max-w-sm rounded-2xl bg-background border border-border p-6 shadow-lg">
             <h2 className="text-base font-semibold mb-1">Confirm Pick Up</h2>
             <p className="text-xs text-muted-foreground mb-5">
@@ -442,7 +452,7 @@ export function DispatcherDashboard({ orders: initialOrders, currentDispatcherId
               >
                 Cancel
               </button>
-              <button
+              <button data-primary
                 onClick={handleConfirmPickup}
                 disabled={!canConfirm}
                 className="flex-1 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"

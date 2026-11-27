@@ -1,5 +1,6 @@
 'use client'
 
+import { ShopOrdersPanel } from '@/components/orders/shop-orders-panel'
 import { useState, useEffect } from 'react'
 import { PageNav } from '@/components/page-nav'
 import { SalesmanDashboard } from '../salesman/salesman-dashboard'
@@ -9,6 +10,7 @@ import { DispatcherDashboard } from '../dispatcher/dispatcher-dashboard'
 import type { CatalogueData } from '@/app/actions/catalogue'
 import type { BillingVendor } from '@/components/billing-scanner-page'
 import type { OrderSet } from '@/app/actions/sets'
+import { tablistKeyDown, useTabKeys } from '@/lib/shortcuts/tabs'
 
 interface Props {
   roles: string[]
@@ -39,14 +41,16 @@ function GridTabBar({ tabs, active, onChange }: { tabs: Tab[]; active: string; o
   return (
     <>
       {/* Mobile: segmented pill style arranged in grid / 2 rows */}
-      <div className="sm:hidden mb-5">
-        <div className={`grid ${mobileGrid} w-full items-center justify-center rounded-lg bg-muted p-[3px] gap-1 text-muted-foreground`}>
+      <div className="sm:hidden mb-4">
+        <div className={`grid ${mobileGrid} w-full items-center justify-center rounded-lg bg-muted p-[3px] gap-1 text-muted-foreground`} role="tablist" aria-label="Orders" onKeyDown={tablistKeyDown}>
           {tabs.map(tab => {
             const isActive = tab.value === active
             return (
               <button
                 key={tab.value}
                 type="button"
+                role="tab"
+                aria-selected={isActive}
                 onClick={() => onChange(tab.value)}
                 className={`inline-flex items-center justify-center whitespace-nowrap rounded-md border border-transparent px-2 py-2 text-xs font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   isActive
@@ -65,6 +69,9 @@ function GridTabBar({ tabs, active, onChange }: { tabs: Tab[]; active: string; o
         <div
           className="grid w-full items-center justify-center rounded-lg bg-muted p-[3px] text-muted-foreground"
           style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
+          role="tablist"
+          aria-label="Orders"
+          onKeyDown={tablistKeyDown}
         >
           {tabs.map(tab => {
             const isActive = active === tab.value
@@ -72,6 +79,8 @@ function GridTabBar({ tabs, active, onChange }: { tabs: Tab[]; active: string; o
               <button
                 key={tab.value}
                 type="button"
+                role="tab"
+                aria-selected={isActive}
                 onClick={() => onChange(tab.value)}
                 className={`inline-flex items-center justify-center whitespace-nowrap rounded-md border border-transparent px-2 py-1.5 text-sm font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   isActive
@@ -120,32 +129,46 @@ export function MultiRoleOrdersHub({
   const defaultTab = TABS[0]?.value || 'salesman'
   const [activeTab, setActiveTab] = useState(defaultTab)
 
+  // Tab from the address (#picker); the sidebar changes it without reloading the page.
   useEffect(() => {
-    const hash = window.location.hash.replace('#', '')
-    if (TABS.some(t => t.value === hash)) setActiveTab(hash)
+    const read = () => {
+      const hash = window.location.hash.replace('#', '')
+      if (TABS.some(t => t.value === hash)) setActiveTab(hash)
+    }
+    read()
+    window.addEventListener('hashchange', read)
+    return () => window.removeEventListener('hashchange', read)
   }, [])
 
   function handleTabChange(tab: string) {
     setActiveTab(tab)
     window.location.hash = tab
   }
+  // Keyboard: Alt+1…9 switch tabs (the biller's own tabs inside use Alt+Shift).
+  useTabKeys(TABS, handleTabChange, { group: 'Orders tabs' })
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-4xl mx-auto px-4 py-6">
+      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
         {/* Page header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-foreground">Order Hub</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Switch between your order roles</p>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-bold tracking-tight text-foreground">Orders<span className="hidden md:inline">{TABS.length > 1 ? ` · ${TABS.find(t => t.value === activeTab)?.label ?? ''}` : ''}</span></h1>
+            {TABS.length > 1 && (
+              <p className="hidden sm:block text-sm text-muted-foreground mt-0.5">Switch between your roles: orders, picking, billing, dispatch</p>
+            )}
           </div>
           <PageNav />
         </div>
 
-        <GridTabBar tabs={TABS} active={activeTab} onChange={handleTabChange} />
+        {/* Retailer shop orders waiting for staff: salesmen confirm them. */}
+        {hasSalesman && <ShopOrdersPanel />}
+
+        {/* Role tabs on phones only, and only with more than one role (one tab would be a dead button). */}
+        {TABS.length > 1 && <div className="md:hidden"><GridTabBar tabs={TABS} active={activeTab} onChange={handleTabChange} /></div>}
 
         {hasSalesman && activeTab === 'salesman' && (
-          <SalesmanDashboard orders={salesmanOrders} userName={userName} embedded catalogue={catalogue} sets={sets} pickers={pickers} />
+          <SalesmanDashboard orders={salesmanOrders} userName={userName} userId={currentPickerId} embedded catalogue={catalogue} sets={sets} pickers={pickers} />
         )}
 
         {hasPicker && activeTab === 'picker' && (
@@ -154,7 +177,7 @@ export function MultiRoleOrdersHub({
 
         {hasBiller && (
           <div className={activeTab === 'biller' ? '' : 'hidden'}>
-            <BillerDashboard orders={billerOrders} currentBillerId={currentBillerId} vendors={billingVendors} articles={catalogue.articles.map(a => a.artNumber)} embedded />
+            <BillerDashboard orders={billerOrders} currentBillerId={currentBillerId} vendors={billingVendors} articles={catalogue.articles.map(a => a.artNumber)} pickers={pickers} embedded />
           </div>
         )}
 

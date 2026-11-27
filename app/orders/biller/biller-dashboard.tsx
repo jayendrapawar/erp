@@ -1,21 +1,47 @@
 'use client'
 
+import { playAlreadyScanned, playScanOk } from '@/lib/scan-sound'
 import { useState, useTransition, useRef, useCallback, useEffect } from 'react'
 import jsQR from 'jsqr'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
-import { markBilled, getOrderWithItems, saveBillLines, getBillLines, createEmergencyBill, deleteEmergencyBill } from '@/app/actions/orders'
+import { getOrderWithItems, getBillLines, getBillsForPrint } from '@/app/actions/orders'
+import { billOrder, cancelBill } from '@/app/actions/billing'
 import { PageNav } from '@/components/page-nav'
-import { parseQr, isValidWarehouseQr } from '@/lib/qr-parser'
+import { parseQr, isValidWarehouseQr, normalizeQr } from '@/lib/qr-parser'
 import { SCAN_INTERVAL_MS } from '@/components/scanner/constants'
 import { articlesMatch } from '@/lib/billing-verification'
-import { printInvoices, type MrpLine, type PageSize, type BillType, type PrintConfig } from '@/lib/bill-html'
+import { openPrintWindow, printInvoices, type MrpLine, type PageSize, type PrintConfig } from '@/lib/bill-html'
+import { BillPreviewDialog } from '@/components/bill-preview-dialog'
+import { BillMailDialog } from '@/components/bill-mail-dialog'
+import { getBillTemplate } from '@/app/actions/bill-template'
+import type { BillTemplate } from '@/lib/bill-template'
 import { BillingScannerPage, type BillingVendor } from '@/components/billing-scanner-page'
+import { useShortcut } from '@/lib/shortcuts'
+import { useListKeys } from '@/lib/shortcuts/list'
+import { tablistKeyDown, tabProps, useTabKeys } from '@/lib/shortcuts/tabs'
+import { DialogKeys } from '@/components/dialog-keys'
+import { EditBillDialog } from '@/components/billing/edit-bill-dialog'
+import { BillDetailCard, PaidBadge } from '@/components/bill-detail-card'
+import { BillTypeChoice } from '@/components/bill-type-choice'
+import { DEFAULT_BILL_RATES, computeBillTotals, ratesBp, type TaxType } from '@/lib/billing/bill-totals'
+import { BillRatesFields, resolveRates, type RateEdits } from '@/components/bill-rates-fields'
+import { templateRates } from '@/lib/bill-template'
+import { amountsFromLines, formatRs, type BillAmounts } from '@/lib/billing/bill-amounts'
+
+// Two tabs (owner, 23 Nov 2026): Bills (orders to bill, incl. orders the admin sent straight to
+// billing) and Receipts. A bill without an order opens from the Direct bill button in the corner
+// (view 'emergency', kept mounted so its scans survive switching back and forth).
+const BILLER_TABS: { value: BillerTab; label: string }[] = [
+  { value: 'verify', label: 'Bills' }, { value: 'generated', label: 'Receipts' },
+]
 
 type BillerTab = 'verify' | 'emergency' | 'generated'
 
 interface BillerOrder {
   id: number
   orderNumber: string
+  /** Official bill number once billed (migration 0016). */
+  billNo?: string | null
   shopkeeperName: string
   shopkeeperPhone: string | null
   shopkeeperAddress: string | null
@@ -24,7 +50,16 @@ interface BillerOrder {
   billedAt: Date | null
   billerId: string | null
   salesmanId: string | null
+  /** Who picked it; none when nobody claimed it or was assigned (the biller names them when billing). */
+  pickerId?: string | null
   isEmergency: boolean
+  /** Pairs on the bill (billed orders; from the bill lines). */
+  billedPairs?: number | null
+  /** The retailer's bill type (the bill's default; getBillerQueue). */
+  taxType?: TaxType | null
+  /** Saved bill total and what is still unpaid on it (getBillerQueue; payments). */
+  billTotalPaise?: number | null
+  unpaidPaise?: number | null
 }
 
 interface Props {
@@ -33,6 +68,8 @@ interface Props {
   embedded?: boolean
   vendors?: BillingVendor[]
   articles?: string[]
+  /** Direct bill: who picked the goods (pickers and admins). */
+  pickers?: { id: string; name: string | null }[]
 }
 
 interface DetailItem {
@@ -40,23 +77,41 @@ interface DetailItem {
   artNumber: string
   colorNumber: string | null
   sizeNumber: string | null
+  /** Exact article code when the order saved it (one name can cover several codes with the same sizes). */
+  artCode?: string | null
   quantityOrdered: number
   quantityPacked: number
   status: string
 }
 
-// Per-item scan tally key: artNumber|sizeNumber
-function itemKey(artNumber: string, sizeNumber: string | null) {
-  return `${artNumber}|${sizeNumber ?? ''}`
+// Per-item scan tally key: artNumber|sizeNumber|artCode (code empty on older orders)
+function itemKey(artNumber: string, sizeNumber: string | null, artCode?: string | null) {
+  return `${artNumber}|${sizeNumber ?? ''}|${(artCode ?? '').toUpperCase()}`
 }
 
-export function BillerDashboard({ orders: initialOrders, currentBillerId = '', embedded, vendors = [], articles = [] }: Props) {
+export function BillerDashboard({ orders: initialOrders, currentBillerId = '', embedded, vendors = [], articles = [], pickers = [] }: Props) {
   const [orders, setOrders] = useState(initialOrders)
   const [isPending, startTransition] = useTransition()
   const [activeId, setActiveId] = useState<number | null>(null)
 
   // ── Tab state ────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<BillerTab>('verify')
+  // Keyboard (docs/architecture/keyboard.md): tabs Alt+1…3 (Alt+Shift inside the Orders hub), lists, Direct bill action.
+  const rootRef = useRef<HTMLDivElement>(null)
+  const verifyListRef = useRef<HTMLDivElement>(null)
+  const receiptsListRef = useRef<HTMLDivElement>(null)
+  const switchTab = (tab: string) => { setActiveTab(tab as BillerTab); setPrintSelectedIds(new Set()) }
+  useTabKeys(BILLER_TABS, switchTab, { nested: embedded, within: rootRef, group: 'Biller tabs' })
+  useShortcut([], () => switchTab('emergency'), { label: 'Direct bill', group: 'Biller', action: true, within: rootRef })
+  useListKeys(verifyListRef, { label: 'Invoices list' })
+  useListKeys(receiptsListRef, { label: 'Receipts list', tickable: true })
+  // Shop / bank / QR details for printed bills (Master → Bill template). One query on open.
+  const [billTemplate, setBillTemplate] = useState<BillTemplate | undefined>(undefined)
+  // Receipts: the bill being previewed (click a bill; print from the preview — owner, 21 Nov 2026)
+  const [previewOrder, setPreviewOrder] = useState<BillerOrder | null>(null)
+  // Receipts → Mail: the bills being emailed (PDF from the shop's Gmail)
+  const [mailOrderIds, setMailOrderIds] = useState<number[] | null>(null)
+  useEffect(() => { getBillTemplate().then((t) => { setBillTemplate(t); setPrintConfig(c => ({ ...c, pageSize: t.defaultPageSize })) }).catch(() => {}) }, [])
 
   // ── Print Bills state ────────────────────────────────────────────────────────
   const [printSelectedIds, setPrintSelectedIds] = useState<Set<number>>(new Set())
@@ -74,15 +129,25 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
   // Detail panel state
   const [detailOrder, setDetailOrder] = useState<BillerOrder | null>(null)
+  const [editBillOrder, setEditBillOrder] = useState<BillerOrder | null>(null)
   const [detailItems, setDetailItems] = useState<DetailItem[]>([])
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState('')
   // DB-fetched bill lines for detail panel (fallback when mrpLinesMap has no entry)
-  const [detailBillLines, setDetailBillLines] = useState<{ artNumber: string; mrp: number; qty: number; lineDiscPct: number }[] | null>(null)
+  // The billed order's lines and SAVED amounts (getBillsForPrint — the same numbers the printed bill shows).
+  const [detailBill, setDetailBill] = useState<{ lines: MrpLine[]; lineDiscPct: number; amounts: BillAmounts; unpaidPaise: number | null } | null>(null)
   const [detailBillLinesLoading, setDetailBillLinesLoading] = useState(false)
 
   // ── Scanner modal ────────────────────────────────────────────────────────────
   const [scanOrder, setScanOrder] = useState<BillerOrder | null>(null)
+  // Bill type of the bill being made (owner, 23 Nov 2026): starts from the retailer, changeable here.
+  const [billType, setBillType] = useState<TaxType>('intra_state')
+  // Bill discount / GST typed on this bill (owner, 24 Nov 2026); empty = the Master defaults.
+  const [rateEdits, setRateEdits] = useState<RateEdits>({})
+  useEffect(() => { if (scanOrder) { setBillType(scanOrder.taxType ?? 'intra_state'); setRateEdits({}); setBillPicker('') } }, [scanOrder?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  // No picker on the order: the biller chooses who picked it before saving (owner, 27 Nov 2026).
+  const [billPicker, setBillPicker] = useState('')
+  const needsBillPicker = !!scanOrder && !scanOrder.pickerId
   const [scanItems, setScanItems] = useState<DetailItem[]>([])
   // scannedMap: itemKey → scanned count
   const [scannedMap, setScannedMap] = useState<Record<string, number>>({})
@@ -264,19 +329,45 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     scanMsgTimer.current = setTimeout(() => setScanMsg(null), 3000)
   }
 
-  // ── audio / haptic ───────────────────────────────────────────────────────────
-  function triggerFeedback() {
-    try {
-      const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
-      const osc = ctx.createOscillator(); const gain = ctx.createGain()
-      osc.connect(gain); gain.connect(ctx.destination)
-      osc.type = 'sine'; osc.frequency.setValueAtTime(1046, ctx.currentTime)
-      gain.gain.setValueAtTime(0.3, ctx.currentTime)
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15)
-      osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.15)
-      osc.onended = () => ctx.close()
-    } catch { /* ignore */ }
-    try { if (navigator.vibrate) navigator.vibrate(60) } catch { /* ignore */ }
+  // ── Direct bill from an order: extra boxes (not ordered / more than ordered) are billed too ──
+  const scanDirect = !!scanOrder?.isEmergency
+  const scanDirectRef = useRef(false)
+  useEffect(() => { scanDirectRef.current = scanDirect }, [scanDirect])
+  function addExtraScan(raw: string, art: string, size: string, why: string) {
+    setScannedQrs(prev => [...prev, raw])
+    // key "extra:…": Undo removes the box without touching the per-line counts.
+    setScanHistory(prev => [...prev, { type: 'qr', key: `extra:${art}|${size}`, raw, label: `${art} / SZ(${size}) — extra` }])
+    playScanOk()
+    showMsg('warn', `${art} Sz ${size} — ${why}; billed as an extra`)
+  }
+
+  /** Order vs scanned for a Direct bill: pairs received per order line, short lines, extra boxes. */
+  function directDiff() {
+    const groups = new Map<string, DetailItem[]>()
+    for (const i of scanItems) { const k = itemKey(i.artNumber, i.sizeNumber, i.artCode); groups.set(k, [...(groups.get(k) ?? []), i]) }
+    const packed: { itemId: number; qty: number }[] = []
+    const short: { label: string; ordered: number; got: number }[] = []
+    for (const [k, items] of groups) {
+      let left = scannedMap[k] ?? 0
+      const ordered = items.reduce((t, i) => t + i.quantityOrdered, 0)
+      const got = Math.min(left, ordered)
+      for (const i of items) { const q = Math.min(left, i.quantityOrdered); left -= q; packed.push({ itemId: i.id, qty: q }) }
+      if (got < ordered) short.push({ label: `${items[0].artNumber} size ${items[0].sizeNumber ?? '—'}`, ordered, got })
+    }
+    const extraMap = new Map<string, number>()
+    for (const a of scanHistory) {
+      if (a.type !== 'qr' || !a.key.startsWith('extra:')) continue
+      const label = a.key.slice(6).replace('|', ' size ')
+      extraMap.set(label, (extraMap.get(label) ?? 0) + 1)
+    }
+    return { packed, short, extra: [...extraMap].map(([label, qty]) => ({ label, qty })) }
+  }
+  const [directDiffShown, setDirectDiffShown] = useState<ReturnType<typeof directDiff> | null>(null)
+  /** Save a Direct bill: when it differs from the order, ask first (keep the changes or adjust). */
+  function handleDirectSave() {
+    const d = directDiff()
+    if (d.short.length || d.extra.length) setDirectDiffShown(d)
+    else handleSaveBill()
   }
 
   // ── handle a decoded QR string ───────────────────────────────────────────────
@@ -302,22 +393,31 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     const candidates = scanItemsRef.current.filter(i => {
       const iArt  = i.artNumber.toUpperCase()
       const iSize = (i.sizeNumber ?? '').toUpperCase()
-      return articlesMatch(iArt, art) && iSize === size
+      // A line with a saved article code must match the box's code exactly (SS0101C 11 ≠ SS0101S 11).
+      const sameArticle = i.artCode ? i.artCode.toUpperCase().replace(/[^A-Z0-9]/g, '') === art.replace(/[^A-Z0-9]/g, '') : articlesMatch(iArt, art)
+      return sameArticle && iSize === size
     })
 
     if (candidates.length === 0) {
+      if (scanDirectRef.current) {
+        if (scannedQrsRef.current.some(q => normalizeQr(q) === parsed.normalized)) { showMsg('warn', `${art} Sz ${size} — Duplicate QR, already scanned` + devSuffix); playAlreadyScanned(); return }
+        addExtraScan(raw, art, size, 'not in this order')
+        return
+      }
       showMsg('warn', `${art} Sz ${size} — Not in this order` + devSuffix)
       return
     }
 
     // Duplicate QR check — compare full normalized QR string to avoid false
     // positives from boxes that share a common last segment suffix.
-    const normalizedRaw = raw.trim().toUpperCase()
+    // Normalised payload: a URL-wrapped phone scan and a plain scan of one box are the same box.
+    const normalizedRaw = parsed.normalized
     const alreadyScanned = scannedQrsRef.current.some(
-      q => q.trim().toUpperCase() === normalizedRaw
+      q => normalizeQr(q) === normalizedRaw
     )
     if (alreadyScanned) {
       showMsg('warn', `${art} Sz ${size} — Duplicate QR, already scanned` + devSuffix)
+      playAlreadyScanned()
       return
     }
 
@@ -330,10 +430,11 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     // counter for all of them. Compute total packed capacity across the pool so
     // that e.g. FL02 RED sz:7 (packed=1) + FL02 GREY sz:7 (packed=1) allows 2
     // scans total — color is irrelevant until color validation is added.
-    const sharedKey  = itemKey(candidates[0].artNumber, candidates[0].sizeNumber)
+    const sharedKey  = itemKey(candidates[0].artNumber, candidates[0].sizeNumber, candidates[0].artCode)
     const current    = scannedMapRef.current[sharedKey] ?? 0
     const totalCap   = candidates.reduce((sum, i) => sum + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0)
 
+    if (current >= totalCap && scanDirectRef.current) { addExtraScan(raw, art, size, `more than ordered (${totalCap})`); return }
     if (current >= totalCap) {
       showMsg('warn', `${art} Size : ${size} — Already fully scanned (${totalCap} pkd)` + devSuffix)
       return
@@ -353,7 +454,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       { type: 'qr', key, raw, label: `${extArt} / SZ(${extSize})` }
     ])
     setLastScannedMsg(successText)
-    triggerFeedback()
+    playScanOk()
     showMsg('ok', successText + devSuffix)
   }
 
@@ -489,7 +590,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     if (!isSameOrder || scanItems.length === 0) {
       try {
         const data = await getOrderWithItems(order.id)
-        setScanItems(data.items as DetailItem[])
+        const items = data.items as DetailItem[]
+        // Direct bill from an order (no picker): scans count against the ORDERED pairs.
+        setScanItems(order.isEmergency ? items.map(i => ({ ...i, quantityPacked: i.quantityOrdered, status: 'packed' })) : items)
       } catch {
         setScanItems([])
       }
@@ -517,7 +620,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     const price = typeof manualPrice === 'number' && manualPrice > 0 ? manualPrice : 0
     if (qty <= 0 || price <= 0) return
 
-    const key = itemKey(manualTarget.item.artNumber, manualTarget.item.sizeNumber)
+    const key = itemKey(manualTarget.item.artNumber, manualTarget.item.sizeNumber, manualTarget.item.artCode)
 
     if (manualTarget.isEdit) {
       // Edit mode: replace all existing manual entries for this key with new single entry.
@@ -675,10 +778,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     }
   }
 
-  // ── save bill ────────────────────────────────────────────────────────────────
-  function handleSaveBill() {
-    if (!scanOrder) return
-    const orderId  = scanOrder.id
+  /** The bill lines the scans and manual entries make (canonical article names, one line per article + MRP). */
+  function buildScannedLines(qrs: string[], items: DetailItem[]): MrpLine[] {
     // Build MrpLine[] from scannedQrs before clearing scanner state.
     // Use the canonical article name from scanItems (matched via articlesMatch)
     // so that QR code variants (e.g. "SF0204G") are normalised to the registered
@@ -686,14 +787,13 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     // Stable map key: canonical-article-name + MRP rounded to 2dp (avoids float string mismatches)
     const mrpKey = (art: string, mrp: number) => `${art}__${mrp.toFixed(2)}`
 
-    const qrsCopy  = [...scannedQrs]
     const mrpMap   = new Map<string, MrpLine>()
 
     // ── QR scans → resolve canonical article name from DB order items ──────────
-    for (const raw of qrsCopy) {
+    for (const raw of qrs) {
       if (!isValidWarehouseQr(raw)) continue
       const p = parseQr(raw)
-      const canonicalItem = scanItemsRef.current.find(i =>
+      const canonicalItem = items.find(i =>
         articlesMatch(i.artNumber.toUpperCase(), p.articleCode.toUpperCase())
       )
       const artName = canonicalItem ? canonicalItem.artNumber.toUpperCase() : p.articleCode.toUpperCase()
@@ -733,7 +833,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       )
       if (existing) {
         // Keep the DB canonical name (prefer the one that has a dash or matches scanItems)
-        const canonicalItem = scanItemsRef.current.find(i =>
+        const canonicalItem = items.find(i =>
           articlesMatch(i.artNumber.toUpperCase(), existing.artNumber) ||
           articlesMatch(i.artNumber.toUpperCase(), line.artNumber)
         )
@@ -744,18 +844,39 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       }
     }
 
-    const builtLines = merged
+    return merged
+  }
+
+  // ── save bill ────────────────────────────────────────────────────────────────
+  function handleSaveBill() {
+    if (!scanOrder) return
+    const orderId  = scanOrder.id
+    const qrsCopy  = [...scannedQrs]
+    // Direct bill from an order: pairs received per order line (scans fill lines in order).
+    const packedForSave = scanOrder.isEmergency ? directDiff().packed : null
+    const builtLines = buildScannedLines(qrsCopy, scanItemsRef.current)
     setMrpLinesMap(prev => ({ ...prev, [orderId]: builtLines }))
 
     const discPct = typeof lineDiscPct === 'number' ? lineDiscPct : 30
-    closeScanner()
+    const pickerChoice = !scanOrder.pickerId ? billPicker : ''
+    if (!scanOrder.pickerId && !pickerChoice) { showMsg('err', 'Choose who picked the goods.'); return }
     setActiveId(orderId)
     startTransition(async () => {
-      await markBilled(orderId)
-      // Persist bill lines to DB so they survive across sessions and devices
-      await saveBillLines(orderId, builtLines, discPct)
+      // Bills the order, saves its lines and takes the scanned boxes out of stock (one transaction).
+      // On failure (e.g. a box is already on another bill) the scanner stays open with its scans.
+      let billed: Awaited<ReturnType<typeof billOrder>>
+      try {
+        const rated = resolveRates(billType, billTemplate ? templateRates(billTemplate) : DEFAULT_BILL_RATES, rateEdits)
+        if (rated.error) { setActiveId(null); showMsg('err', rated.error); return }
+        billed = await billOrder(orderId, qrsCopy, builtLines, discPct, { taxType: billType, ...(rated.changed ? { rates: rated.rates } : {}), ...(packedForSave ? { packed: packedForSave } : {}), ...(pickerChoice ? { pickerId: pickerChoice } : {}) })
+      } catch (e) {
+        setActiveId(null)
+        showMsg('err', e instanceof Error ? e.message : 'Could not save the bill. Try again.')
+        return
+      }
+      closeScanner()
       setOrders(prev =>
-        prev.map(o => o.id === orderId ? { ...o, status: 'billed', billerId: currentBillerId, billedAt: new Date() } : o)
+        prev.map(o => o.id === orderId ? { ...o, status: 'billed', billNo: billed.billNo, billerId: currentBillerId, billedAt: new Date(), pickerId: o.pickerId ?? (pickerChoice || null) } : o)
       )
       setActiveId(null)
       // After saving, switch to Generated Bills tab
@@ -803,37 +924,61 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
   async function confirmPrint() {
     const LINE_DISC = lineDiscPct === '' ? 30 : Number(lineDiscPct)
-    const bills = pendingPrintOrders.map(o => ({
-      vendor: {
-        name:    o.shopkeeperName,
-        phone:   o.shopkeeperPhone   ?? null,
-        address: o.shopkeeperAddress ?? null,
-      },
-      order:  { orderNumber: o.orderNumber, billedAt: o.billedAt },
-      lines:  mrpLinesMap[o.id] ?? [],
-      lineDiscPct: LINE_DISC,
-    }))
+    const orders = pendingPrintOrders
     setPrintConfigOpen(false)
-    await printInvoices(bills, printConfig)
+    // Open the window inside the click: browsers block windows opened after a wait (owner reported
+    // Print not working, 21 Nov 2026). Then load every selected bill's saved lines and amounts (ONE
+    // query) — the saved bill is what prints, with its own discount, GST and total — and fill the window.
+    const win = openPrintWindow()
+    if (!win) return
+    try {
+      const saved = await getBillsForPrint(orders.map(o => o.id))
+      const bills = orders.map((o) => {
+        const s = saved[o.id]
+        const lines = s && s.lines.length > 0 ? s.lines : (mrpLinesMap[o.id] ?? [])
+        return {
+          vendor: { name: o.shopkeeperName, phone: o.shopkeeperPhone ?? null, address: o.shopkeeperAddress ?? null },
+          order:  { orderNumber: o.orderNumber, billNo: o.billNo, billedAt: o.billedAt },
+          lines,
+          lineDiscPct: s?.lineDiscPct ?? LINE_DISC,
+          amounts: s?.amounts ?? undefined,
+        }
+      })
+      const empty = bills.filter(b => b.lines.length === 0).map(b => b.order.orderNumber)
+      const printable = bills.filter(b => b.lines.length > 0)
+      if (printable.length === 0) { win.close(); window.alert(`No bill lines found for ${empty.join(', ')}.`); return }
+      if (empty.length) window.alert(`Not printed (no bill lines): ${empty.join(', ')}`)
+      await printInvoices(printable, printConfig, billTemplate, win)
+    } catch (e) {
+      win.close()
+      window.alert(`Could not prepare the bill: ${e instanceof Error ? e.message : 'network problem'}. Try again.`)
+    }
   }
 
-  // ── Mail selected bills as mailto: link ─────────────────────────────────────
+  // ── Mail selected bills: PDF each, from the shop's Gmail (owner, 21 Nov 2026) ──
   function handleMailBills(selectedOrders: BillerOrder[]) {
-    const subject = encodeURIComponent('Bills — Shayona Shoe Palace')
-    const bodyLines: string[] = ['Please find the bill details below:', '']
-    selectedOrders.forEach(o => {
-      const items = printItemsMap[o.id] ?? []
-      const totalPairs = items.reduce((s: number, i: DetailItem) => s + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0)
-      const billedStr = o.billedAt ? new Date(o.billedAt).toLocaleDateString('en-IN') : '—'
-      bodyLines.push(`Order: ${o.orderNumber}`)
-      bodyLines.push(`Party: ${o.shopkeeperName}`)
-      bodyLines.push(`Date : ${billedStr}`)
-      bodyLines.push(`Pairs: ${totalPairs}`)
-      bodyLines.push('---')
+    if (selectedOrders.length) setMailOrderIds(selectedOrders.map(o => o.id))
+  }
+
+  // Cancel bill (bills are never deleted, owner 23 Nov 2026): asks why, then 1 server call.
+  // Returns false when the biller backs out, so the caller keeps its panel open.
+  function confirmCancelBill(order: BillerOrder): boolean {
+    const id = order.id
+    const reason = window.prompt(`Cancel bill ${order.billNo ?? order.orderNumber}? Its boxes go back to stock and the party no longer owes it.
+
+Why is it cancelled?`)
+    if (reason === null) return false
+    if (reason.trim().length < 3) { window.alert('Type why the bill is cancelled.'); return false }
+    startTransition(async () => {
+      try {
+        await cancelBill(id, reason)
+        setOrders(prev => prev.filter(o => o.id !== id))
+        setMrpLinesMap(prev => { const next = { ...prev }; delete next[id]; return next })
+      } catch (e) {
+        window.alert(`Could not cancel the bill: ${e instanceof Error ? e.message : 'network problem'}`)
+      }
     })
-    bodyLines.push('', 'Shayona Shoe Palace')
-    const body = encodeURIComponent(bodyLines.join('\n'))
-    window.location.href = `mailto:?subject=${subject}&body=${body}`
+    return true
   }
 
   // ── detail panel ─────────────────────────────────────────────────────────────
@@ -841,34 +986,29 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     setDetailOrder(order)
     setDetailItems([])
     setDetailError('')
-    setDetailBillLines(null)
+    setDetailBill(null)
     setDetailLoading(true)
-    try {
-      const { items } = await getOrderWithItems(order.id)
-      setDetailItems(items as DetailItem[])
-    } catch (e: unknown) {
-      setDetailError(e instanceof Error ? e.message : 'Failed to load order details.')
-    } finally {
-      setDetailLoading(false)
-    }
-    // Fetch bill lines from DB if not already in session mrpLinesMap
-    if (order.status === 'billed' && !mrpLinesMap[order.id]) {
-      setDetailBillLinesLoading(true)
+    const billed = order.status === 'billed'
+    setDetailBillLinesLoading(billed)
+    // The order's items and (billed) its saved bill, side by side.
+    const items = getOrderWithItems(order.id)
+      .then(({ items }) => setDetailItems(items as DetailItem[]))
+      .catch((e: unknown) => setDetailError(e instanceof Error ? e.message : 'Failed to load order details.'))
+      .finally(() => setDetailLoading(false))
+    if (billed) {
       try {
-        const rows = await getBillLines(order.id)
-        if (rows.length > 0) {
+        const bill = (await getBillsForPrint([order.id]))[order.id]
+        if (bill && bill.lines.length > 0) {
+          const disc = bill.lineDiscPct ?? 30
           // Cache into mrpLinesMap so print/mail also picks it up
-          setMrpLinesMap(prev => ({ ...prev, [order.id]: rows }))
-          setDetailBillLines(rows)
-        } else {
-          setDetailBillLines([])
+          setMrpLinesMap(prev => ({ ...prev, [order.id]: bill.lines }))
+          setDetailBill({ lines: bill.lines, lineDiscPct: disc, amounts: bill.amounts ?? amountsFromLines(bill.lines, disc, 'intra_state'), unpaidPaise: bill.unpaidPaise })
         }
-      } catch {
-        setDetailBillLines([])
-      } finally {
+      } catch { /* shown as "Bill data not available" */ } finally {
         setDetailBillLinesLoading(false)
       }
     }
+    await items
   }
 
   // ── scan validation ──────────────────────────────────────────────────────────
@@ -880,7 +1020,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     const keyTotals = new Map<string, number>()
     for (const item of scanItems) {
       if (item.status === 'out_of_stock') continue
-      const key = itemKey(item.artNumber, item.sizeNumber)
+      const key = itemKey(item.artNumber, item.sizeNumber, item.artCode)
       keyTotals.set(key, (keyTotals.get(key) ?? 0) + item.quantityPacked)
     }
     for (const [key, totalPacked] of keyTotals) {
@@ -912,19 +1052,27 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     const artMap = new Map<string, Map<string, DetailItem[]>>()
     for (const item of scanItems) {
       if (!artMap.has(item.artNumber)) artMap.set(item.artNumber, new Map())
-      const sizeKey = item.sizeNumber ?? '—'
+      const sizeKey = `${item.sizeNumber ?? '—'}|${(item.artCode ?? '').toUpperCase()}`
       if (!artMap.get(item.artNumber)!.has(sizeKey)) artMap.get(item.artNumber)!.set(sizeKey, [])
       artMap.get(item.artNumber)!.get(sizeKey)!.push(item)
     }
-    return Array.from(artMap.entries()).map(([artNumber, sizeMap]) => ({
-      artNumber,
-      sizeGroups: Array.from(sizeMap.entries()).map(([size, items]) => ({ size, items })),
-    }))
+    return Array.from(artMap.entries()).map(([artNumber, sizeMap]) => {
+      const groups = Array.from(sizeMap.entries()).map(([k, items]) => ({ label: k.split('|')[0], code: k.split('|')[1], items }))
+      return {
+        artNumber,
+        sizeGroups: groups.map(g => ({
+          size: groups.filter(x => x.label === g.label).length > 1 && g.code ? `${g.label} (${g.code})` : g.label,
+          items: g.items,
+        })),
+      }
+    })
   })()
 
   // ── Derived lists ────────────────────────────────────────────────────────────
   const verifyOrders = orders.filter(o => o.status === 'packed')
+  // Newest bill first (owner, 24 Nov 2026).
   const billedOrders = orders.filter(o => o.status === 'billed')
+    .sort((a, b) => (b.billedAt ? new Date(b.billedAt).getTime() : 0) - (a.billedAt ? new Date(a.billedAt).getTime() : 0) || b.id - a.id)
 
   const counts = {
     total:   orders.length,
@@ -934,8 +1082,10 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   }
 
   return (
-    <div className={embedded ? '' : 'min-h-screen bg-background'}>
-      <div className={embedded ? '' : 'max-w-2xl mx-auto px-4 py-6'}>
+    // Room for the ticked-bills bar so it never covers the last bills (phone menu room is kept by the menu itself).
+    <div ref={rootRef} className={`${embedded ? '' : 'min-h-screen bg-background'}${activeTab === 'generated' && printSelectedIds.size > 0 ? ' pb-20 md:pb-24' : ''}`}>
+      {/* Direct Billing needs room for the bill beside the scanner: wider page on that tab. */}
+      <div className={embedded ? '' : `${activeTab === 'emergency' ? 'max-w-6xl' : 'max-w-2xl'} mx-auto px-4 py-6`}>
         {!embedded && (
           <div className="flex items-center justify-between mb-6">
             <PageHeader title="Biller Dashboard" subtitle="Verify packed orders and generate bills" />
@@ -943,65 +1093,82 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
           </div>
         )}
 
-        <div className="grid grid-cols-4 gap-3 mb-6">
+        {/* Counts are hidden while making a direct bill: only the bill matters then (owner, 21 Nov 2026). */}
+        <div className={`grid grid-cols-4 gap-3 mb-6 ${activeTab === 'emergency' ? 'hidden' : ''}`}>
           <StatCard label="Total"     value={counts.total} />
-          <StatCard label="To Verify" value={counts.packed}  color="text-purple-600" />
-          <StatCard label="Billed"    value={counts.billed}  color="text-blue-600" />
-          <StatCard label="My Bills"  value={counts.myBills} color="text-blue-600" />
+          <StatCard label="To Verify" value={counts.packed}  color="text-purple-600 dark:text-purple-400" />
+          <StatCard label="Billed"    value={counts.billed}  color="text-blue-600 dark:text-blue-400" />
+          <StatCard label="My Bills"  value={counts.myBills} color="text-blue-600 dark:text-blue-400" />
         </div>
 
-        {/* ── Tabs ── */}
-        <div className="flex rounded-xl border border-border bg-muted/40 p-1 mb-4 gap-1">
-          {/* Invoices */}
-          {(['verify', 'emergency', 'generated'] as BillerTab[]).map(tab => (
+        {/* ── Tabs + Direct bill (corner) ── */}
+        {activeTab === 'emergency' ? (
+          <div className="mb-4 flex items-center justify-between gap-2">
+            <button type="button" onClick={() => switchTab('verify')} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted">← Bills</button>
+            <p className="text-sm font-bold">⚡ Direct bill <span className="font-normal text-muted-foreground">(no order)</span></p>
+          </div>
+        ) : (
+        <div className="mb-4 flex items-stretch gap-2">
+        <div role="tablist" aria-label="Biller" onKeyDown={tablistKeyDown} className="flex flex-1 rounded-xl border border-border bg-muted/40 p-1 gap-1">
+          {(['verify', 'generated'] as BillerTab[]).map(tab => (
             <button
               key={tab}
               type="button"
-              onClick={() => { setActiveTab(tab); setPrintSelectedIds(new Set()) }}
+              {...tabProps(activeTab === tab)}
+              onClick={() => switchTab(tab)}
               className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-colors ${
                 activeTab === tab
-                  ? tab === 'emergency'
-                    ? 'bg-red-600 text-white shadow-sm'
-                    : 'bg-background text-foreground shadow-sm'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              {tab === 'verify' ? 'Invoices' : tab === 'emergency' ? '🚨 Emergency' : 'Receipts'}
-              {tab !== 'emergency' && (
+              {tab === 'verify' ? 'Bills' : 'Receipts'}
+              {
                 <span className={`inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums ${
-                  activeTab === tab ? 'bg-foreground text-background' : 'bg-muted-foreground/20 text-muted-foreground'
+                  activeTab === tab ? 'bg-primary-foreground/25 text-primary-foreground' : 'bg-muted-foreground/20 text-muted-foreground'
                 }`}>
                   {tab === 'verify' ? counts.packed : counts.billed}
                 </span>
-              )}
+              }
             </button>
           ))}
         </div>
+          <button type="button" onClick={() => switchTab('emergency')} title="Direct bill — a bill without an order"
+            aria-label="Direct bill (a bill without an order)"
+            className="shrink-0 inline-flex items-center gap-1 rounded-xl border border-border bg-card px-3 text-xs font-semibold hover:bg-muted">
+            <span aria-hidden>⚡</span><span className="hidden sm:inline">Direct bill</span>
+          </button>
+        </div>
+        )}
 
-        {/* ── Verify Orders tab ── */}
+        {/* ── Bills tab (orders to bill) ── */}
         {activeTab === 'verify' && (
-          <div className="space-y-3">
+          <div ref={verifyListRef} className="space-y-3">
             {verifyOrders.length === 0 && (
-              <div className="text-center py-12 text-muted-foreground text-sm">No orders to verify 🎉</div>
+              <div className="text-center py-12 text-muted-foreground text-sm">No orders to bill 🎉</div>
             )}
             {verifyOrders.map(order => {
               const isProcessing = isPending && activeId === order.id
               return (
                 <div
                   key={order.id}
+                  data-list-row
                   onClick={() => handleViewOrder(order)}
                   className="w-full text-left rounded-xl border border-border bg-card p-4 hover:bg-muted/30 transition-colors cursor-pointer"
                 >
                   <div className="flex items-start justify-between gap-2 mb-3">
                     <div>
-                      <p className="font-medium text-sm">{order.shopkeeperName}</p>
+                      <button type="button" data-row-open onClick={e => { e.stopPropagation(); handleViewOrder(order) }} className="rounded text-left font-medium text-sm hover:underline">{order.shopkeeperName}</button>
                       <p className="font-mono text-xs text-muted-foreground mt-0.5">{order.orderNumber}</p>
                     </div>
-                    <StatusPill status={order.status} />
+                    <div className="flex items-center gap-1.5">
+                      {order.isEmergency && <DirectBillBadge />}
+                      <StatusPill status={order.status} />
+                    </div>
                   </div>
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-xs text-muted-foreground">Packed: {fmt(order.packedAt)}</p>
+                      <p className="text-xs text-muted-foreground">{order.isEmergency ? 'Sent to billing' : 'Packed'}: {fmt(order.packedAt)}</p>
                     </div>
                     <div onClick={e => e.stopPropagation()}>
                       <button
@@ -1010,7 +1177,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                         disabled={isProcessing}
                         className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
                       >
-                        {isProcessing ? '…' : 'Scan Items'}
+                        {isProcessing ? '…' : order.isEmergency ? 'Direct bill' : 'Scan Items'}
                       </button>
                     </div>
                   </div>
@@ -1020,37 +1187,36 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
           </div>
         )}
 
-        {/* ── Emergency Bill tab — always mounted to preserve scan state across tab switches ── */}
+        {/* ── Direct Billing tab (formerly Emergency) — always mounted to preserve scan state across tab switches ── */}
         <div className={activeTab === 'emergency' ? '' : 'hidden'}>
-          <div className="rounded-xl border border-red-200 dark:border-red-800">
-            <div className="p-4">
+          <div>
+            <div>
               <BillingScannerPage
                 vendors={vendors}
                 articles={articles}
+                pickers={pickers}
+                rateDefaults={billTemplate ? templateRates(billTemplate) : undefined}
                 embedded
-                onBillSaved={async (data) => {
-                  const result = await createEmergencyBill(data)
+                onBillGenerated={(data) => {
                   const newOrder: BillerOrder = {
-                    id:                result.id,
-                    orderNumber:       result.orderNumber,
+                    id:                data.id,
+                    orderNumber:       data.orderNumber,
+                    billNo:            data.billNo,
                     shopkeeperName:    data.shopkeeperName,
                     shopkeeperPhone:   data.shopkeeperPhone,
                     shopkeeperAddress: data.shopkeeperAddress,
                     status:            'billed',
                     packedAt:          null,
-                    billedAt:          new Date(),
+                    billedAt:          new Date(data.billedAt),
                     billerId:          currentBillerId,
                     salesmanId:        null,
                     isEmergency:       true,
                   }
                   setOrders(prev => [newOrder, ...prev])
-                  setMrpLinesMap(prev => ({
-                    ...prev,
-                    [result.id]: data.lines.map(l => ({ artNumber: l.artNumber, mrp: l.mrp, qty: l.qty })),
-                  }))
-                  // Pre-mark as loaded (no orderItems for emergency bills) and auto-select for print
-                  setPrintItemsMap(prev => ({ ...prev, [result.id]: [] }))
-                  setPrintSelectedIds(prev => new Set([...prev, result.id]))
+                  setMrpLinesMap(prev => ({ ...prev, [data.id]: data.lines }))
+                  // Pre-mark as loaded (no orderItems for Direct Bills) and auto-select for print
+                  setPrintItemsMap(prev => ({ ...prev, [data.id]: [] }))
+                  setPrintSelectedIds(prev => new Set([...prev, data.id]))
                   setActiveTab('generated')
                 }}
               />
@@ -1100,7 +1266,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                         <svg className="w-4 h-4 text-muted-foreground shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                         </svg>
-                        <h2 className="text-sm font-semibold text-foreground">Select Bills to Print</h2>
+                        <h2 className="text-sm font-semibold text-foreground">Receipts</h2>
+                        <span className="hidden text-xs text-muted-foreground sm:inline">· click a bill to see and print it</span>
                         {printSelectedIds.size > 0 && (
                           <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
                             {printSelectedIds.size}
@@ -1118,19 +1285,21 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   </div>
 
                   {/* Rows */}
-                  <div className="divide-y divide-border">
+                  <div ref={receiptsListRef} className="divide-y divide-border">
                     {billedOrders.map(order => {
                       const checked = printSelectedIds.has(order.id)
                       const loading = printLoadingIds.has(order.id)
                       // For emergency bills: use qty from mrpLinesMap (no orderItems); for normal bills: use packed qty from printItemsMap
-                      const pairs = order.isEmergency
+                      // Pairs on the bill, shown on every row (owner, 24 Nov 2026); the bill lines are the record.
+                      const pairs = order.billedPairs ?? (order.isEmergency
                         ? (mrpLinesMap[order.id]?.reduce((s, l) => s + l.qty, 0) ?? null)
-                        : (printItemsMap[order.id]?.reduce((s, i) => s + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0) ?? null)
+                        : (printItemsMap[order.id]?.reduce((s, i) => s + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0) ?? null))
 
                       return (
                         <div
                           key={order.id}
-                          onClick={() => handleViewOrder(order)}
+                          data-list-row
+                          onClick={() => setPreviewOrder(order)}
                           className={`flex items-center gap-3 px-3 py-3 sm:px-4 cursor-pointer transition-colors ${
                             checked ? 'bg-primary/5' : 'hover:bg-muted/30 active:bg-muted/50'
                           }`}
@@ -1138,7 +1307,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                           {/* Checkbox — click is independent from row, does NOT open preview */}
                           <button
                             type="button"
-                            aria-label={checked ? 'Deselect for print' : 'Select for print'}
+                            aria-label={checked ? 'Deselect for mail' : 'Select for mail'}
+                            aria-pressed={checked}
+                            data-row-tick
                             onClick={e => { e.stopPropagation(); handleTogglePrintBill(order) }}
                             className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                               checked ? 'border-primary bg-primary' : 'border-border bg-background hover:border-primary/60'
@@ -1154,14 +1325,11 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                           {/* Text — clicking opens detail preview */}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5">
-                              <p className="text-sm font-medium text-foreground truncate leading-snug">{order.shopkeeperName}</p>
-                              {order.isEmergency && (
-                                <span className="shrink-0 inline-flex items-center rounded-full bg-red-100 dark:bg-red-900/30 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-red-700 dark:text-red-400">
-                                  🚨 Emergency
-                                </span>
-                              )}
+                              <button type="button" data-row-open onClick={e => { e.stopPropagation(); setPreviewOrder(order) }} className="min-w-0 truncate rounded text-left text-sm font-medium text-foreground leading-snug hover:underline">{order.shopkeeperName}</button>
+                              {order.isEmergency && <DirectBillBadge />}
                             </div>
                             <div className="flex items-center gap-2 mt-0.5">
+                              {order.billNo && <span className="text-[11px] font-bold text-foreground">{`Bill ${order.billNo}`}</span>}
                               <span className="font-mono text-[11px] text-muted-foreground">{order.orderNumber}</span>
                               <span className="text-[11px] text-muted-foreground">·</span>
                               <span className="text-[11px] text-muted-foreground">{fmt(order.billedAt)}</span>
@@ -1176,12 +1344,13 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
                               </svg>
                             )}
-                            {checked && !loading && pairs !== null && (
-                              <span className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-400">
-                                {pairs} {order.isEmergency ? 'boxes' : 'pairs'}
+                            {!loading && pairs !== null && (
+                              <span className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-blue-700 dark:text-blue-400">
+                                {`${pairs} ${pairs === 1 ? 'pair' : 'pairs'}`}
                               </span>
                             )}
-                            {!checked && <StatusPill status={order.status} />}
+                            {/* No status label: every bill in Receipts is billed (owner, 24 Nov 2026). Paid / part-paid / unpaid instead. */}
+                            {!loading && <PaidBadge total={order.billTotalPaise} unpaid={order.unpaidPaise} />}
                             {/* Chevron hint */}
                             <svg className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -1222,11 +1391,12 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       {/* ── Order detail panel ── */}
       {detailOrder && (
         <div
-          className="fixed inset-0 z-40 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
           onClick={() => setDetailOrder(null)}
         >
+          <DialogKeys onClose={() => setDetailOrder(null)} />
           <div
-            className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85vh] sm:max-h-none overflow-y-auto shadow-2xl rounded-t-2xl sm:rounded-none"
+            className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85dvh] sm:max-h-none overflow-y-auto pb-[env(safe-area-inset-bottom)] shadow-2xl rounded-t-2xl sm:rounded-none"
             onClick={e => e.stopPropagation()}
           >
             <div className="sm:hidden flex justify-center pt-3 pb-1">
@@ -1251,7 +1421,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   <StatusPill status={detailOrder.status} />
                   {detailOrder.isEmergency && (
                     <span className="inline-flex items-center rounded-full bg-red-100 dark:bg-red-900/30 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-700 dark:text-red-400">
-                      🚨 Emergency Bill
+                      Direct Bill
                     </span>
                   )}
                 </div>
@@ -1272,7 +1442,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   <p className="text-sm font-semibold text-foreground">Order Items</p>
                 </div>
                 {detailLoading && <p className="px-4 py-6 text-sm text-muted-foreground text-center">Loading items…</p>}
-                {detailError  && <p className="px-4 py-4 text-sm text-red-600">{detailError}</p>}
+                {detailError  && <p role="alert" className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>}
                 {!detailLoading && !detailError && detailItems.length === 0 && (
                   <p className="px-4 py-6 text-sm text-muted-foreground text-center">No items found.</p>
                 )}
@@ -1390,7 +1560,6 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
               {/* ── Bill Details ── shown when billed */}
               {detailOrder.status === 'billed' && (() => {
-                const lines = mrpLinesMap[detailOrder.id] ?? []
 
                 // Still loading from DB
                 if (detailBillLinesLoading) return (
@@ -1408,8 +1577,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   </div>
                 )
 
-                // No lines in session cache or DB
-                if (lines.length === 0) return (
+                // No saved bill lines
+                if (!detailBill) return (
                   <div className="rounded-xl border border-border bg-card overflow-hidden">
                     <div className="px-4 py-3 bg-muted/30 border-b border-border">
                       <p className="text-sm font-semibold text-foreground">Bill Items</p>
@@ -1420,97 +1589,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   </div>
                 )
 
-                // Use lineDiscPct stored in DB lines if available, else fall back to current UI value
-                const LINE_DISC_PCT = (lines[0] as { lineDiscPct?: number }).lineDiscPct
-                  ?? (typeof lineDiscPct === 'number' ? lineDiscPct : 30)
-                const DISC_PCT = 4.75
-                const CGST_PCT = 2.50
-                const SGST_PCT = 2.50
-
-                const totalQty  = lines.reduce((s, l) => s + l.qty, 0)
-                const subTotal  = lines.reduce((s, l) => s + Math.ceil(l.mrp * (1 - LINE_DISC_PCT / 100)) * l.qty, 0)
-                const discAmt   = Math.round(subTotal * DISC_PCT / 100 * 100) / 100
-                const afterDisc = subTotal - discAmt
-                const cgstAmt   = Math.round(afterDisc * CGST_PCT / 100 * 100) / 100
-                const sgstAmt   = Math.round(afterDisc * SGST_PCT / 100 * 100) / 100
-                const netAmt    = Math.round((afterDisc + cgstAmt + sgstAmt) * 100) / 100
-                const fmtRs     = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-
-                // group by artNumber for display
-                const artGroupMap = new Map<string, typeof lines>()
-                for (const l of lines) {
-                  if (!artGroupMap.has(l.artNumber)) artGroupMap.set(l.artNumber, [])
-                  artGroupMap.get(l.artNumber)!.push(l)
-                }
-
-                return (
-                  <div className="rounded-xl border border-border bg-card overflow-hidden">
-                    {/* Header */}
-                    <div className="px-4 py-3 bg-muted/30 border-b border-border flex items-center justify-between">
-                      <p className="text-sm font-semibold text-foreground">Bill Items</p>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {lines.length} line{lines.length !== 1 ? 's' : ''} · {totalQty} box{totalQty !== 1 ? 'es' : ''} · {fmtRs(subTotal)}
-                      </span>
-                    </div>
-
-                    {/* Discount % badge */}
-                    <div className="px-4 py-2 border-b border-border bg-muted/10 flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground">Disc %</span>
-                      <span className="text-xs font-bold text-foreground tabular-nums">{LINE_DISC_PCT}</span>
-                    </div>
-
-                    {/* Line items table */}
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs border-collapse">
-                        <thead className="bg-muted/20 border-b border-border">
-                          <tr>
-                            <th className="text-left px-4 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Article</th>
-                            <th className="text-right px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">MRP</th>
-                            <th className="text-right px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Disc {LINE_DISC_PCT}%</th>
-                            <th className="text-center px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Qty</th>
-                            <th className="text-right px-4 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Amt</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {Array.from(artGroupMap.entries()).map(([artNumber, artLines]) =>
-                            artLines.map((l, li) => {
-                              const rate = Math.ceil(l.mrp * (1 - LINE_DISC_PCT / 100))
-                              const amt  = rate * l.qty
-                              return (
-                                <tr key={`${artNumber}-${li}`} className="odd:bg-card even:bg-muted/10">
-                                  <td className="px-4 py-2 font-semibold text-foreground">{li === 0 ? artNumber : ''}</td>
-                                  <td className="px-3 py-2 text-right text-muted-foreground tabular-nums">{fmtRs(l.mrp)}</td>
-                                  <td className="px-3 py-2 text-right tabular-nums">{fmtRs(rate)}</td>
-                                  <td className="px-3 py-2 text-center font-bold tabular-nums">{l.qty}</td>
-                                  <td className="px-4 py-2 text-right font-semibold tabular-nums">{fmtRs(amt)}</td>
-                                </tr>
-                              )
-                            })
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {/* Totals */}
-                    <div className="border-t border-border divide-y divide-border/60">
-                      {[
-                        { label: `Sub Total (${totalQty} boxes)`, value: fmtRs(subTotal), cls: 'font-semibold text-foreground' },
-                        { label: `Discount (${DISC_PCT}%)`,       value: `− ${fmtRs(discAmt)}`, cls: 'text-red-600 dark:text-red-400' },
-                        { label: `CGST (${CGST_PCT}%)`,           value: `+ ${fmtRs(cgstAmt)}`, cls: 'text-muted-foreground' },
-                        { label: `SGST (${SGST_PCT}%)`,           value: `+ ${fmtRs(sgstAmt)}`, cls: 'text-muted-foreground' },
-                      ].map(row => (
-                        <div key={row.label} className="flex items-center justify-between px-4 py-2 text-xs">
-                          <span className="text-muted-foreground">{row.label}</span>
-                          <span className={`tabular-nums ${row.cls}`}>{row.value}</span>
-                        </div>
-                      ))}
-                      <div className="flex items-center justify-between px-4 py-3 bg-muted/20">
-                        <span className="text-sm font-bold text-foreground">Net Payable</span>
-                        <span className="text-sm font-extrabold tabular-nums text-foreground">{fmtRs(netAmt)}</span>
-                      </div>
-                    </div>
-                  </div>
-                )
+                return <BillDetailCard lines={detailBill.lines} lineDiscPct={detailBill.lineDiscPct} amounts={detailBill.amounts} unpaidPaise={detailBill.unpaidPaise} />
               })()}
 
               {detailOrder.status === 'packed' && (
@@ -1542,23 +1621,27 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                 </button>
               )}
 
-              {/* Delete button — only for emergency bills */}
-              {detailOrder.isEmergency && (
+              {/* Edit bill by scanning boxes on / off (owner, 24 Nov 2026): same number and date */}
+              {detailOrder.status === 'billed' && (
                 <button
                   type="button"
                   disabled={isPending}
-                  onClick={() => {
-                    const id = detailOrder.id
-                    setDetailOrder(null)
-                    startTransition(async () => {
-                      await deleteEmergencyBill(id)
-                      setOrders(prev => prev.filter(o => o.id !== id))
-                      setMrpLinesMap(prev => { const next = { ...prev }; delete next[id]; return next })
-                    })
-                  }}
+                  onClick={() => { const o = detailOrder; setDetailOrder(null); setEditBillOrder(o) }}
+                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground hover:bg-muted disabled:opacity-50 transition-colors"
+                >
+                  Edit bill (scan boxes on / off)
+                </button>
+              )}
+
+              {/* Cancel bill (bills are never deleted, owner 23 Nov 2026): boxes back to stock, ledger entry reversed */}
+              {detailOrder.status === 'billed' && (
+                <button
+                  type="button"
+                  disabled={isPending}
+                  onClick={() => { if (confirmCancelBill(detailOrder)) setDetailOrder(null) }}
                   className="w-full rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/20 px-4 py-2.5 text-sm font-semibold text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-950/40 disabled:opacity-50 transition-colors"
                 >
-                  {isPending ? 'Deleting…' : 'Delete Emergency Bill'}
+                  {isPending ? 'Cancelling…' : 'Cancel bill (boxes go back to stock)'}
                 </button>
               )}
             </div>
@@ -1566,9 +1649,26 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
         </div>
       )}
 
+      {/* ── Edit bill (scan boxes on / off) ── */}
+      {editBillOrder && (
+        <EditBillDialog
+          orderId={editBillOrder.id}
+          onClose={() => setEditBillOrder(null)}
+          onSaved={(r) => {
+            const o = editBillOrder
+            setMrpLinesMap(prev => ({ ...prev, [o.id]: r.lines.map(l => ({ artNumber: l.artNumber, mrp: l.mrp, qty: l.qty, hsn: l.hsn ?? null })) }))
+            setOrders(prev => prev.map(x => x.id === o.id ? { ...x, billNo: r.billNo, billedPairs: r.totals.totalQty } : x))
+            setEditBillOrder(null)
+            // Show the edited bill as it prints (reloads its saved lines and amounts: 1 query).
+            setPreviewOrder({ ...o, billNo: r.billNo, billedPairs: r.totals.totalQty })
+          }}
+        />
+      )}
+
       {/* ── Scan & verify modal ── */}
       {scanOrder && (
         <div className="fixed inset-0 z-50 flex flex-col bg-background">
+          <DialogKeys onClose={closeScanner} />
 
           {/* ── Top header ── */}
           <div className="shrink-0 flex items-center gap-3 px-4 py-3 border-b border-border bg-background">
@@ -1598,8 +1698,12 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
           <div className="flex-1 overflow-y-auto">
 
             {/* ── Camera section ── */}
-            <div className="px-4 pt-4">
-              <div className="relative bg-black w-full rounded-2xl overflow-hidden" style={{ aspectRatio: '4/3', maxHeight: '44vh' }}>
+            <div className="px-4 pt-4 space-y-3">
+              <button type="button" onClick={isCameraActive ? stopCamera : startCamera}
+                  className={`w-full rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors ${isCameraActive ? 'border border-border hover:bg-muted' : 'bg-foreground text-background hover:opacity-90'}`}>
+                  {isCameraActive ? 'Stop camera' : 'Scan with camera'}
+                </button>
+              <div className={`relative bg-black w-full rounded-2xl overflow-hidden ${isCameraActive ? '' : 'hidden'}`} style={{ aspectRatio: '4/3', maxHeight: '44vh' }}>
                 <video
                   ref={videoRef}
                   autoPlay playsInline muted
@@ -1625,33 +1729,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   </div>
                 )}
 
-                {/* Idle state — camera not started */}
-                {!isCameraActive && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
-                    <svg className="w-10 h-10 text-white/30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                    <button
-                      type="button"
-                      onClick={startCamera}
-                      className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg hover:bg-blue-700 active:scale-95 transition-all"
-                    >
-                      Start Camera
-                    </button>
-                  </div>
-                )}
-
-                {/* Overlay controls — shown when camera active */}
+                {/* Flash — shown when camera active */}
                 {isCameraActive && (
-                  <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={stopCamera}
-                      className="rounded-lg border border-white/25 bg-black/55 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm hover:bg-black/70 transition-colors"
-                    >
-                      Stop
-                    </button>
+                  <div className="absolute bottom-3 right-3">
                     <button
                       type="button"
                       onClick={toggleFlashlight}
@@ -1668,11 +1748,11 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
               </div>
 
               {/* Controls row below camera */}
-              <div className="flex items-center justify-between mt-3 mb-1">
+              <div className="flex items-center justify-between mb-1">
                 <p className="text-[11px] text-muted-foreground">
                   {isCameraActive
                     ? 'Point at a warehouse box QR code'
-                    : 'Tap Start Camera or upload an image'}
+                    : 'Tap Scan with camera, use a USB / Bluetooth scanner, or upload an image'}
                 </p>
                 <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors cursor-pointer">
                   {uploadProcessing
@@ -1777,7 +1857,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                 const totalPackedPairs   = allItems.reduce((s, i) => s + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0)
                 // Verified = sum of min(scannedMap[key], totalPackedForKey) per unique key
                 const totalVerifiedPairs = sizeGroups.reduce((s, { items }) => {
-                  const key        = itemKey(items[0].artNumber, items[0].sizeNumber)
+                  const key        = itemKey(items[0].artNumber, items[0].sizeNumber, items[0].artCode)
                   const totalPacked = items.reduce((p, i) => p + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0)
                   return s + Math.min(scannedMap[key] ?? 0, totalPacked)
                 }, 0)
@@ -1794,7 +1874,11 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                   }`}>
                     {/* Article header */}
                     <div
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={isExpanded}
                       onClick={() => setExpandedArticle(isExpanded ? null : artNumber)}
+                      onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setExpandedArticle(isExpanded ? null : artNumber) } }}
                       className={`px-4 py-3.5 border-b cursor-pointer transition-colors select-none ${
                         artDone
                           ? 'border-emerald-100/60 dark:border-emerald-900/40 bg-emerald-50/20 dark:bg-emerald-950/10 hover:bg-emerald-50/40'
@@ -1850,7 +1934,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                           </thead>
                           <tbody className="divide-y divide-border bg-card/40">
                             {sizeGroups.map(({ size, items: sizeItems }) => {
-                              const key        = itemKey(sizeItems[0].artNumber, sizeItems[0].sizeNumber)
+                              const key        = itemKey(sizeItems[0].artNumber, sizeItems[0].sizeNumber, sizeItems[0].artCode)
                               const totalOrd   = sizeItems.reduce((s, i) => s + i.quantityOrdered, 0)
                               const totalPkd   = sizeItems.reduce((s, i) => s + (i.status === 'out_of_stock' ? 0 : i.quantityPacked), 0)
                               const verified   = Math.min(scannedMap[key] ?? 0, totalPkd)
@@ -1902,6 +1986,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                               return (
                                 <tr
                                   key={size}
+                                  tabIndex={isClickable ? 0 : undefined}
+                                  onKeyDown={isClickable ? e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.currentTarget.click() } } : undefined}
                                   onClick={isClickable ? () => {
                                     const repItem = sizeItems.find(i => i.status !== 'out_of_stock') ?? sizeItems[0]
                                     if (canEdit) {
@@ -2000,8 +2086,9 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
           {/* ── Sticky bottom Save Bill button ── */}
           <div className="shrink-0 bg-background/95 backdrop-blur-sm border-t border-border px-4 py-3 safe-area-inset-bottom">
-            {/* Disc % input — mirrors billing-scanner */}
-            <div className="flex items-center gap-2 mb-2">
+            {/* Disc %, bill type and the bill's total — same arithmetic as the saved bill */}
+            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="flex items-center gap-2">
               <label htmlFor="biller-line-disc" className="text-[11px] text-muted-foreground whitespace-nowrap">Disc %</label>
               <input
                 id="biller-line-disc"
@@ -2015,25 +2102,86 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                 onBlur={() => { if (lineDiscPct === '') setLineDiscPct(30) }}
                 className="w-16 h-7 rounded-lg border border-input bg-background px-2 text-xs text-center focus:outline-none focus:ring-1 focus:ring-ring"
               />
-              <span className="text-[11px] text-muted-foreground">line discount applied at print time</span>
+            </div>
+            {needsBillPicker && (
+              <label className="flex min-w-[200px] flex-1 items-center gap-2 text-xs font-medium">
+                <span className="shrink-0">Who picked it?</span>
+                <select value={billPicker} onChange={e => setBillPicker(e.target.value)} required disabled={isPending}
+                  className={`h-9 w-full rounded-lg border bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring ${billPicker ? 'border-input' : 'border-amber-400 text-muted-foreground'}`}>
+                  <option value="">Choose the picker…</option>
+                  {pickers.map(p => <option key={p.id} value={p.id}>{p.name ?? p.id}</option>)}
+                </select>
+              </label>
+            )}
+            <div className="min-w-[220px] flex-1">
+              <BillTypeChoice compact value={billType} onChange={setBillType} partyDefault={scanOrder.taxType ?? null} disabled={isPending} />
+            </div>
+            <BillRatesFields compact taxType={billType} defaults={billTemplate ? templateRates(billTemplate) : DEFAULT_BILL_RATES} edits={rateEdits} onChange={setRateEdits} disabled={isPending} />
+            {(() => {
+              const live = buildScannedLines(scannedQrs, scanItems)
+              if (!live.length) return null
+              const t = computeBillTotals(live, typeof lineDiscPct === 'number' ? lineDiscPct : 30, billType,
+                ratesBp(resolveRates(billType, billTemplate ? templateRates(billTemplate) : DEFAULT_BILL_RATES, rateEdits).rates))
+              return (
+                <p className="ml-auto text-right text-xs text-muted-foreground">
+                  {`Net payable · ${t.totalQty} pairs `}
+                  <b className="text-base tabular-nums text-foreground">{formatRs(t.grandTotalPaise)}</b>
+                </p>
+              )
+            })()}
             </div>
             <button
               type="button"
-              onClick={handleSaveBill}
-              disabled={!allVerified || isPending}
+              onClick={scanDirect ? handleDirectSave : handleSaveBill}
+              disabled={(scanDirect ? scannedQrs.length === 0 && Object.keys(manualEntries).length === 0 : !allVerified) || isPending || (needsBillPicker && !billPicker)}
               className={`w-full rounded-xl py-3.5 text-sm font-semibold transition-all shadow-sm ${
-                allVerified
+                allVerified || (scanDirect && scannedQrs.length + Object.keys(manualEntries).length > 0)
                   ? 'bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white'
                   : 'bg-muted text-muted-foreground cursor-not-allowed'
               }`}
             >
               {isPending
                 ? 'Saving…'
+                : scanDirect
+                ? (allVerified ? '✓ Save Direct bill' : 'Save Direct bill (check differences)')
                 : allVerified
                 ? '✓ Save Bill'
                 : `Scan all items to enable Save (${Object.values(scannedMap).reduce((a, b) => a + b, 0)} / ${scanItems.filter(i => i.status !== 'out_of_stock').reduce((s, i) => s + i.quantityPacked, 0)})`
               }
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Direct bill differs from the order: keep the changes or adjust ── */}
+      {directDiffShown && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-4" role="dialog" aria-modal="true" aria-labelledby="direct-diff-title">
+          <DialogKeys onClose={() => setDirectDiffShown(null)} />
+          <div className="w-full max-w-md rounded-2xl border border-border bg-background p-5 shadow-lg">
+            <h2 id="direct-diff-title" className="text-base font-bold">⚠ The bill is different from the order</h2>
+            <div className="mt-3 max-h-[50vh] space-y-3 overflow-y-auto text-sm">
+              {directDiffShown.short.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Not received (marked on the order)</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {directDiffShown.short.map(x => <li key={x.label} className="flex justify-between gap-3"><span>{x.label}</span><span className="tabular-nums text-red-600 dark:text-red-400">{x.got} of {x.ordered}</span></li>)}
+                  </ul>
+                </div>
+              )}
+              {directDiffShown.extra.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Not ordered / more than ordered (billed)</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {directDiffShown.extra.map(x => <li key={x.label} className="flex justify-between gap-3"><span>{x.label}</span><span className="tabular-nums text-amber-700 dark:text-amber-400">+{x.qty}</span></li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+            <p className="mt-3 text-xs text-muted-foreground">Keep: the bill has exactly what was scanned. Adjust: go back and scan more or undo.</p>
+            <div className="mt-4 flex gap-2">
+              <button type="button" onClick={() => setDirectDiffShown(null)} className="flex-1 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold hover:bg-muted">Adjust</button>
+              <button type="button" autoFocus onClick={() => { setDirectDiffShown(null); handleSaveBill() }} className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">Keep these changes</button>
+            </div>
           </div>
         </div>
       )}
@@ -2044,6 +2192,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
           className="fixed inset-0 z-[60] flex flex-col justify-end bg-black/50 backdrop-blur-sm"
           onClick={() => setManualTarget(null)}
         >
+          <DialogKeys onClose={() => setManualTarget(null)} />
           <div
             className="bg-background rounded-t-2xl border-t border-border shadow-2xl"
             onClick={e => e.stopPropagation()}
@@ -2143,14 +2292,13 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
         </div>
       )}
 
-      {/* ── Sticky bottom bar — Print / Mail Bills ── */}
-      {activeTab === 'generated' && (() => {
+      {/* ── Sticky bottom bar — Mail the ticked bills (on phones above the bottom menu bar) ── */}
+      {activeTab === 'generated' && printSelectedIds.size > 0 && (() => {
         const selectedOrders = billedOrders.filter(o => printSelectedIds.has(o.id))
         const allLoaded = selectedOrders.every(o => !!printItemsMap[o.id])
-        const canAct = selectedOrders.length > 0 && allLoaded
         const noneSelected = selectedOrders.length === 0
         return (
-          <div className="fixed bottom-0 left-0 right-0 z-20 bg-background/95 backdrop-blur-sm border-t border-border">
+          <div className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] left-0 right-0 z-30 bg-background/95 backdrop-blur-sm border-t border-border md:bottom-0">
             <div className="max-w-2xl mx-auto px-3 sm:px-4 py-2.5 flex items-center gap-2">
 
               {/* Selection badge + loading */}
@@ -2174,7 +2322,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
               {/* Mail button */}
               <button
                 type="button"
-                disabled={!canAct}
+                disabled={noneSelected}
                 onClick={() => handleMailBills(selectedOrders)}
                 className={`flex items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0 ${
                   noneSelected ? 'hidden' : ''
@@ -2186,29 +2334,30 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                 Mail
               </button>
 
-              {/* Print button */}
-              <button
-                type="button"
-                disabled={!canAct}
-                onClick={() => handlePrintBills(selectedOrders)}
-                className={`flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0 ${
-                  noneSelected ? 'w-full sm:w-auto sm:ml-auto' : ''
-                }`}
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                </svg>
-                {canAct ? 'Print' : noneSelected ? 'Select bills to print' : 'Loading…'}
-              </button>
-
             </div>
           </div>
         )
       })()}
 
+      {mailOrderIds && <BillMailDialog orderIds={mailOrderIds} onClose={() => setMailOrderIds(null)} />}
+
+      {previewOrder && (
+        <BillPreviewDialog
+          bill={previewOrder}
+          template={billTemplate}
+          defaultPageSize={printConfig.pageSize}
+          fallbackLines={mrpLinesMap[previewOrder.id]}
+          fallbackDiscPct={lineDiscPct === '' ? 30 : Number(lineDiscPct)}
+          onClose={() => setPreviewOrder(null)}
+          onEdit={previewOrder.status === 'billed' ? () => { const o = previewOrder; setPreviewOrder(null); setEditBillOrder(o) } : undefined}
+          onCancelBill={previewOrder.status === 'billed' ? () => { if (confirmCancelBill(previewOrder)) setPreviewOrder(null) } : undefined}
+        />
+      )}
+
       {/* ── Print Config Modal ── */}
       {printConfigOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <DialogKeys onClose={() => setPrintConfigOpen(false)} />
           {/* Backdrop */}
           <div
             className="absolute inset-0 bg-black/50 backdrop-blur-sm"
@@ -2243,7 +2392,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
 
               {/* Page Size */}
               <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Page Size</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Bill size</p>
                 <div className="flex gap-2">
                   {(['A4', 'A5'] as PageSize[]).map(size => (
                     <button
@@ -2256,42 +2405,13 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
                           : 'border-border bg-card text-foreground hover:bg-muted'
                       }`}
                     >
-                      {size}
+                      {size === 'A4' ? 'Big bill (A4)' : 'Small bill (A5)'}
                     </button>
                   ))}
                 </div>
                 <p className="text-[11px] text-muted-foreground mt-1.5">
-                  {printConfig.pageSize === 'A4' ? '210 × 297 mm — standard invoice size' : '148 × 210 mm — half-sheet bill'}
+                  {printConfig.pageSize === 'A4' ? 'Full sheet, 210 × 297 mm' : 'Half sheet, 148 × 210 mm'}
                 </p>
-              </div>
-
-              {/* Bill Type — pill toggle */}
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Bill Type</p>
-                <div className="flex items-center rounded-xl border border-border bg-muted/40 p-1 gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setPrintConfig(c => ({ ...c, billType: 'city' }))}
-                    className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                      printConfig.billType === 'city'
-                        ? 'bg-background shadow-sm border border-border text-foreground'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    Within City
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPrintConfig(c => ({ ...c, billType: 'outside' }))}
-                    className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                      printConfig.billType === 'outside'
-                        ? 'bg-background shadow-sm border border-border text-foreground'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    Outside City
-                  </button>
-                </div>
               </div>
 
             </div>
@@ -2305,7 +2425,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
               >
                 Cancel
               </button>
-              <button
+              <button data-primary
                 type="button"
                 onClick={confirmPrint}
                 className="flex-1 h-11 rounded-xl bg-primary text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring flex items-center justify-center gap-2"
@@ -2322,5 +2442,14 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       )}
 
     </div>
+  )
+}
+
+/** Small mark for a bill made without the picker (Direct bill). */
+function DirectBillBadge() {
+  return (
+    <span title="Direct bill (no picker)" className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+      ⚡ Direct
+    </span>
   )
 }

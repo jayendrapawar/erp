@@ -6,7 +6,7 @@ import { useLanguage } from '@/lib/language-context'
 import { LanguageToggle } from '@/components/language-toggle'
 import { useOnline } from '@/lib/use-online'
 
-export function GoogleSignIn() {
+export function GoogleSignIn({ children }: { children?: React.ReactNode } = {}) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { t } = useLanguage()
@@ -142,6 +142,7 @@ export function GoogleSignIn() {
           )}
           {loading ? t('redirectingToGoogle') : t('continueWithGoogle')}
         </button>
+        {children}
       </div>
     </main>
   )

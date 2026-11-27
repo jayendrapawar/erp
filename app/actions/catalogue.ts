@@ -1,17 +1,16 @@
 'use server'
 
-import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { articles, articleColors, articleSizes } from '@/lib/db/schema'
-import { asc, eq, sql } from 'drizzle-orm'
-import { headers } from 'next/headers'
+import { and, asc, eq, sql } from 'drizzle-orm'
 import { searchVendors, getVendors } from '@/app/actions/vendors'
 import { fuzzyScore } from '@/lib/fuzzy'
+import { getCatalogueVersion } from '@/lib/catalog/version'
+
+import { requirePermission } from '@/lib/authz'
 
 async function requireAuth() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-  return session.user
+  return requirePermission('articles.view')
 }
 
 // ── Shopkeeper search (backed by vendors DB table) ────────────────────────────
@@ -52,6 +51,7 @@ export async function searchArticles(query: string): Promise<ArticleResult[]> {
     const rows = await db.execute(sql`
       SELECT DISTINCT "artName" AS "artNumber"
       FROM articles
+      WHERE active
       ORDER BY "artName" ASC
       LIMIT 20
     `)
@@ -62,7 +62,7 @@ export async function searchArticles(query: string): Promise<ArticleResult[]> {
   const rows = await db.execute(sql`
     SELECT DISTINCT "artName" AS "artNumber"
     FROM articles
-    WHERE lower("artName") LIKE ${'%' + q.toLowerCase() + '%'}
+    WHERE active AND lower("artName") LIKE ${'%' + q.toLowerCase() + '%'}
     LIMIT 100
   `)
   const candidates = (rows.rows as unknown[]).map(r => (r as Record<string, unknown>).artNumber as string)
@@ -71,6 +71,7 @@ export async function searchArticles(query: string): Promise<ArticleResult[]> {
   const wider = await db.execute(sql`
     SELECT DISTINCT "artName" AS "artNumber"
     FROM articles
+    WHERE active
     ORDER BY "artName" ASC
     LIMIT 300
   `)
@@ -97,27 +98,22 @@ export async function searchArticles(query: string): Promise<ArticleResult[]> {
 // then aggregate their colors and sizes into a single detail object.
 // The "id" returned is the first article id (used as a stable key only).
 
-export interface ArticleDetail {
-  id: number        // id of first article row for this artName (stable key)
-  artNumber: string // the artName
-  colors: { id: number; articleId: number; colorName: string; colorHex: string | null }[]
-  sizes: { id: number; articleId: number; sizeLabel: string; sortOrder: number }[]
-}
+export type { ArticleDetail } from '@/lib/catalog/order-catalogue'
+import { groupArticles, type ArticleDetail, type ColourRow, type SizeRow } from '@/lib/catalog/order-catalogue'
 
 export async function getArticleDetailByName(artName: string): Promise<ArticleDetail | null> {
   await requireAuth()
 
   // All article rows for this artName (one per color)
   const artRows = await db
-    .select({ id: articles.id })
+    .select({ id: articles.id, artName: articles.artName, artCode: articles.artCode })
     .from(articles)
-    .where(eq(articles.artName, artName))
-    .orderBy(asc(articles.id))
+    .where(and(eq(articles.artName, artName), eq(articles.active, true)))
+    .orderBy(asc(articles.artCode), asc(articles.id))
 
   if (artRows.length === 0) return null
 
   const ids = artRows.map(r => r.id)
-  const firstId = ids[0]
 
   // Use raw SQL with explicit int[] cast to avoid type mismatch errors
   const idList = ids.join(',')
@@ -132,15 +128,17 @@ export async function getArticleDetailByName(artName: string): Promise<ArticleDe
     db.execute(sql.raw(`
       SELECT id, "articleId", "sizeLabel", "sortOrder"
       FROM article_sizes
-      WHERE "articleId" = ANY(ARRAY[${idList}]::int[])
+      WHERE "articleId" = ANY(ARRAY[${idList}]::int[]) AND active
       ORDER BY "articleId" ASC, "sortOrder" ASC
     `)),
   ])
 
-  const colors = colorsRes.rows as { id: number; articleId: number; colorName: string; colorHex: string | null }[]
-  const sizes  = sizesRes.rows  as { id: number; articleId: number; sizeLabel: string; sortOrder: number }[]
-
-  return { id: firstId, artNumber: artName, colors, sizes }
+  const byArt = <T extends { articleId: number }>(rows: T[]) => {
+    const m = new Map<number, T[]>()
+    for (const r of rows) { const k = Number(r.articleId); if (!m.has(k)) m.set(k, []); m.get(k)!.push({ ...r, articleId: k }) }
+    return m
+  }
+  return groupArticles(artRows, byArt(colorsRes.rows as ColourRow[]), byArt(sizesRes.rows as SizeRow[])).get(artName) ?? null
 }
 
 // ── Legacy compat — used by edit-order flow (load by artName string) ──────────
@@ -160,6 +158,7 @@ export async function getArticleDetail(articleId: number): Promise<ArticleDetail
   return getArticleDetailByName(row.artName)
 }
 
+
 // ── Bulk catalogue — load everything once for client-side search ──────────────
 
 export interface CatalogueVendor {
@@ -171,19 +170,24 @@ export interface CatalogueVendor {
 }
 
 export interface CatalogueData {
+  /** lib/catalog/version.ts: changes whenever an article, colour, size or retailer changes. */
+  version: string
   vendors: CatalogueVendor[]
   articles: ArticleDetail[]
 }
 
+/** 5 queries: the version (alongside the permission check), then 4 in parallel. */
 export async function loadCatalogue(): Promise<CatalogueData> {
-  await requireAuth()
+  // The version is read BEFORE the lists: a change committed in between makes the list newer than
+  // its label (the next check downloads it again, harmless), never older (it would stay stale).
+  const [, version] = await Promise.all([requireAuth(), getCatalogueVersion(db)])
 
   // All vendors (active) and all article data in parallel
   const [vendorRows, artRows, colorRows, sizeRows] = await Promise.all([
     getVendors(),
-    db.select({ id: articles.id, artName: articles.artName }).from(articles).orderBy(asc(articles.artName)),
+    db.select({ id: articles.id, artName: articles.artName, artCode: articles.artCode }).from(articles).where(eq(articles.active, true)).orderBy(asc(articles.artName), asc(articles.artCode), asc(articles.id)),
     db.select({ id: articleColors.id, articleId: articleColors.articleId, colorName: articleColors.colorName, colorHex: articleColors.colorHex }).from(articleColors).orderBy(asc(articleColors.articleId), asc(articleColors.id)),
-    db.select({ id: articleSizes.id, articleId: articleSizes.articleId, sizeLabel: articleSizes.sizeLabel, sortOrder: articleSizes.sortOrder }).from(articleSizes).orderBy(asc(articleSizes.articleId), asc(articleSizes.sortOrder)),
+    db.select({ id: articleSizes.id, articleId: articleSizes.articleId, sizeLabel: articleSizes.sizeLabel, sortOrder: articleSizes.sortOrder }).from(articleSizes).where(eq(articleSizes.active, true)).orderBy(asc(articleSizes.articleId), asc(articleSizes.sortOrder)),
   ])
 
   // Group colors and sizes by articleId
@@ -198,47 +202,7 @@ export async function loadCatalogue(): Promise<CatalogueData> {
     sizesByArt.get(s.articleId)!.push(s)
   }
 
-  // Build one ArticleDetail per unique artName (first article id = stable key)
-  const artDetailMap = new Map<string, ArticleDetail>()
-  const representativeArticleIds = new Map<string, number>()
-  const seenSizes = new Set<string>()
-  const normalizedLabel = (value: string) => value.trim().replace(/\s+/g, ' ').toLocaleLowerCase()
-  for (const row of artRows) {
-    if (!artDetailMap.has(row.artName)) {
-      artDetailMap.set(row.artName, { id: row.id, artNumber: row.artName, colors: [], sizes: [] })
-    }
-    const detail = artDetailMap.get(row.artName)!
-    const sizeArticleIds = new Set<number>()
-    for (const c of colorsByArt.get(row.id) ?? []) {
-      const key = `${row.artName}|${normalizedLabel(c.colorName)}`
-      const representativeId = representativeArticleIds.get(key)
-      if (representativeId === undefined) {
-        representativeArticleIds.set(key, c.articleId)
-        detail.colors.push(c)
-        sizeArticleIds.add(c.articleId)
-      } else {
-        sizeArticleIds.add(representativeId)
-      }
-    }
-    if (sizeArticleIds.size === 0) sizeArticleIds.add(row.id)
-    for (const s of sizesByArt.get(row.id) ?? []) {
-      for (const articleId of sizeArticleIds) {
-        const key = `${articleId}|${normalizedLabel(s.sizeLabel)}`
-        if (seenSizes.has(key)) continue
-        seenSizes.add(key)
-        detail.sizes.push({ ...s, articleId })
-      }
-    }
-  }
-
-  const sizeOrder = (a: string, b: string) => {
-    const numA = Number(a), numB = Number(b)
-    if (Number.isFinite(numA) && Number.isFinite(numB)) return numA - numB
-    if (Number.isFinite(numA)) return -1
-    if (Number.isFinite(numB)) return 1
-    return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
-  }
-  for (const detail of artDetailMap.values()) detail.sizes.sort((a, b) => sizeOrder(a.sizeLabel, b.sizeLabel))
+  const artDetailMap = groupArticles(artRows, colorsByArt, sizesByArt)
 
   const vendors: CatalogueVendor[] = vendorRows
     .filter(v => v.status === 'active')
@@ -250,6 +214,6 @@ export async function loadCatalogue(): Promise<CatalogueData> {
       address: [v.address, v.city].filter(Boolean).join(', ') || null,
     }))
 
-  return { vendors, articles: Array.from(artDetailMap.values()) }
+  return { version, vendors, articles: Array.from(artDetailMap.values()) }
 }
 

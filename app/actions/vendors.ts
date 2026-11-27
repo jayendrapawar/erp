@@ -1,18 +1,58 @@
 'use server'
 
+// Retailer master (parties we sell to). Kept at this path because many screens import it;
+// the table itself is `retailers` since migration 0002.
+import { parseEmailList } from '@/lib/email-address'
 import { db } from '@/lib/db'
-import { vendors } from '@/lib/db/schema'
+import { retailers as vendors } from '@/lib/db/schema'
 import { eq, asc, ilike, or, sql } from 'drizzle-orm'
-import { auth } from '@/lib/auth'
-import { headers } from 'next/headers'
+import { requirePermission } from '@/lib/authz'
+import { audit } from '@/lib/audit'
 import { fuzzyScore } from '@/lib/fuzzy'
+import { retailerColumns } from '@/lib/retailer-columns'
+import { bumpCatalogueVersion } from '@/lib/catalog/version'
+import { isTaxType } from '@/lib/billing/sale-bill'
+import type { TaxType } from '@/lib/billing/bill-totals'
 
-async function requireAuth() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
+/** A retailer as pages see it: never the shop PIN hash (migration 0015). */
+// Credit terms / bill type (migration 0017) are not in the list the retailer screens load; the form
+// reads them when a retailer is opened (getRetailerTerms in app/actions/payments.ts) and saves them
+// with the rest (saveVendor).
+export type Vendor = Omit<typeof vendors.$inferSelect, 'shopPinHash' | 'taxType' | 'creditLimitPaise' | 'creditDays' | 'earlyPayDiscountBp' | 'earlyPayDays'>
+/** Fields the Retailers form saves; shop sign-in fields change only through the shop-access screen. */
+type VendorFields = Pick<Vendor, 'partyName' | 'gst' | 'phone' | 'email' | 'address' | 'city' | 'area' | 'day' | 'salesman' | 'status'>
+
+/** Bill type and payment terms of a retailer (payments, owner 22–23 Nov 2026). */
+export interface RetailerTerms {
+  taxType: TaxType
+  /** Days a bill may stay unpaid before new orders are held; null = the default (90). */
+  creditDays: number | null
+  /** Warn above this balance; null = no limit. */
+  creditLimitPaise: number | null
+  /** Early-payment discount (100 = 1 %) within so many days of the bill; both null = none. */
+  earlyPayDiscountBp: number | null
+  earlyPayDays: number | null
 }
 
-export type Vendor = typeof vendors.$inferSelect
+function cleanTerms(raw: unknown): RetailerTerms {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const opt = (v: unknown, min: number, max: number, label: string): number | null => {
+    if (v === null || v === undefined || v === '') return null
+    const n = Number(v)
+    if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${label} must be a whole number from ${min} to ${max}.`)
+    return n
+  }
+  if (!isTaxType(r.taxType)) throw new Error('Choose the bill type.')
+  const t: RetailerTerms = {
+    taxType: r.taxType,
+    creditDays: opt(r.creditDays, 0, 365, 'Credit days'),
+    creditLimitPaise: opt(r.creditLimitPaise, 0, 1_000_000_000_00, 'Credit limit'),
+    earlyPayDiscountBp: opt(r.earlyPayDiscountBp, 1, 10000, 'Early-payment discount'),
+    earlyPayDays: opt(r.earlyPayDays, 1, 365, 'Early-payment days'),
+  }
+  if ((t.earlyPayDiscountBp == null) !== (t.earlyPayDays == null)) throw new Error('Give both the early-payment discount % and its days, or neither.')
+  return t
+}
 
 // ── Generate next ID (V001, V002, …) ─────────────────────────────────────────
 async function genId(): Promise<string> {
@@ -30,7 +70,7 @@ async function genId(): Promise<string> {
 export async function importVendors(
   rows: Omit<Vendor, 'id' | 'createdAt' | 'updatedAt'>[]
 ): Promise<{ imported: number; skipped: number; list: Vendor[] }> {
-  await requireAuth()
+  const u = await requirePermission('retailers.edit')
 
   // Load existing partyNames (lowercase) to deduplicate
   const existing = await db.select({ partyName: vendors.partyName }).from(vendors)
@@ -50,61 +90,78 @@ export async function importVendors(
 
     let next = last ? parseInt(last.id.replace('V', ''), 10) + 1 : 1
 
-    for (const row of newRows) {
-      const id = `V${String(next++).padStart(3, '0')}`
-      await db.insert(vendors).values({ ...row, id })
-    }
+    await db.transaction(async (tx) => {
+      const values = newRows.map((row) => ({ ...row, id: `V${String(next++).padStart(3, '0')}` }))
+      for (let i = 0; i < values.length; i += 500) await tx.insert(vendors).values(values.slice(i, i + 500))
+      await bumpCatalogueVersion(tx) // retailers are in the Orders catalogue
+      await audit(tx, { actor: { id: u.id, name: u.name }, action: 'retailer.imported', entityType: 'retailer_import', entityId: new Date().toISOString(), after: { rows: rows.length, imported: newRows.length } })
+    })
   }
 
-  const list = await db.select().from(vendors).orderBy(asc(vendors.partyName))
+  const list = await db.select(retailerColumns).from(vendors).orderBy(asc(vendors.partyName))
   return { imported: newRows.length, skipped, list }
 }
 
 // ── Fetch all vendors ─────────────────────────────────────────────────────────
 export async function getVendors(): Promise<Vendor[]> {
-  await requireAuth()
-  return db.select().from(vendors).orderBy(asc(vendors.partyName))
+  await requirePermission('retailers.view')
+  return db.select(retailerColumns).from(vendors).orderBy(asc(vendors.partyName))
 }
 
 // ── Save (upsert) a single vendor ─────────────────────────────────────────────
 export async function saveVendor(
-  input: Omit<Vendor, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
+  raw: VendorFields & { id?: string },
+  rawTerms?: RetailerTerms,
 ): Promise<Vendor[]> {
-  await requireAuth()
+  const u = await requirePermission('retailers.edit')
+  // One or more addresses for emailed bills (comma separated); '' = none.
+  const { ok, bad } = parseEmailList(raw.email ?? '')
+  if (bad.length) throw new Error(`Not an email address: ${bad.join(', ')}`)
+  // Only the form's fields are written, whatever else the page sends.
+  const input: VendorFields & { id?: string } = {
+    id: raw.id, partyName: raw.partyName, gst: raw.gst, phone: raw.phone, email: ok.join(', '), address: raw.address,
+    city: raw.city, area: raw.area, day: raw.day, salesman: raw.salesman, status: raw.status,
+  }
+  const terms = rawTerms === undefined ? null : cleanTerms(rawTerms)
   const id = input.id || (await genId())
+  const [before] = input.id ? await db.select(retailerColumns).from(vendors).where(eq(vendors.id, input.id)).limit(1) : []
   await db
     .insert(vendors)
-    .values({ ...input, id })
+    .values({ ...input, ...(terms ?? {}), id })
     .onConflictDoUpdate({
       target: vendors.id,
       set: {
         partyName:  input.partyName,
         gst:        input.gst,
         phone:      input.phone,
+        email:      input.email,
         address:    input.address,
         city:       input.city,
         area:       input.area,
         day:        input.day,
         salesman:   input.salesman,
         status:     input.status,
+        ...(terms ?? {}),
         updatedAt:  sql`now()`,
       },
     })
-  return db.select().from(vendors).orderBy(asc(vendors.partyName))
+  await bumpCatalogueVersion(db) // retailers are in the Orders catalogue
+  await audit(db, { actor: { id: u.id, name: u.name }, action: before ? 'retailer.updated' : 'retailer.created', entityType: 'retailer', entityId: id, before: before ?? undefined, after: terms ? { ...input, ...terms } : input })
+  return db.select(retailerColumns).from(vendors).orderBy(asc(vendors.partyName))
 }
 
 // ── Search vendors (used by salesman dashboard) ───────────────────────────────
 export async function searchVendors(query: string): Promise<Vendor[]> {
-  await requireAuth()
+  await requirePermission('retailers.view')
   const q = query.trim()
 
   if (!q) {
-    return db.select().from(vendors).where(eq(vendors.status, 'active')).orderBy(asc(vendors.partyName)).limit(20)
+    return db.select(retailerColumns).from(vendors).where(eq(vendors.status, 'active')).orderBy(asc(vendors.partyName)).limit(20)
   }
 
   // Broad DB fetch — pull any row that substring-matches on key fields
   const rows = await db
-    .select()
+    .select(retailerColumns)
     .from(vendors)
     .where(
       or(
@@ -119,7 +176,7 @@ export async function searchVendors(query: string): Promise<Vendor[]> {
 
   // Also fetch a wider set for fuzzy (typo tolerance) — up to 200 active vendors
   const wider = await db
-    .select()
+    .select(retailerColumns)
     .from(vendors)
     .where(eq(vendors.status, 'active'))
     .orderBy(asc(vendors.partyName))

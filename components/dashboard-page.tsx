@@ -2,20 +2,17 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { fuzzyFilter } from '@/lib/fuzzy'
-import { useRouter } from 'next/navigation'
 import { BarChart3, Filter, Package, PieChart, QrCode, Tag, TrendingUp, User } from 'lucide-react'
 import {
   exportOverallStockToCSV,
   exportToExcel,
-  getInventorySummary,
+  getOverallStockView,
   getLoggedInUserName,
   getOverallChartData,
-  getOverallStockStats,
-  getOverallStockSummary,
+  getScannedInventoryView,
   getScannedChartData,
-  getStatistics,
 } from '@/app/actions/dashboard'
-import { LanguageToggle } from '@/components/language-toggle'
+import { PageNav } from '@/components/page-nav'
 import { CHART_COLORS, DRILLDOWN_EMPTY_LABEL } from '@/components/dashboard/constants'
 import type {
   DivisionBreakdownItem,
@@ -41,7 +38,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { signOut } from '@/lib/auth-client'
 import { useLanguage } from '@/lib/language-context'
 import { useOnline } from '@/lib/use-online'
 import {
@@ -61,7 +57,6 @@ import {
 } from 'recharts'
 
 export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
-  const router = useRouter()
   const { t } = useLanguage()
 
   const [activeTab, setActiveTab] = useState<Tab>('scanned')
@@ -117,7 +112,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
       )
     } else {
       setFilteredStock(
-        fuzzyFilter(stockItems, query, item => [item.artNumber, item.colorNumber, item.sizeNumber])
+        fuzzyFilter(stockItems, query, item => [item.artNumber, item.artName, item.colorNumber, item.colorName, item.sizeNumber])
       )
     }
   }, [activeTab, inventory, stockItems])
@@ -131,10 +126,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
     try {
       setLoading(true)
       setError(null)
-      const [summaryData, statsData] = await Promise.all([
-        getInventorySummary(),
-        getStatistics(),
-      ])
+      const { summary: summaryData, stats: statsData } = await getScannedInventoryView() // one request
       setInventory(summaryData as InventoryItem[])
       setFilteredInventory(summaryData as InventoryItem[])
       setStats(statsData as Statistics)
@@ -152,10 +144,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
     try {
       setLoading(true)
       setError(null)
-      const [items, overallStats] = await Promise.all([
-        getOverallStockSummary(),
-        getOverallStockStats(),
-      ])
+      const { items, stats: overallStats } = await getOverallStockView() // one request
       setStockItems(items)
       setFilteredStock(items)
       setStockStats(overallStats)
@@ -220,40 +209,35 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
     }
   }
 
-  async function handleLogout() {
-    await signOut()
-    router.push('/sign-in')
-  }
-
   function renderScannedKPIs() {
     if (!stats) return null
     const avg = stats.uniqueItems > 0 ? (stats.totalItems / stats.uniqueItems).toFixed(1) : '0'
     return (
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <KpiCard
-          icon={<QrCode className="h-5 w-5 text-blue-600" />}
-          iconBg="bg-blue-50"
+          icon={<QrCode className="h-5 w-5 text-blue-600 dark:text-blue-400" />}
+          iconBg="bg-blue-50 dark:bg-blue-500/15"
           title={t('totalScans')}
           value={stats.totalScans}
           subtitle={`${stats.scansLast24h} ${t('inLast24h')}`}
         />
         <KpiCard
-          icon={<Package className="h-5 w-5 text-green-600" />}
-          iconBg="bg-green-50"
+          icon={<Package className="h-5 w-5 text-green-600 dark:text-green-400" />}
+          iconBg="bg-green-50 dark:bg-green-500/15"
           title={t('totalItemsScanned')}
           value={stats.totalItems}
           subtitle={t('unitsScanned')}
         />
         <KpiCard
-          icon={<Tag className="h-5 w-5 text-purple-600" />}
-          iconBg="bg-purple-50"
+          icon={<Tag className="h-5 w-5 text-purple-600 dark:text-purple-400" />}
+          iconBg="bg-purple-50 dark:bg-purple-500/15"
           title={t('uniqueItemsScannedKPI')}
           value={stats.uniqueItems}
           subtitle={t('differentSKUs')}
         />
         <KpiCard
           icon={<BarChart3 className="h-5 w-5 text-orange-500" />}
-          iconBg="bg-orange-50"
+          iconBg="bg-orange-50 dark:bg-orange-500/15"
           title={t('avgPerItemScanned')}
           value={avg}
           subtitle={t('unitsPerSKU')}
@@ -267,32 +251,32 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
     return (
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <KpiCard
-          icon={<Package className="h-5 w-5 text-blue-600" />}
-          iconBg="bg-blue-50"
+          icon={<Package className="h-5 w-5 text-blue-600 dark:text-blue-400" />}
+          iconBg="bg-blue-50 dark:bg-blue-500/15"
           title={t('totalStockItems')}
           value={stockStats.totalStockItems.toLocaleString()}
-          subtitle={t('totalUnits')}
+          subtitle={`${stockStats.uniqueSKUs.toLocaleString()} ${t('differentSKUs')}`}
         />
         <KpiCard
-          icon={<Package className="h-5 w-5 text-green-600" />}
-          iconBg="bg-green-50"
-          title={t('uniqueSKUs')}
-          value={stockStats.uniqueSKUs.toLocaleString()}
-          subtitle={t('differentSKUs')}
+          icon={<QrCode className="h-5 w-5 text-green-600 dark:text-green-400" />}
+          iconBg="bg-green-50 dark:bg-green-500/15"
+          title={t('scannedStock')}
+          value={stockStats.scannedStockItems.toLocaleString()}
+          subtitle={t('scannedStockHint')}
         />
         <KpiCard
-          icon={<Tag className="h-5 w-5 text-purple-600" />}
-          iconBg="bg-purple-50"
-          title={t('totalLocations')}
-          value={stockStats.totalLocations}
-          subtitle={t('storageLocations')}
+          icon={<Tag className="h-5 w-5 text-amber-600 dark:text-amber-400" />}
+          iconBg="bg-amber-50 dark:bg-amber-500/15"
+          title={t('unscannedStock')}
+          value={stockStats.unscannedStockItems.toLocaleString()}
+          subtitle={t('unscannedStockHint')}
         />
         <KpiCard
-          icon={<BarChart3 className="h-5 w-5 text-orange-500" />}
-          iconBg="bg-orange-50"
-          title={t('lowStockItems')}
-          value={stockStats.lowStockItems}
-          subtitle={t('itemsBelowThreshold')}
+          icon={<BarChart3 className="h-5 w-5 text-red-500" />}
+          iconBg="bg-red-50 dark:bg-red-500/15"
+          title={t('awaitingArticleLink')}
+          value={stockStats.awaitingArticleLink.toLocaleString()}
+          subtitle={stockStats.negativeSKUs > 0 ? `${stockStats.negativeSKUs} ${t('negativeSkus')}` : t('awaitingArticleLinkHint')}
         />
       </div>
     )
@@ -304,15 +288,15 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
         <CardHeader className="px-3 sm:px-6">
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50">
-                <QrCode className="h-4 w-4 text-blue-600" />
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-500/15">
+                <QrCode className="h-4 w-4 text-blue-600 dark:text-blue-400" />
               </div>
               <div>
                 <CardTitle className="text-base sm:text-lg">{t('scannedInventoryTitle')}</CardTitle>
                 <CardDescription className="text-xs sm:text-sm">{t('scannedInventoryDesc')}</CardDescription>
               </div>
             </div>
-            <FilterBadge icon={<Filter className="h-3 w-3" />} className="bg-blue-50 text-blue-600">
+            <FilterBadge icon={<Filter className="h-3 w-3" />} className="bg-blue-50 dark:bg-blue-500/15 text-blue-600 dark:text-blue-400">
               {t('filteredByCurrentUser')}
             </FilterBadge>
           </div>
@@ -383,7 +367,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
               </Table>
             </div>
           )}
-          <p className="px-3 sm:px-4 pt-3 pb-1 text-xs sm:text-sm text-blue-600 font-medium">
+          <p className="px-3 sm:px-4 pt-3 pb-1 text-xs sm:text-sm text-blue-600 dark:text-blue-400 font-medium">
             {t('showing')} {filteredInventory.length} {t('of')} {inventory.length} {t('items')}
           </p>
         </CardContent>
@@ -397,15 +381,15 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
         <CardHeader className="px-3 sm:px-6">
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50">
-                <Package className="h-4 w-4 text-green-600" />
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-500/15">
+                <Package className="h-4 w-4 text-green-600 dark:text-green-400" />
               </div>
               <div>
                 <CardTitle className="text-base sm:text-lg">{t('overallStockTitle')}</CardTitle>
                 <CardDescription className="text-xs sm:text-sm">{t('overallStockDesc')}</CardDescription>
               </div>
             </div>
-            <FilterBadge icon={<Filter className="h-3 w-3" />} className="bg-green-50 text-green-600">
+            <FilterBadge icon={<Filter className="h-3 w-3" />} className="bg-green-50 dark:bg-green-500/15 text-green-600 dark:text-green-400">
               {t('filteredByAllUsers')}
             </FilterBadge>
           </div>
@@ -420,57 +404,35 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4">{t('entryTypeCol')}</TableHead>
                     <TableHead className="text-xs sm:text-sm px-3 sm:px-4">{t('artNumberCol')}</TableHead>
                     <TableHead className="text-xs sm:text-sm px-3 sm:px-4">{t('colorCol')}</TableHead>
                     <TableHead className="text-xs sm:text-sm px-3 sm:px-4">{t('sizeCol')}</TableHead>
                     <TableHead className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell">{t('divisionCol')}</TableHead>
-                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell text-right">{t('mrpCol')}</TableHead>
-                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4 hidden md:table-cell">{t('mfgCol')}</TableHead>
-                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4 hidden md:table-cell">{t('scannedByCol')}</TableHead>
+                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4 text-right">{t('scannedStock')}</TableHead>
+                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4 text-right">{t('unscannedStock')}</TableHead>
                     <TableHead className="text-xs sm:text-sm px-3 sm:px-4 text-right">{t('totalQuantityCol')}</TableHead>
-                    <TableHead className="text-xs sm:text-sm px-3 sm:px-4 text-right hidden sm:table-cell">{t('totalScansCol')}</TableHead>
                     <TableHead className="text-xs sm:text-sm px-3 sm:px-4 hidden md:table-cell">{t('lastUpdatedCol')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredStock.map((item, idx) => (
-                    <TableRow key={idx}>
+                  {filteredStock.map((item) => (
+                    <TableRow key={item.skuId}>
                       <TableCell className="px-3 sm:px-4">
-                        <Badge variant={item.entryType === 'scan' ? 'default' : 'secondary'} className="text-xs">
-                          {item.entryType}
-                        </Badge>
+                        <div className="font-mono text-xs sm:text-sm font-semibold">{item.artNumber || '-'}</div>
+                        <div className="text-[10px] text-muted-foreground">{item.artName}</div>
                       </TableCell>
-                      <TableCell className="font-mono text-xs sm:text-sm font-semibold px-3 sm:px-4">
-                        {item.artNumber || '-'}
+                      <TableCell className="px-3 sm:px-4">
+                        <div className="font-mono text-xs sm:text-sm">{item.colorNumber || '-'}</div>
+                        <div className="text-[10px] text-muted-foreground">{item.colorName}</div>
                       </TableCell>
-                      <TableCell className="font-mono text-xs sm:text-sm px-3 sm:px-4">
-                        {item.colorNumber || '-'}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs sm:text-sm px-3 sm:px-4">
-                        {item.sizeNumber || '-'}
-                      </TableCell>
-                      <TableCell className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell">
-                        {item.division || '-'}
-                      </TableCell>
-                      <TableCell className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell text-right">
-                        {item.mrp != null ? `₹${item.mrp.toFixed(2)}` : '-'}
-                      </TableCell>
-                      <TableCell className="text-xs sm:text-sm px-3 sm:px-4 hidden md:table-cell">
-                        {item.mfgMonth && item.mfgYear
-                          ? `${String(item.mfgMonth).padStart(2, '0')}/${item.mfgYear}`
-                          : '-'}
-                      </TableCell>
-                      <TableCell className="text-xs sm:text-sm px-3 sm:px-4 hidden md:table-cell">
-                        {item.scannedByName || '-'}
-                      </TableCell>
+                      <TableCell className="font-mono text-xs sm:text-sm px-3 sm:px-4">{item.sizeNumber}</TableCell>
+                      <TableCell className="text-xs sm:text-sm px-3 sm:px-4 hidden sm:table-cell">{item.division || '-'}</TableCell>
+                      <TableCell className="text-right text-xs sm:text-sm px-3 sm:px-4 tabular-nums">{item.scannedQuantity}</TableCell>
+                      <TableCell className="text-right text-xs sm:text-sm px-3 sm:px-4 tabular-nums">{item.unscannedQuantity || '-'}</TableCell>
                       <TableCell className="text-right px-3 sm:px-4">
-                        <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+                        <Badge className={item.totalQuantity < 0 ? 'bg-red-100 dark:bg-red-500/15 text-red-800 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-500/25' : 'bg-green-100 dark:bg-green-500/15 text-green-800 dark:text-green-300 hover:bg-green-100'}>
                           {item.totalQuantity}
                         </Badge>
-                      </TableCell>
-                      <TableCell className="text-right text-xs sm:text-sm text-muted-foreground px-3 sm:px-4 hidden sm:table-cell">
-                        {item.totalScans}
                       </TableCell>
                       <TableCell className="text-xs sm:text-sm text-muted-foreground px-3 sm:px-4 hidden md:table-cell">
                         {new Date(item.lastUpdated).toLocaleDateString(undefined, {
@@ -484,7 +446,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
               </Table>
             </div>
           )}
-          <p className="px-3 sm:px-4 pt-3 pb-1 text-xs sm:text-sm text-blue-600 font-medium">
+          <p className="px-3 sm:px-4 pt-3 pb-1 text-xs sm:text-sm text-blue-600 dark:text-blue-400 font-medium">
             {t('showing')} {filteredStock.length} {t('of')} {stockItems.length} {t('items')}
           </p>
         </CardContent>
@@ -498,8 +460,8 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
       <Card>
         <CardHeader className="px-3 sm:px-6 pb-2">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50">
-              <TrendingUp className="h-4 w-4 text-blue-600" />
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-500/15">
+              <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
             </div>
             <CardTitle className="text-sm sm:text-base">{t('scansOverTime')}</CardTitle>
           </div>
@@ -527,8 +489,8 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
       <Card>
         <CardHeader className="px-3 sm:px-6 pb-2">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-50">
-              <BarChart3 className="h-4 w-4 text-purple-600" />
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-50 dark:bg-purple-500/15">
+              <BarChart3 className="h-4 w-4 text-purple-600 dark:text-purple-400" />
             </div>
             <CardTitle className="text-sm sm:text-base">{t('divisionBreakdown')}</CardTitle>
           </div>
@@ -554,7 +516,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
       <Card>
         <CardHeader className="px-3 sm:px-6 pb-2">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-50">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-50 dark:bg-orange-500/15">
               <PieChart className="h-4 w-4 text-orange-500" />
             </div>
             <CardTitle className="text-sm sm:text-base">{t('entryTypeBreakdown')}</CardTitle>
@@ -590,8 +552,8 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
       <Card>
         <CardHeader className="px-3 sm:px-6 pb-2">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50">
-              <Tag className="h-4 w-4 text-green-600" />
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 dark:bg-green-500/15">
+              <Tag className="h-4 w-4 text-green-600 dark:text-green-400" />
             </div>
             <CardTitle className="text-sm sm:text-base">{t('topSKUs')}</CardTitle>
           </div>
@@ -619,8 +581,8 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
       <Card>
         <CardHeader className="px-3 sm:px-6 pb-2">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50">
-              <QrCode className="h-4 w-4 text-blue-600" />
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-500/15">
+              <QrCode className="h-4 w-4 text-blue-600 dark:text-blue-400" />
             </div>
             <CardTitle className="text-sm sm:text-base">{t('scansByUser')}</CardTitle>
           </div>
@@ -699,8 +661,8 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
         <CardHeader className="px-3 sm:px-6 pb-2">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50">
-                <BarChart3 className="h-4 w-4 text-blue-600" />
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-500/15">
+                <BarChart3 className="h-4 w-4 text-blue-600 dark:text-blue-400" />
               </div>
               <div>
                 <CardTitle className="text-sm sm:text-base">{titleText}</CardTitle>
@@ -714,7 +676,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
             </div>
             <div className="flex items-center gap-1 text-xs flex-wrap">
               <button
-                className="text-blue-600 hover:underline font-medium"
+                className="text-blue-600 dark:text-blue-400 hover:underline font-medium"
                 onClick={() => { setDrillArt(null); setDrillColor(null) }}
               >
                 All Articles
@@ -787,7 +749,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
   function renderScannedCharts() {
     const drillSection = (
       <div className="space-y-6">
-        <SectionLabel icon={<QrCode className="h-4 w-4 shrink-0 text-blue-600" />} title={t('myStatsTitle')} />
+        <SectionLabel icon={<QrCode className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />} title={t('myStatsTitle')} />
         <ChartArticleDrillDown />
       </div>
     )
@@ -803,7 +765,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
 
     return (
       <div className="space-y-6">
-        <SectionLabel icon={<QrCode className="h-4 w-4 shrink-0 text-blue-600" />} title={t('myStatsTitle')} />
+        <SectionLabel icon={<QrCode className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />} title={t('myStatsTitle')} />
 
         <ChartArticleDrillDown />
 
@@ -836,7 +798,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
 
     return (
       <div className="space-y-6">
-        <SectionLabel icon={<Package className="h-4 w-4 shrink-0 text-green-600" />} title={t('warehouseStatsTitle')} />
+        <SectionLabel icon={<Package className="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" />} title={t('warehouseStatsTitle')} />
 
         <ChartScansByUser data={overallChartData.scansByUser} />
 
@@ -860,15 +822,7 @@ export function DashboardPage({ embedded }: { embedded?: boolean } = {}) {
         <div className="flex flex-col gap-0.5">
           <div className="flex items-center justify-between gap-2">
             <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight">{t('dashboard')}</h1>
-            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-              <LanguageToggle />
-              <Button variant="outline" size="sm" className="text-xs sm:text-sm px-2 sm:px-3" onClick={() => router.push('/scanner')}>
-                {t('scanner')}
-              </Button>
-              <Button variant="outline" size="sm" className="text-xs sm:text-sm px-2 sm:px-3" onClick={handleLogout}>
-                {t('signOut')}
-              </Button>
-            </div>
+            <PageNav />
           </div>
           {loggedInUser && <UserPill icon={<User className="h-2.5 w-2.5" />} name={loggedInUser} />}
         </div>

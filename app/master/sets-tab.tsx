@@ -1,8 +1,10 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useTransition, useRef } from 'react'
+import { useListKeys } from '@/lib/shortcuts/list'
 import { saveSet, deleteSet } from '@/app/actions/sets'
 import type { OrderSet } from '@/app/actions/sets'
+import { DialogKeys } from '@/components/dialog-keys'
 
 export type { OrderSet }
 
@@ -47,6 +49,9 @@ interface Props {
 }
 
 export function SetsTab({ initialSets, onListChange }: Props) {
+  // Keyboard: ↑↓ / j k rows, Enter edits, / filters, n new (lib/shortcuts/list.ts).
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Sets list', newLabel: 'New set', onNew: () => openAdd() })
   const [sets, setSets] = useState<OrderSet[]>(initialSets)
 
   function updateSets(next: OrderSet[]) {
@@ -117,7 +122,7 @@ export function SetsTab({ initialSets, onListChange }: Props) {
   const inputCls = 'w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring'
 
   return (
-    <div>
+    <div ref={listRef}>
       {/* ── Toolbar ── */}
       <div className="flex items-center justify-between mb-4">
         <p className="text-xs text-muted-foreground">
@@ -138,7 +143,7 @@ export function SetsTab({ initialSets, onListChange }: Props) {
       {/* ── Mobile: card list ── */}
       <div className="sm:hidden space-y-3">
         {sets.map(s => (
-          <div key={s.id} className="rounded-2xl border border-border bg-card overflow-hidden">
+          <div key={s.id} data-list-row className="rounded-2xl border border-border bg-card overflow-hidden">
             <div className="px-4 pt-4 pb-3">
               <p className="font-semibold text-base text-foreground">{s.name}</p>
               <p className="text-xs text-muted-foreground mt-1 break-all">
@@ -147,6 +152,8 @@ export function SetsTab({ initialSets, onListChange }: Props) {
             </div>
             <div className="border-t border-border px-4 py-3 flex gap-2">
               <button
+                type="button"
+                data-row-open
                 onClick={() => openEdit(s)}
                 className="flex-1 rounded-xl border border-border bg-background py-2.5 text-sm font-medium hover:bg-muted active:scale-95 transition-all"
               >
@@ -177,7 +184,7 @@ export function SetsTab({ initialSets, onListChange }: Props) {
           </thead>
           <tbody className="divide-y divide-border">
             {sets.map(s => (
-              <tr key={s.id} className="hover:bg-muted/30 transition-colors">
+              <tr key={s.id} data-list-row className="hover:bg-muted/30 transition-colors">
                 <td className="pl-4 pr-2 py-3 font-mono text-xs text-muted-foreground">{s.id}</td>
                 <td className="px-2 py-3 font-medium text-foreground truncate">{s.name}</td>
                 <td className="px-2 py-3 text-xs text-muted-foreground truncate">
@@ -186,6 +193,8 @@ export function SetsTab({ initialSets, onListChange }: Props) {
                 <td className="pr-4 pl-2 py-3 whitespace-nowrap w-[140px]">
                   <div className="flex gap-1.5 justify-end">
                     <button
+                      type="button"
+                      data-row-open
                       onClick={() => openEdit(s)}
                       className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors"
                     >
@@ -212,6 +221,7 @@ export function SetsTab({ initialSets, onListChange }: Props) {
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
           onClick={() => setModalMode(null)}
         >
+          <DialogKeys onClose={() => setModalMode(null)} />
           <div
             className="w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl border border-border bg-background shadow-2xl"
             onClick={e => e.stopPropagation()}
@@ -237,7 +247,7 @@ export function SetsTab({ initialSets, onListChange }: Props) {
 
             <div className="p-5 space-y-4 overflow-y-auto max-h-[65vh]">
               {formError && (
-                <p className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
+                <p role="alert" className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
               )}
 
               <div>
@@ -291,7 +301,7 @@ export function SetsTab({ initialSets, onListChange }: Props) {
               >
                 Cancel
               </button>
-              <button
+              <button data-primary
                 onClick={handleSave}
                 disabled={isSaving}
                 className="flex-1 rounded-xl bg-foreground text-background px-3 py-3 text-sm font-semibold hover:opacity-90 active:scale-95 transition-all disabled:opacity-60"
@@ -309,6 +319,7 @@ export function SetsTab({ initialSets, onListChange }: Props) {
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
           onClick={() => setDeleteTarget(null)}
         >
+          <DialogKeys onClose={() => setDeleteTarget(null)} />
           <div
             className="w-full sm:max-w-sm rounded-t-3xl sm:rounded-2xl border border-border bg-background shadow-2xl p-5"
             onClick={e => e.stopPropagation()}
@@ -321,14 +332,14 @@ export function SetsTab({ initialSets, onListChange }: Props) {
               Delete <span className="font-medium text-foreground">{deleteTarget.name}</span>? This cannot be undone.
             </p>
             <div className="flex gap-2">
-              <button
+              <button data-autofocus
                 onClick={() => setDeleteTarget(null)}
                 disabled={isDeleting}
                 className="flex-1 rounded-xl border border-border px-3 py-3 text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
-              <button
+              <button data-primary data-destructive
                 onClick={handleDeleteConfirm}
                 disabled={isDeleting}
                 className="flex-1 rounded-xl bg-red-600 text-white px-3 py-3 text-sm font-semibold hover:bg-red-700 active:scale-95 transition-all disabled:opacity-60"

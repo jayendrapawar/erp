@@ -77,7 +77,7 @@ export function FlagSelector(props: FlagSelectorProps) {
     <div className="space-y-2">
       <div className="flex items-center gap-2">
         <span className="shrink-0 text-xs font-semibold text-muted-foreground">Select Flag:</span>
-        <span className="inline-flex max-w-[120px] shrink-0 items-center gap-1 rounded-full border border-blue-300 bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 truncate">
+        <span className="inline-flex max-w-[120px] shrink-0 items-center gap-1 rounded-full border border-blue-300 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/15 px-2.5 py-0.5 text-xs font-semibold text-blue-700 dark:text-blue-300 truncate">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 shrink-0">
             <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
             <line x1="4" y1="22" x2="4" y2="15" />
@@ -125,7 +125,7 @@ function InlineButton({ children, disabled, onClick, primary = false }: { childr
       disabled={disabled}
       onClick={onClick}
       className={primary
-        ? 'h-7 shrink-0 rounded-md border border-blue-300 bg-blue-50 px-3 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50'
+        ? 'h-7 shrink-0 rounded-md border border-blue-300 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/15 px-3 text-xs font-medium text-blue-700 dark:text-blue-300 hover:bg-blue-100 disabled:opacity-50'
         : 'h-7 shrink-0 rounded-md border border-input bg-background px-3 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50'}
     >
       {children}

@@ -1,45 +1,30 @@
-import { headers } from 'next/headers'
-import { redirect } from 'next/navigation'
-import { auth } from '@/lib/auth'
+import { requirePageUser } from '@/lib/authz'
+import { retailerColumns, toBillingVendor } from '@/lib/retailer-columns'
 import { db } from '@/lib/db'
-import { user, vendors } from '@/lib/db/schema'
+import { vendors } from '@/lib/db/schema'
 import { eq, asc } from 'drizzle-orm'
-import { isRedirectError } from 'next/dist/client/components/redirect-error'
 import { getBillerQueue } from '@/app/actions/orders'
 import { loadCatalogue } from '@/app/actions/catalogue'
 import { BillerDashboard } from './biller-dashboard'
+import { listPickerChoices } from '@/lib/orders/pickers'
 import type { BillingVendor } from '@/components/billing-scanner-page'
 
-export const metadata = { title: 'Biller — Orders | Shayona' }
+export const metadata = { title: 'Biller — Orders & Billing | Shayona' }
 
 export default async function BillerPage() {
   let currentBillerId = ''
-  try {
-    const session = await auth.api.getSession({ headers: await headers() })
-    if (!session?.user) redirect('/sign-in')
-    currentBillerId = session.user.id
-    const [u] = await db.select({ role: user.role }).from(user).where(eq(user.id, session.user.id)).limit(1)
-    const roles = (u?.role ?? 'user').split(',').map(r => r.trim())
-    if (!roles.includes('biller') && !roles.includes('admin')) redirect('/orders')
-  } catch (err) {
-    if (isRedirectError(err)) throw err
-    redirect('/sign-in')
-  }
+  const me = await requirePageUser({ anyRole: ['biller', 'admin'], elseTo: '/orders' })
+  currentBillerId = me.id
 
-  const [billerOrders, vendorRows, catalogue] = await Promise.all([
+  const [billerOrders, vendorRows, catalogue, pickers] = await Promise.all([
     getBillerQueue(),
-    db.select().from(vendors).where(eq(vendors.status, 'active')).orderBy(asc(vendors.partyName)),
+    db.select(retailerColumns).from(vendors).where(eq(vendors.status, 'active')).orderBy(asc(vendors.partyName)),
     loadCatalogue(),
+    listPickerChoices(db),
   ])
 
-  const billingVendors: BillingVendor[] = vendorRows.map(v => ({
-    id:      v.id,
-    name:    v.partyName,
-    code:    v.area   || null,
-    phone:   v.phone  || null,
-    address: [v.address, v.city].filter(Boolean).join(', ') || null,
-  }))
+  const billingVendors: BillingVendor[] = vendorRows.map(toBillingVendor)
 
   const articleNumbers = catalogue.articles.map(a => a.artNumber)
-  return <BillerDashboard orders={billerOrders} currentBillerId={currentBillerId} vendors={billingVendors} articles={articleNumbers} />
+  return <BillerDashboard orders={billerOrders} currentBillerId={currentBillerId} vendors={billingVendors} articles={articleNumbers} pickers={pickers} />
 }

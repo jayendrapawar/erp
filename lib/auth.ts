@@ -1,5 +1,6 @@
 import { betterAuth } from 'better-auth'
 import { pool } from '@/lib/db'
+import { devPasswordLoginEnabled } from '@/lib/dev-login'
 
 if (!process.env.BETTER_AUTH_SECRET) {
   throw new Error('BETTER_AUTH_SECRET environment variable is required')
@@ -96,6 +97,11 @@ export const auth = betterAuth({
   secret: process.env.BETTER_AUTH_SECRET,
   baseURL,
   trustedOrigins,
+  // Local testing only (lib/dev-login.ts): off in every production build and on Vercel.
+  emailAndPassword: {
+    enabled: devPasswordLoginEnabled(),
+    disableSignUp: true,
+  },
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID!,
@@ -113,5 +119,9 @@ export const auth = betterAuth({
   session: {
     expiresIn: 60 * 60 * 24 * 30, // 30 days
     updateAge: 60 * 60 * 24,       // rolling — extends 1 day on each visit
+    // Signed copy of the session in the cookie for 5 minutes: most page changes need no database
+    // query to know who is signed in (faster, and unaffected by the database waking up). Signing out
+    // clears it at once; a session deleted on the server stops working within 5 minutes.
+    cookieCache: { enabled: true, maxAge: 5 * 60 },
   },
 })

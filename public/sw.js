@@ -1,20 +1,24 @@
 /**
- * Shayona Inventory — Service Worker v4
+ * Shayona Inventory — Service Worker v5
  *
  * Strategies:
  *   - App shell JS/CSS (_next/static)          → CacheFirst  (versioned hashes, safe forever)
- *   - Page HTML (all app routes)               → NetworkFirst with 5 s timeout → cache fallback
+ *   - Page HTML + page data (all app routes)   → Network; the saved copy ONLY when offline.
+ *     (v5, 21 Nov 2026: the old 5 s timeout served old pages and old orders / stock whenever the
+ *     database was waking up. Page data for in-app navigation (RSC) is never saved.)
  *   - Images / icons / manifest                → CacheFirst
- *   - Catalogue API route (/api/catalogue)     → StaleWhileRevalidate (30 min TTL)
+ *   - Catalogue API route (/api/catalogue)     → not touched: the page keeps its own copy and asks
+ *     only when the catalogue changed (24 Nov 2026; the old 30 min copy here hid Master edits)
  *   - Server Actions (POST)                    → NetworkOnly (never cache mutations)
- *   - Everything else                          → NetworkFirst
+ *   - Everything else                          → Network; saved copy only when offline
  */
 
-const CACHE_VERSION  = 'v4'
+const CACHE_VERSION  = 'v5'
 const CACHE_NAME     = `shayona-${CACHE_VERSION}`
 const STATIC_CACHE   = `shayona-static-${CACHE_VERSION}`
-const PAGES_CACHE    = `shayona-pages-${CACHE_VERSION}`
-const CAT_CACHE      = `shayona-catalogue-${CACHE_VERSION}`
+const PAGES_CACHE    = `shayona-pages-${CACHE_VERSION}` // components/scanner-page.tsx saves /scanner here too: change both
+// Owned by the page (lib/use-catalogue-cache.ts), not by this worker: kept when the worker updates.
+const ORDER_CATALOGUE_CACHE = 'shayona-order-catalogue-v1'
 
 // Pages to pre-cache on install (must be navigable without live DB)
 const PRECACHE_URLS = [
@@ -50,7 +54,7 @@ self.addEventListener('install', (event) => {
 
 // ── Activate: evict all old caches ───────────────────────────────────────────
 self.addEventListener('activate', (event) => {
-  const valid = new Set([CACHE_NAME, STATIC_CACHE, PAGES_CACHE, CAT_CACHE])
+  const valid = new Set([CACHE_NAME, STATIC_CACHE, PAGES_CACHE, ORDER_CATALOGUE_CACHE])
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(keys.filter((k) => !valid.has(k)).map((k) => caches.delete(k))))
@@ -82,30 +86,27 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // Catalogue API — stale-while-revalidate, 30 min TTL
-  if (url.pathname === '/api/catalogue') {
-    event.respondWith(staleWhileRevalidate(request, CAT_CACHE, 30 * 60 * 1000))
-    return
-  }
+  // Catalogue API — straight to the server (the page keeps the copy)
+  if (url.pathname === '/api/catalogue') return
 
-  // All HTML pages — NetworkFirst with 5 s timeout
+  // Pages and their data — always from the server; the saved copy only when there is no connection
   const isHtmlPage =
     request.headers.get('accept')?.includes('text/html') ||
     PAGE_PATHS.some((p) => url.pathname === p || url.pathname.startsWith(p + '/'))
 
   if (isHtmlPage) {
-    event.respondWith(networkFirstWithTimeout(request, PAGES_CACHE, 5000))
+    event.respondWith(networkFirst(request, PAGES_CACHE))
     return
   }
 
   // _next/data and internal Next routes
   if (url.pathname.startsWith('/_next/')) {
-    event.respondWith(networkFirstWithTimeout(request, CACHE_NAME, 5000))
+    event.respondWith(networkFirst(request, CACHE_NAME))
     return
   }
 
   // Default
-  event.respondWith(networkFirstWithTimeout(request, CACHE_NAME, 5000))
+  event.respondWith(networkFirst(request, CACHE_NAME))
 })
 
 // ── Strategies ────────────────────────────────────────────────────────────────
@@ -121,19 +122,23 @@ async function cacheFirst(request, cacheName) {
   return response
 }
 
-async function networkFirstWithTimeout(request, cacheName, timeoutMs) {
-  const controller = new AbortController()
-  const timeoutId  = setTimeout(() => controller.abort(), timeoutMs)
+/**
+ * Network first with no time limit: a slow answer (database waking up) still shows fresh data. The
+ * saved copy is used only when the network fails (offline). In-app page data (RSC) is never saved:
+ * it changes with every order and scan.
+ */
+async function networkFirst(request, cacheName) {
+  const url = new URL(request.url)
+  const isRsc = request.headers.get('RSC') === '1' || url.searchParams.has('_rsc')
   try {
-    const response = await fetch(request, { signal: controller.signal })
-    clearTimeout(timeoutId)
-    if (response.ok) {
+    const response = await fetch(request)
+    if (response.ok && !isRsc) {
       const cache = await caches.open(cacheName)
       cache.put(request, response.clone())
     }
     return response
   } catch {
-    clearTimeout(timeoutId)
+    if (isRsc) return Response.error()
     const cached = await caches.match(request)
     if (cached) return cached
     if (request.headers.get('accept')?.includes('text/html')) {
@@ -145,44 +150,4 @@ async function networkFirstWithTimeout(request, cacheName, timeoutMs) {
       headers: { 'Content-Type': 'text/plain' },
     })
   }
-}
-
-/**
- * Stale-while-revalidate with TTL.
- * Returns cached response immediately if within TTL, while fetching a fresh
- * copy in the background. If cache is stale or missing, waits for network.
- */
-async function staleWhileRevalidate(request, cacheName, ttlMs) {
-  const cache  = await caches.open(cacheName)
-  const cached = await cache.match(request)
-
-  const fetchAndStore = fetch(request).then((response) => {
-    if (response.ok) {
-      const clone = response.clone()
-      // Stamp the cached-at time in a custom header via a wrapper Response
-      clone.headers // can't mutate; store timestamp separately via a meta key
-      cache.put(request, response.clone())
-      cache.put(request.url + '__ts', new Response(String(Date.now())))
-    }
-    return response
-  }).catch(() => null)
-
-  if (cached) {
-    const tsResponse = await cache.match(request.url + '__ts')
-    const ts = tsResponse ? Number(await tsResponse.text()) : 0
-    if (Date.now() - ts < ttlMs) {
-      // Fresh enough — return cached immediately, revalidate in background
-      fetchAndStore // fire and forget
-      return cached
-    }
-  }
-
-  // Stale or missing — wait for network
-  const fresh = await fetchAndStore
-  if (fresh) return fresh
-  if (cached) return cached  // network failed, serve stale rather than error
-  return new Response('Catalogue unavailable offline', {
-    status: 503,
-    headers: { 'Content-Type': 'text/plain' },
-  })
 }

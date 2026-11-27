@@ -14,10 +14,9 @@
 
 import { getQueue, removeFromQueue, updateEntry, type OfflineEntry } from './offline-queue'
 import { getCachedFlags, getPendingFlags, removePendingFlag, cacheFlags } from './offline-flags'
-import { recordScan }     from '@/app/actions/scan'
-import { addManualEntry } from '@/app/actions/dashboard'
+import { addManualEntry, recordScan } from '@/app/actions/scan'
 import { getFlags, createFlag } from '@/app/actions/flags'
-import { DUPLICATE_QR_ERROR, DUPLICATE_ENTRY_ERROR } from './errors'
+import { DUPLICATE_QR_ERROR } from './errors'
 
 export interface SyncResult {
   synced:     number   // successfully written to DB
@@ -94,28 +93,39 @@ export async function syncFlags(): Promise<string[]> {
   }
 }
 
-/** Returns 'success' | 'duplicate' | error-message-string */
+/**
+ * Returns 'success' | 'duplicate' | error-message-string.
+ * The queue's tempId was generated on the device when the box was scanned and is sent as
+ * the event id, so re-sending after a lost response returns the original scan instead of
+ * adding stock again.
+ */
 async function trySyncEntry(entry: OfflineEntry): Promise<'success' | 'duplicate' | string> {
+  // Entries queued before the flag field existed carried it inside notes.
+  const legacyFlag = entry.notes?.match(/\[Flag:\s*([^\]]+)\]/)?.[1]?.trim()
+  const flag = entry.flag ?? legacyFlag ?? null
+  const notes = entry.notes?.replace(/\[Flag:[^\]]*\]/, '').trim() || null
+
   if (entry.entryType === 'scan' && entry.rawQrCode) {
-    const res = await recordScan(entry.rawQrCode, entry.notes)
+    const res = await recordScan(entry.rawQrCode, { clientEventId: entry.tempId, flag, notes, deviceAt: new Date(entry.savedAt).toISOString(), offline: true, sessionId: entry.sessionId ?? null })
     if (res.ok)                           return 'success'
     if (res.error === DUPLICATE_QR_ERROR) return 'duplicate'
-    return `Server error: ${res.error}`
+    return `Server error: ${res.message}`
   }
 
-  // manual entry
-  const res = await addManualEntry(
-    entry.artNumber,
-    entry.colorNumber,
-    entry.sizeNumber,
-    entry.quantity,
-    entry.notes,
-    entry.mrp,
-    entry.division,
-    entry.mfgMonth,
-    entry.mfgYear,
-  )
-  if (res.ok)                                return 'success'
-  if (res.error === DUPLICATE_ENTRY_ERROR)   return 'duplicate'
-  return `Server error: ${res.error}`
+  const res = await addManualEntry({
+    clientEventId: entry.tempId,
+    artNumber: entry.artNumber,
+    colorNumber: entry.colorNumber,
+    sizeNumber: entry.sizeNumber,
+    quantity: entry.quantity,
+    notes,
+    flag,
+    mrp: entry.mrp ?? null,
+    mfgMonth: entry.mfgMonth ?? null,
+    mfgYear: entry.mfgYear ?? null,
+    sessionId: entry.sessionId ?? null,
+    offline: true,
+  })
+  if (res.ok) return 'success'
+  return `Server error: ${res.message}`
 }

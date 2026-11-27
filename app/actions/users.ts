@@ -1,25 +1,21 @@
 'use server'
 
-import { auth } from '@/lib/auth'
+import { eq, sql } from 'drizzle-orm'
+import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
 import { user } from '@/lib/db/schema'
-import { eq, like } from 'drizzle-orm'
-import { headers } from 'next/headers'
-import { revalidatePath } from 'next/cache'
+import { getSessionUser, requirePermission, requireUser } from '@/lib/authz'
+import { audit } from '@/lib/audit'
+import { listPickerChoices } from '@/lib/orders/pickers'
+import { ROLES, serializeRoles, type Role } from '@/lib/permissions'
 
-export type AppRole = 'admin' | 'accountant' | 'salesman' | 'picker' | 'biller' | 'dispatcher' | 'user'
+/** 'user' = signed in but not yet given a role: no access to any module. */
+export type AppRole = Role | 'user'
 
-async function requireAdmin() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-  const [u] = await db.select({ role: user.role }).from(user).where(eq(user.id, session.user.id)).limit(1)
-  const roles = (u?.role ?? '').split(',').map(r => r.trim())
-  if (!roles.includes('admin') && !roles.includes('accountant')) throw new Error('Forbidden')
-  return session.user
-}
+const hasRole = (role: string) => sql`${role} = ANY (string_to_array(replace(coalesce(${user.role}, ''), ' ', ''), ','))`
 
 export async function getAllUsers() {
-  await requireAdmin()
+  await requirePermission('users.view')
   return db
     .select({ id: user.id, name: user.name, email: user.email, role: user.role, createdAt: user.createdAt })
     .from(user)
@@ -27,33 +23,39 @@ export async function getAllUsers() {
 }
 
 export async function getUsersByRole(role: AppRole) {
-  await requireAdmin()
-  return db
-    .select({ id: user.id, name: user.name, email: user.email })
-    .from(user)
-    .where(like(user.role, `%${role}%`))
+  await requirePermission('users.view')
+  return db.select({ id: user.id, name: user.name, email: user.email }).from(user).where(hasRole(role))
 }
 
+/** Only admins assign roles. Unknown role names are dropped; no role at all becomes 'user'. */
 export async function updateUserRole(userId: string, role: string) {
-  await requireAdmin()
-  await db.update(user).set({ role }).where(eq(user.id, userId))
+  const actor = await requirePermission('users.manage')
+  const next = serializeRoles(role.split(','))
+  if (userId === actor.id && !next.split(',').includes('admin')) {
+    throw new Error('You cannot remove your own admin role.')
+  }
+  await db.transaction(async (tx) => {
+    const [before] = await tx.select({ role: user.role }).from(user).where(eq(user.id, userId)).for('update')
+    if (!before) throw new Error('User not found.')
+    await tx.update(user).set({ role: next, updatedAt: new Date() }).where(eq(user.id, userId))
+    await audit(tx, { actor: { id: actor.id, name: actor.name }, action: 'user.roles_changed', entityType: 'user', entityId: userId, before, after: { role: next } })
+  })
   revalidatePath('/master')
   revalidatePath('/orders/admin')
 }
 
+/** Who can be named as an order's picker: pickers and admins (lib/orders/pickers.ts). */
 export async function getPickersList() {
-  // Used by admin to assign pickers to orders
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-  return db
-    .select({ id: user.id, name: user.name })
-    .from(user)
-    .where(like(user.role, '%picker%'))
+  await requireUser()
+  return listPickerChoices(db)
 }
 
 export async function getCurrentUserRole(): Promise<string> {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) return 'user'
-  const [u] = await db.select({ role: user.role }).from(user).where(eq(user.id, session.user.id)).limit(1)
-  return u?.role ?? 'user'
+  const u = await getSessionUser()
+  return u && u.roles.length ? u.roles.join(',') : 'user'
+}
+
+export async function getAssignableRoles(): Promise<readonly Role[]> {
+  await requirePermission('users.manage')
+  return ROLES
 }

@@ -1,15 +1,11 @@
-import { headers } from 'next/headers'
-import { redirect } from 'next/navigation'
-import { auth } from '@/lib/auth'
-import { db } from '@/lib/db'
-import { user } from '@/lib/db/schema'
-import { eq } from 'drizzle-orm'
-import { isRedirectError } from 'next/dist/client/components/redirect-error'
+import { requirePageUser } from '@/lib/authz'
 import { getAllUsers } from '@/app/actions/users'
 import { MasterDashboard } from './master-dashboard'
 import { getVendors } from '@/app/actions/vendors'
-import { getArticles, getMissingArticles } from '@/app/actions/articles'
+import { getArticles, getCatalogReviewItems, getMissingArticles } from '@/app/actions/articles'
 import { getSets } from '@/app/actions/sets'
+import { getSuppliers } from '@/app/actions/suppliers'
+import { getAssortments } from '@/app/actions/assortments'
 
 export const metadata = {
   title: 'Master - Shayona Inventory',
@@ -19,25 +15,19 @@ export const metadata = {
 export default async function MasterPage() {
   let currentUserId = ''
   let isAccountant = false
-  try {
-    const session = await auth.api.getSession({ headers: await headers() })
-    if (!session?.user) redirect('/sign-in')
-    currentUserId = session.user.id
-    const [u] = await db.select({ role: user.role }).from(user).where(eq(user.id, session.user.id)).limit(1)
-    const roles = (u?.role ?? 'user').split(',').map(r => r.trim())
-    if (!roles.includes('admin') && !roles.includes('accountant')) redirect('/home')
-    isAccountant = !roles.includes('admin') && roles.includes('accountant')
-  } catch (err) {
-    if (isRedirectError(err)) throw err
-    redirect('/sign-in')
-  }
+  const me = await requirePageUser({ anyRole: ['admin', 'accountant'] })
+  currentUserId = me.id
+  isAccountant = !me.roles.includes('admin') && me.roles.includes('accountant')
 
-  const [allUsers, vendors, articles, sets, missingArticles] = await Promise.all([
+  const [allUsers, vendors, articles, sets, missingArticles, suppliers, catalogReviewItems, assortments] = await Promise.all([
     getAllUsers(),
     getVendors(),
     getArticles(),
     getSets(),
     getMissingArticles(),
+    getSuppliers(),
+    getCatalogReviewItems(),
+    getAssortments(),
   ])
 
   return (
@@ -47,7 +37,10 @@ export default async function MasterPage() {
       vendors={vendors}
       articles={articles}
       missingArticles={missingArticles}
+      catalogReviewItems={catalogReviewItems}
       sets={sets}
+      suppliers={suppliers}
+      assortments={assortments}
       isAccountant={isAccountant}
     />
   )

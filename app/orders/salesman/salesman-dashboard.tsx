@@ -1,18 +1,27 @@
 'use client'
 
-import {
-  useState, useTransition, useRef, useEffect, useMemo, useId, useCallback,
-  forwardRef, useImperativeHandle,
-} from 'react'
-import { useRouter } from 'next/navigation'
+import { sizeWithCode } from '@/lib/orders/size-label'
+import { columnsFor, pickListHtml } from '@/lib/orders/pick-list-print'
+import { mergeMatrix, matrixPairs } from '@/lib/orders/order-lines'
+import { PaperEstimate } from '@/components/orders/paper-estimate'
+import { useState, useTransition, useRef, useEffect, useMemo, useId, useCallback, forwardRef, useImperativeHandle, Fragment } from 'react'
 import { useAutoRefresh } from '@/lib/use-auto-refresh'
-import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
-import { createOrder, updateOrder, cancelOrder, getSalesmanOrderWithItems, salesmanAssignPicker } from '@/app/actions/orders'
+import { StatusPill, fmt, PageHeader, StatButton, SegTabs, SidePanel, isInProgress, type SegTab } from '../_components/shared'
+import { createOrder, updateOrder, cancelOrder, getOlderSalesmanOrders, getSalesmanOrderWithItems, salesmanAssignPicker, sendToBilling } from '@/app/actions/orders'
 import { PageNav } from '@/components/page-nav'
+import { useShowMore } from '@/components/show-more'
 import { fuzzyFilter } from '@/lib/fuzzy'
 import type { ArticleDetail, CatalogueData } from '@/app/actions/catalogue'
-import { useCatalogueCache } from '@/lib/use-catalogue-cache'
+import { useShortcut, useShortcutHelp, type ShortcutHelp } from '@/lib/shortcuts'
+import { useListKeys } from '@/lib/shortcuts/list'
+import { openKeyboardHelp } from '@/components/keyboard-help'
 import type { OrderSet } from '@/app/actions/sets'
+import { DialogKeys } from '@/components/dialog-keys'
+import { CreditNote, isCreditHold, useCreditStatus } from '@/components/payments/credit-note'
+import {
+  deleteDraft, draftArticles, draftHasContent, draftPairs, draftStorageKey, readDrafts, saveDraft,
+  type OrderDraft, type OrderLine, type SizeEntry,
+} from '@/lib/orders/drafts'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -37,26 +46,46 @@ const EDITABLE_STATUSES = ['pending', 'assigned', 'packed', 'billed']
 interface Props {
   orders: ExistingOrder[]
   userName: string
+  /** Whose drafts on this phone (falls back to the name). */
+  userId?: string
   embedded?: boolean
   catalogue: CatalogueData
   sets: OrderSet[]
   pickers: { id: string; name: string | null }[]
+  /** Admin: each open order also has ⚡ Direct bill (skip the picking screen, straight to the biller). */
+  canDirectBill?: boolean
 }
+
+/** Orders a picker can still be given, or that can be sent straight to billing. */
+const OPEN_FOR_PICKING = ['pending', 'assigned']
 
 // Alias types that were previously imported from catalogue actions
 type ShopkeeperResult = CatalogueData['vendors'][number]
 type ArticleResult = { artNumber: string }
 
-// One line in the current order cart (article + color + per-size quantities)
-interface OrderLine {
-  id: string // local uuid for stable keys
-  articleId: number
-  artNumber: string
-  colorId: number
-  colorName: string
-  colorHex: string | null
-  sizes: { id: number; sizeLabel: string; sortOrder: number }[]
-  quantities: Record<string, number> // sizeLabel → qty
+// OrderLine (article + colour + per-size quantities; size key = size, or "CODE:size" when a colour
+// spans several codes) and SizeEntry live in lib/orders/drafts.ts, shared with the drafts.
+const sizeKey = (s: SizeEntry) => s.key ?? s.sizeLabel
+const isMultiCode = (sizes: SizeEntry[]) => sizes.some(s => sizeKey(s) !== s.sizeLabel)
+
+/** A set (size → pairs) onto this colour's keys: the first size with that label gets it. */
+function toKeyed(q: Record<string, number>, sizes: SizeEntry[]): Record<string, number> {
+  if (!isMultiCode(sizes)) return { ...q }
+  const out: Record<string, number> = {}
+  for (const [label, n] of Object.entries(q)) {
+    const hit = sizes.find(s => s.sizeLabel === label && !(sizeKey(s) in out))
+    if (hit) out[sizeKey(hit)] = n
+  }
+  return out
+}
+/** Keys back to plain sizes (for "Last Used" sets). */
+function toLabelled(q: Record<string, number>, sizes: SizeEntry[]): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const [k, n] of Object.entries(q)) {
+    const label = sizes.find(s => sizeKey(s) === k)?.sizeLabel ?? k
+    if (!(label in out)) out[label] = n
+  }
+  return out
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -113,11 +142,16 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
   const listId = useId()
+  // Focus placed by the page (cursor ready for typing) must not pop the list open; the list
+  // opens on typing, ↑/↓ or a click.
+  const quietFocus = useRef(false)
 
   useImperativeHandle(ref, () => ({
     focus: () => {
+      quietFocus.current = true
       inputRef.current?.focus()
       inputRef.current?.select()
+      quietFocus.current = false
     },
   }))
 
@@ -165,7 +199,8 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
     } else if (e.key === 'ArrowDown') {
       e.preventDefault()
       setActiveIdx(i => Math.max(i - 1, 0))
-    } else if (e.key === 'Enter') {
+    } else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+      // Ctrl+Enter is left to the page shortcut (create the order).
       e.preventDefault()
       const item = displayedResults[activeIdx]
       if (item) { onSelect(item); setOpen(false); inputRef.current?.blur() }
@@ -197,7 +232,8 @@ const SearchCombobox = forwardRef(function SearchComboboxInner<T>(
           autoComplete="off"
           disabled={disabled}
           onChange={e => { onInputChange(e.target.value); setOpen(true) }}
-          onFocus={() => setOpen(true)}
+          onFocus={() => { if (!quietFocus.current) setOpen(true) }}
+          onClick={() => setOpen(true)}
           onKeyDown={handleKey}
           className="w-full rounded-xl border border-border bg-background pl-9 pr-9 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         />
@@ -258,10 +294,11 @@ interface OrderItemsCardProps {
 }
 
 function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItemsCardProps) {
-  // Group lines by artNumber preserving insertion order
+  // Group lines by artNumber, most recently added first (owner, 24 Nov 2026): the article just added
+  // is on top, its newest colour first. Display only — the saved order keeps the entry order.
   const groups: { artNumber: string; lines: OrderLine[] }[] = []
   const seen = new Map<string, OrderLine[]>()
-  for (const line of lines) {
+  for (const line of [...lines].reverse()) {
     if (!seen.has(line.artNumber)) {
       const group: OrderLine[] = []
       seen.set(line.artNumber, group)
@@ -271,6 +308,7 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
   }
 
   const totalPairs = lines.reduce((s, l) => s + Object.values(l.quantities).reduce((a, b) => a + b, 0), 0)
+  let serial = 0 // line number, 1, 2, 3… down the table
 
   return (
     <div className="overflow-x-auto">
@@ -278,6 +316,7 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
         {/* Header */}
         <thead>
           <tr className="border-b border-border/50 bg-muted/20">
+            <th className="w-8 px-2 py-2 text-right text-xs font-medium text-muted-foreground border-r border-border/40">#</th>
             <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground border-r border-border/40 whitespace-nowrap">Article</th>
             <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground border-r border-border/40 whitespace-nowrap">Color</th>
             <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Size / Qty</th>
@@ -290,17 +329,23 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
               const isFirst = lineIdx === 0
               const isEditing = editingLineId === line.id
               const sizeCols = line.sizes
-                .filter((sz, i, arr) => arr.findIndex(s => s.sizeLabel === sz.sizeLabel) === i)
-                .filter(sz => (line.quantities[sz.sizeLabel] ?? 0) > 0)
+                .filter((sz, i, arr) => arr.findIndex(s => sizeKey(s) === sizeKey(sz)) === i)
+                .filter(sz => (line.quantities[sizeKey(sz)] ?? 0) > 0)
+              const showCode = isMultiCode(sizeCols)
 
               return (
                 <tr
                   key={line.id}
+                  tabIndex={0}
+                  aria-label={`${isEditing ? 'Stop editing' : 'Edit'} ${group.artNumber} ${line.colorName}`}
+                  onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); if (isEditing) onDeselect(); else onEdit(line) } }}
                   onClick={() => isEditing ? onDeselect() : onEdit(line)}
                   className={`border-b border-border/40 transition-colors cursor-pointer ${
                     isEditing ? 'bg-amber-50/40 dark:bg-amber-900/10' : 'hover:bg-primary/5'
                   }`}
                 >
+                  {/* Line number, 1, 2, 3… top to bottom (owner, 24 Nov 2026) */}
+                  <td className="w-8 px-2 py-2.5 align-top text-right text-xs tabular-nums text-muted-foreground border-r border-border/40">{++serial}</td>
                   {/* Article cell — only shown on first row of group */}
                   <td className="px-3 py-2.5 align-top border-r border-border/40 whitespace-nowrap">
                     {isFirst && (
@@ -326,8 +371,8 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
                   <td className="px-3 py-2.5 align-middle">
                     <span className="flex flex-wrap gap-x-2 gap-y-0.5">
                       {sizeCols.map(sz => (
-                        <span key={sz.sizeLabel} className="text-xs text-muted-foreground whitespace-nowrap">
-                          {sz.sizeLabel}/<span className="font-bold text-foreground">{line.quantities[sz.sizeLabel]}</span>
+                        <span key={sizeKey(sz)} className="text-xs text-muted-foreground whitespace-nowrap">
+                          {sz.sizeLabel}{showCode && sz.artCode ? <span className="text-[10px]" data-no-translate>{` (${sz.artCode})`}</span> : null}/<span className="font-bold text-foreground">{line.quantities[sizeKey(sz)]}</span>
                         </span>
                       ))}
                     </span>
@@ -339,7 +384,7 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
 
           {/* Total row */}
           <tr className="border-t border-border/60 bg-muted/20">
-            <td colSpan={2} className="px-3 py-2 text-right text-xs text-muted-foreground border-r border-border/40">Total</td>
+            <td colSpan={3} className="px-3 py-2 text-right text-xs text-muted-foreground border-r border-border/40">Total</td>
             <td className="px-3 py-2 text-sm font-bold text-foreground">{totalPairs}</td>
           </tr>
         </tbody>
@@ -355,14 +400,59 @@ function OrderItemsCard({ lines, editingLineId, onEdit, onDeselect }: OrderItems
 const QUICK_QTYS = [1, 2, 3, 4, 5]
 
 interface SizeMatrixProps {
-  sizes: { id: number; sizeLabel: string; sortOrder: number }[]
+  sizes: SizeEntry[]
   quantities: Record<string, number>
   onChange: (quantities: Record<string, number>) => void
+  /** Keyboard: Enter (shift = add and stay on this article), Shift+1…9 (colour N), Esc. */
+  onEnter?: (shift: boolean) => void
+  onColour?: (n: number) => void
+  onEscape?: () => void
 }
 
-function SizeMatrix({ sizes, quantities, onChange }: SizeMatrixProps) {
+export interface SizeMatrixHandle { focus: () => void }
+
+// The New Order keyboard flow: keys the focused control handles itself (search boxes, colour chips,
+// size matrix, Next Article / Add buttons). Listed in the global "?" cheat sheet from the registry;
+// Ctrl+Enter (create the order) is a real shortcut registered below.
+const NEW_ORDER_KEYS: ShortcutHelp[] = [
+  { keys: 'enter', label: 'Go to the next step: vendor → article → colour → sizes' },
+  { keys: 'enter', label: 'On sizes: next size; after the last size, go to Next Article / Add to Order' },
+  { keys: ['arrowleft', 'arrowright'], label: 'On the buttons: switch between Next Article and Add to Order (Enter presses, ↑ or Esc back to sizes)' },
+  { keys: ['arrowup', 'arrowdown'], label: 'Move in a list (vendors, articles) or between sizes' },
+  { display: '1, 2, 3…', label: 'On colours: pick colour 1, 2, 3…' },
+  { keys: ['arrowleft', 'arrowright'], label: 'On colours: move · On sizes: quantity −1 / +1' },
+  { display: 'Numbers', label: 'On sizes: type the quantity (1 then 0 = 10)' },
+  { keys: 'backspace', label: 'On sizes: remove the last digit' },
+  { keys: 'shift+enter', label: 'Add this colour and stay on the article' },
+  { display: 'Shift 1, 2…', label: 'From the sizes: switch to colour 1, 2…' },
+  { keys: 'escape', label: 'On Next Article / Add to Order or a size button: back to the sizes. On the sizes: skip this article (nothing added)' },
+  { keys: 'enter', label: 'On an empty article search: go to Create Order' },
+]
+
+/** Keyboard help on New Order (computers only): the "?" button (or the ? key) opens the global cheat sheet. */
+function ShortcutGuide() {
+  useShortcutHelp(NEW_ORDER_KEYS, { group: 'New order' })
+  return (
+    <div className="relative hidden justify-end [@media(pointer:fine)]:flex">
+      <button type="button" onClick={openKeyboardHelp} aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)"
+        className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-card text-sm font-bold hover:bg-muted">?</button>
+    </div>
+  )
+}
+
+// Keyboard (laptop / Bluetooth keyboard): ↑↓ size · ←→ quantity −1/+1 · type a number (1 then 0 = 10)
+// · Backspace removes a digit · Enter next size (after the last: Next Article / Add buttons, ←→) · Shift+Enter add, stay ·
+// Shift+1…9 colour N · Esc next article without adding. Touch use is unchanged.
+const SizeMatrix = forwardRef<SizeMatrixHandle, SizeMatrixProps>(function SizeMatrix({ sizes, quantities, onChange, onEnter, onColour, onEscape }, ref) {
   // manualActive[size] = true means manual input controls it
   const [manualActive, setManualActive] = useState<Record<string, boolean>>({})
+  const [row, setRow] = useState(0)
+  const [kbd, setKbd] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
+  // Digits typed on the current size (cleared when the size changes): 1 then 0 = 10.
+  const typed = useRef<{ row: number; text: string }>({ row: -1, text: '' })
+
+  useImperativeHandle(ref, () => ({ focus: () => { setKbd(true); boxRef.current?.focus({ preventScroll: false }) } }), [])
 
   function setQty(sizeLabel: string, qty: number) {
     onChange({ ...quantities, [sizeLabel]: Math.max(0, qty) })
@@ -382,13 +472,68 @@ function SizeMatrix({ sizes, quantities, onChange }: SizeMatrixProps) {
     setQty(sizeLabel, isNaN(n) || n < 0 ? 0 : n)
   }
 
-  const colorTotal = sizes.reduce((s, sz) => s + (quantities[sz.sizeLabel] ?? 0), 0)
+  function handleKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    const inInput = (e.target as HTMLElement).tagName === 'INPUT'
+    // A focused chip: Enter / Space press it (the box's Enter = next size; Shift+Enter still adds).
+    if ((e.target as HTMLElement).tagName === 'BUTTON' && !e.shiftKey && (e.key === 'Enter' || e.key === ' ')) return
+    const digit = /^(Digit|Numpad)([0-9])$/.exec(e.code)?.[2]
+    if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault()
+      // Enter: next size; on the last size, add this colour and go to the next article.
+      // Shift+Enter: add this colour now and stay on the article.
+      const last = sizes.length - 1
+      const at = Math.min(row, last)
+      if (!e.shiftKey && at < last) { setKbd(true); setRow(at + 1); typed.current = { row: -1, text: '' }; return }
+      onEnter?.(e.shiftKey)
+      return
+    }
+    // Esc on a size chip or quantity box: back to the size bar (the matrix). Esc on the size bar: skip the article.
+    if (e.key === 'Escape') { e.preventDefault(); if (e.target !== boxRef.current) { setKbd(true); boxRef.current?.focus() } else onEscape?.(); return }
+    if (e.shiftKey && digit && digit !== '0') { e.preventDefault(); onColour?.(Number(digit)); return }
+    if (inInput || e.ctrlKey || e.metaKey || e.altKey || !sizes.length) return
+    // On a focused chip the arrows move between chips (page arrow navigation); digits still type.
+    if ((e.target as HTMLElement).tagName === 'BUTTON' && e.key.startsWith('Arrow')) return
+    const r = Math.min(row, sizes.length - 1)
+    const label = sizeKey(sizes[r])
+    const current = quantities[label] ?? 0
+    setKbd(true)
+    if (e.key === 'ArrowDown') { e.preventDefault(); setRow(Math.min(sizes.length - 1, r + 1)); typed.current.text = ''; return }
+    if (e.key === 'ArrowUp') { e.preventDefault(); setRow(Math.max(0, r - 1)); typed.current.text = ''; return }
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault()
+      setManualActive(prev => ({ ...prev, [label]: false }))
+      setQty(label, current + (e.key === 'ArrowRight' ? 1 : -1))
+      typed.current.text = ''
+      return
+    }
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      e.preventDefault()
+      const t = typed.current
+      const text = t.row === r && e.key === 'Backspace' ? t.text.slice(0, -1) : ''
+      typed.current = { row: r, text }
+      setQty(label, text ? parseInt(text, 10) : 0)
+      return
+    }
+    if (digit && !e.shiftKey) {
+      e.preventDefault()
+      const t = typed.current
+      // Keep adding digits on the same size (max 3); a 4th digit starts a new number.
+      const text = t.row === r && t.text && t.text.length < 3 ? (t.text === '0' ? digit : t.text + digit) : digit
+      typed.current = { row: r, text }
+      setManualActive(prev => ({ ...prev, [label]: false }))
+      setQty(label, parseInt(text, 10))
+    }
+  }
+
+  const colorTotal = sizes.reduce((s, sz) => s + (quantities[sizeKey(sz)] ?? 0), 0)
+  const multi = isMultiCode(sizes)
 
   // Responsive column sizes: on very small screens chips shrink to 2rem, on sm+ stay 2.5rem
   const gridCols = 'minmax(2rem,auto) repeat(5, minmax(0,2.5rem)) minmax(0,3.5rem) 2.5rem'
 
   return (
-    <div className="space-y-1">
+    <div ref={boxRef} tabIndex={0} onKeyDown={handleKey} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setKbd(false) }}
+      className="space-y-1 rounded-lg outline-none" aria-label="Size matrix">
       {/* Header row */}
       <div className="grid items-center gap-y-0 gap-x-1" style={{ gridTemplateColumns: gridCols }}>
         <span className="text-xs font-medium text-muted-foreground leading-tight">Size</span>
@@ -400,13 +545,25 @@ function SizeMatrix({ sizes, quantities, onChange }: SizeMatrixProps) {
       </div>
 
       {/* Size rows */}
-      {sizes.map(sz => {
-        const current = quantities[sz.sizeLabel] ?? 0
-        const isManual = manualActive[sz.sizeLabel]
+      {sizes.map((sz, i) => {
+        const k = sizeKey(sz)
+        const current = quantities[k] ?? 0
+        const isManual = manualActive[k]
+        const focused = kbd && i === Math.min(row, sizes.length - 1)
+        // One colour, several article codes: a heading per code (SS0101C 11–1 · SS0101G 6–10 · SS0101S 11–12).
+        const groupStart = multi && (i === 0 || sizes[i - 1].artCode !== sz.artCode)
+        const group = groupStart ? sizes.filter(x => x.artCode === sz.artCode) : []
         return (
+          <Fragment key={sz.id}>
+          {groupStart && (
+            <div className="mt-1.5 flex items-center gap-2 border-t border-border pt-1.5 text-[11px] font-semibold text-muted-foreground">
+              <span className="font-mono text-foreground" data-no-translate>{sz.artCode}</span>
+              <span>{`Sizes ${group[0].sizeLabel}–${group[group.length - 1].sizeLabel}`}</span>
+            </div>
+          )}
           <div
-            key={sz.id}
-            className="grid items-center gap-y-0 gap-x-1 rounded-lg py-0.5"
+            onClick={() => setRow(i)}
+            className={`grid items-center gap-y-0 gap-x-1 rounded-lg py-0.5 ${focused ? 'bg-[var(--focus-tint)] shadow-[0_0_14px_1px_var(--focus-glow)]' : ''}`}
             style={{ gridTemplateColumns: gridCols }}
           >
             <span className="text-sm font-medium text-foreground truncate pr-1 leading-tight">{sz.sizeLabel}</span>
@@ -420,9 +577,10 @@ function SizeMatrix({ sizes, quantities, onChange }: SizeMatrixProps) {
                 <button
                   key={q}
                   type="button"
-                  aria-label={`Set ${sz.sizeLabel} to ${q}`}
+                  onFocus={() => { setKbd(true); setRow(i) }}
+                  aria-label={`Set ${sz.sizeLabel}${multi ? ` ${sz.artCode}` : ''} to ${q}`}
                   aria-pressed={isActive}
-                  onClick={() => handleQuickClick(sz.sizeLabel, q)}
+                  onClick={() => handleQuickClick(k, q)}
                   className={`h-8 w-full rounded-lg text-sm font-semibold border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${chipClass}`}
                 >
                   {q}
@@ -432,11 +590,11 @@ function SizeMatrix({ sizes, quantities, onChange }: SizeMatrixProps) {
             <input
               type="number"
               min={0}
-              aria-label={`Manual quantity for size ${sz.sizeLabel}`}
+              aria-label={`Manual quantity for size ${sz.sizeLabel}${multi ? ` ${sz.artCode}` : ''}`}
               value={isManual ? (current === 0 ? '' : current) : (current > 5 ? current : '')}
               placeholder="0"
-              onChange={e => handleManualChange(sz.sizeLabel, e.target.value)}
-              onFocus={() => setManualActive(prev => ({ ...prev, [sz.sizeLabel]: true }))}
+              onChange={e => handleManualChange(k, e.target.value)}
+              onFocus={() => { setManualActive(prev => ({ ...prev, [k]: true })); setKbd(true); setRow(i) }}
               className={`h-8 w-full rounded-lg border text-xs text-center font-medium bg-background focus:outline-none focus:ring-2 focus:ring-ring transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                 (isManual && current > 0) || current > 5
                   ? 'border-green-400 text-green-700 dark:text-green-400 dark:border-green-600'
@@ -447,6 +605,7 @@ function SizeMatrix({ sizes, quantities, onChange }: SizeMatrixProps) {
               {current}
             </span>
           </div>
+          </Fragment>
         )
       })}
 
@@ -457,7 +616,7 @@ function SizeMatrix({ sizes, quantities, onChange }: SizeMatrixProps) {
       </div>
     </div>
   )
-}
+})
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ConfirmDialog
@@ -474,15 +633,17 @@ function ConfirmDialog({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <DialogKeys onClose={onCancel} />
       <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-2xl space-y-4">
         <h2 className="text-base font-semibold text-foreground">{title}</h2>
         <div className="text-sm text-muted-foreground">{message}</div>
         <div className="flex gap-3 pt-1">
-          <button type="button" onClick={onCancel}
+          {/* Every use loses work (replace quantities, start over, discard, cancel order): Cancel has the focus first. */}
+          <button type="button" onClick={onCancel} data-autofocus
             className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors">
             Cancel
           </button>
-          <button type="button" onClick={onConfirm}
+          <button type="button" onClick={onConfirm} data-primary data-destructive
             className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
             {confirmLabel}
           </button>
@@ -566,18 +727,74 @@ interface DetailItem {
   artNumber: string
   colorNumber: string | null
   sizeNumber: string | null
+  artCode?: string | null
   quantityOrdered: number
   quantityPacked: number
   status: string
 }
 
-export function SalesmanDashboard({ orders, userName, embedded, catalogue: serverCatalogue, sets = [], pickers = [] }: Props) {
-  // Use cache-first catalogue: returns serverCatalogue immediately on first render,
-  // then silently hydrates from Cache API / re-fetches in background
-  const catalogue = useCatalogueCache(serverCatalogue)
+type View = 'list' | 'new' | 'detail' | 'print'
+/** All Orders filter: one status, or the "In progress" group (same rule as its card). */
+type StatusFilter = 'all' | 'pending' | 'in_progress' | 'dispatched' | 'delivered' | 'cancelled'
+const STATUS_CHIPS: { value: StatusFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'in_progress', label: 'In progress' },
+  { value: 'dispatched', label: 'Dispatched' },
+  { value: 'delivered', label: 'Delivered' },
+  { value: 'cancelled', label: 'Cancelled' },
+]
+const matchesStatus = (status: string, f: StatusFilter) =>
+  f === 'all' ? true : f === 'in_progress' ? isInProgress(status) : status === f
 
-  const [view, setView] = useState<'list' | 'new' | 'detail' | 'print'>('new')
-  const router = useRouter()
+export function SalesmanDashboard({ orders: recentOrders, userName, userId, embedded, catalogue: serverCatalogue, sets = [], pickers = [], canDirectBill = false }: Props) {
+  // The page sends open orders + the last 60 days (max 2000). "Load older" adds 100 at a time
+  // (keyset after the oldest shown); repeats are dropped, so the list never shows an order twice.
+  const [older, setOlder] = useState<ExistingOrder[]>([])
+  const [olderState, setOlderState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
+  // Orders this screen just saved, as the server returned them: shown at once, until the refreshed
+  // list (same id, same or newer update time) takes over. Never a guess — always the saved row.
+  const [saved, setSaved] = useState<ExistingOrder[]>([])
+  const orders = useMemo(() => {
+    const byId = new Map<number, ExistingOrder>()
+    for (const o of [...recentOrders, ...older, ...saved]) {
+      const p = byId.get(o.id)
+      if (!p || new Date(o.updatedAt).getTime() > new Date(p.updatedAt).getTime()) byId.set(o.id, o)
+    }
+    return [...byId.values()]
+  }, [recentOrders, older, saved])
+  const [notice, setNotice] = useState('')
+  useEffect(() => {
+    if (!notice) return
+    const t = setTimeout(() => setNotice(''), 3000)
+    return () => clearTimeout(t)
+  }, [notice])
+  const keepSaved = useCallback((row: ExistingOrder, salesmanName: string | null) => {
+    setSaved(prev => [...prev.filter(o => o.id !== row.id), { ...row, salesmanName: row.salesmanName ?? salesmanName }])
+  }, [])
+  const loadOlder = useCallback(async () => {
+    // Continue after the oldest order that is closed or recent (or already loaded as older). An open
+    // order older than 60 days is on the first page too, but starting after it would skip history.
+    const line = Date.now() - 60 * 86_400_000
+    const from = [...recentOrders.filter(o => ['delivered', 'cancelled'].includes(o.status) || new Date(o.orderedAt).getTime() >= line), ...older]
+      .sort((a, b) => new Date(a.orderedAt).getTime() - new Date(b.orderedAt).getTime() || a.id - b.id)[0]
+    setOlderState('loading')
+    try {
+      const page = await getOlderSalesmanOrders(from?.id ?? null)
+      setOlder(prev => [...prev, ...page])
+      setOlderState(page.length < 100 ? 'done' : 'idle')
+    } catch {
+      setOlderState('error')
+    }
+  }, [recentOrders, older])
+  // The catalogue as given: loaded on the server by the page, or by the admin hub from its browser
+  // copy (lib/use-catalogue-cache.ts). Never swapped here for an older saved copy (24 Nov 2026).
+  const catalogue = serverCatalogue
+
+  const [view, setView] = useState<View>('new')
+  // Keyboard: ↑↓ / j k orders, Enter opens, / search, n New order (lib/shortcuts/list.ts).
+  const ordersListRef = useRef<HTMLDivElement>(null)
+  useListKeys(ordersListRef, { label: 'Orders list', newLabel: 'New order', onNew: () => goTo('new') })
 
   // ── Auto-refresh (All Orders stays live) ──
   const [lastRefreshed, setLastRefreshed] = useState<Date>(() => new Date())
@@ -596,8 +813,9 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
   const [detailError, setDetailError] = useState('')
 
   // ── Filter + sort state ──
-  const [filterStatus, setFilterStatus] = useState<string>('all')
+  const [filterStatus, setFilterStatus] = useState<StatusFilter>('all')
   const [filterSalesman, setFilterSalesman] = useState<string>(userName || 'all')
+  const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'order'>('date-desc')
 
   // ── SizeMatrix reset key — increment to force SizeMatrix remount after Add to Order ──
@@ -608,6 +826,12 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
   const [skResults, setSkResults] = useState<ShopkeeperResult[]>([])
   const [skLoading, setSkLoading] = useState(false)
   const [selectedSk, setSelectedSk] = useState<ShopkeeperResult | null>(null)
+  // Party balance / credit hold (payments, owner 22 Nov 2026): shown when the vendor is chosen.
+  const credit = useCreditStatus(selectedSk ? { name: selectedSk.name } : null)
+  const [allowHeld, setAllowHeld] = useState(false)
+  useEffect(() => { setAllowHeld(false) }, [selectedSk?.name])
+  // Why the last Create / Save failed (shown above the bottom bar, whatever section is open).
+  const [submitError, setSubmitError] = useState('')
 
   // ── Article entry state ──
   const [artQuery, setArtQuery] = useState('')
@@ -621,6 +845,28 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
   // ── Per-color entry state ──
   // selectedColorId: which color chip is active
   const [selectedColorId, setSelectedColorId] = useState<number | null>(null)
+  // Keyboard ordering: colour chips and the size matrix take focus in turn.
+  const colourRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const matrixRef = useRef<SizeMatrixHandle>(null)
+  const skSearchRef = useRef<SearchComboboxHandle>(null)
+  const createOrderRef = useRef<HTMLButtonElement>(null)
+  const nextArtBtnRef = useRef<HTMLButtonElement>(null)
+  const addBtnRef = useRef<HTMLButtonElement>(null)
+  const hasKeyboard = () => typeof window !== 'undefined' && window.matchMedia('(pointer: fine)').matches
+  // Keyboard start: on a computer the cursor begins in "Search vendor" (or the article search when
+  // the vendor is already chosen) whenever New Order opens.
+  useEffect(() => {
+    if (view !== 'new' || !hasKeyboard()) return
+    const t = setTimeout(() => (selectedSk ? artSearchRef.current : skSearchRef.current)?.focus(), 80)
+    return () => clearTimeout(t)
+  }, [view])
+
+  // Ctrl+Enter anywhere on the new-order screen: place the order (opens the usual checks / confirmation).
+  useShortcut('mod+enter', () => {
+    const form = document.getElementById('new-order-form') as HTMLFormElement | null
+    if (!form) return false
+    form.requestSubmit()
+  }, { label: 'Create the order', group: 'New order', action: true })
   // colorQuantities: preserved per-color quantities while user navigates
   // key = colorId, value = sizeLabel→qty
   const [colorQuantities, setColorQuantities] = useState<Record<number, Record<string, number>>>({})
@@ -668,15 +914,34 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
   const [printPageSize, setPrintPageSize] = useState<'A4' | 'A5'>('A5')
   const [printOrientation, setPrintOrientation] = useState<'portrait' | 'landscape'>('portrait')
 
-  // ── Picker assignment step (shown after print config, before printing) ──
-  // pickerAssignOpen: which orders need picker assignment shown
-  const [pickerAssignOpen, setPickerAssignOpen] = useState(false)
-  // pickerAssignMap: orderId → pickerId ('' = unassigned / skip)
-  const [pickerAssignMap, setPickerAssignMap] = useState<Record<number, string>>({})
-  const [pickerAssigning, startPickerAssign] = useTransition()
-  // selectedOrdersForAssign: the orders that were selected when print was clicked
-  const [selectedOrdersForAssign, setSelectedOrdersForAssign] = useState<ExistingOrder[]>([])
-  const [printSettingsSnapshot, setPrintSettingsSnapshot] = useState<{ pageSize: 'A4' | 'A5'; orientation: 'portrait' | 'landscape' }>({ pageSize: 'A5', orientation: 'portrait' })
+  // Printing no longer assigns pickers (owner, 27 Nov 2026): pickers claim orders on their phone or are
+  // assigned from the order's row; when an order has none, the biller names the picker when billing.
+  // One order from the Orders list (owner, 23 Nov 2026): Assign a picker, or ⚡ Direct bill (admin),
+  // which also names who picked the goods.
+  const [rowAction, setRowAction] = useState<{ order: ExistingOrder; mode: 'assign' | 'direct' } | null>(null)
+  const [rowPicker, setRowPicker] = useState('')
+  const [rowError, setRowError] = useState('')
+  const [rowSaving, startRowSave] = useTransition()
+  function openRowAction(order: ExistingOrder, mode: 'assign' | 'direct') {
+    setRowPicker(''); setRowError(''); setRowAction({ order, mode })
+  }
+  function saveRowAction() {
+    if (!rowAction) return
+    if (!rowPicker) { setRowError(rowAction.mode === 'direct' ? 'Choose who picked the goods.' : 'Choose a picker.'); return }
+    const { order, mode } = rowAction
+    setRowError('')
+    startRowSave(async () => {
+      try {
+        const row = mode === 'direct' ? await sendToBilling(order.id, rowPicker) : await salesmanAssignPicker(order.id, rowPicker)
+        keepSaved(row, order.salesmanName ?? null)
+        const who = pickers.find(p => p.id === rowPicker)?.name ?? 'the picker'
+        setNotice(mode === 'direct' ? `${order.orderNumber} sent to the biller (picked by ${who}).` : `${order.orderNumber} assigned to ${who}.`)
+        setRowAction(null)
+      } catch (e) {
+        setRowError(e instanceof Error ? e.message : 'Could not save. Check the connection and try again.')
+      }
+    })
+  }
 
   // ── Cancel order confirm (existing orders list) ──
   const [cancelOrderId, setCancelOrderId] = useState<number | null>(null)
@@ -691,6 +956,46 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+
+  // ── Drafts (this phone only, lib/orders/drafts.ts) ──
+  // A new order is saved as a draft on every change, so leaving New Order (or the app) never loses
+  // it. Editing an existing order is never a draft. Creating the order removes its draft.
+  const draftKey = draftStorageKey(userId || userName)
+  const [drafts, setDrafts] = useState<OrderDraft[]>([])
+  const draftIdRef = useRef<string | null>(null)
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null)
+  const [openDraftId, setOpenDraftId] = useState<string | null>(null)
+  const [draftsOpen, setDraftsOpen] = useState(false)
+  const [draftStoreFailed, setDraftStoreFailed] = useState(false)
+  const [deleteDraftId, setDeleteDraftId] = useState<string | null>(null)
+  const [discardOpen, setDiscardOpen] = useState(false)
+  // Read after the first render (the server has no localStorage).
+  useEffect(() => { setDrafts(readDrafts(draftKey)) }, [draftKey])
+
+  useEffect(() => {
+    if (editingOrderId != null) return
+    if (skipSaveRef.current) { skipSaveRef.current = false; return }
+    const id = draftIdRef.current
+    if (!draftHasContent({ vendor: selectedSk, lines })) {
+      // Everything taken out of an open draft: the draft goes too.
+      if (id) { setDrafts(deleteDraft(draftKey, id)); draftIdRef.current = null; setOpenDraftId(null); setDraftSavedAt(null) }
+      return
+    }
+    const draft: OrderDraft = {
+      id: id ?? uid(),
+      savedAt: Date.now(),
+      vendor: selectedSk ? { id: selectedSk.id, name: selectedSk.name, code: selectedSk.code, phone: selectedSk.phone, address: selectedSk.address } : null,
+      lines,
+      notes,
+    }
+    const next = saveDraft(draftKey, draft)
+    if (!next) { setDraftStoreFailed(true); return }
+    setDraftStoreFailed(false)
+    draftIdRef.current = draft.id
+    setOpenDraftId(draft.id)
+    setDraftSavedAt(draft.savedAt)
+    setDrafts(next)
+  }, [selectedSk, lines, notes, editingOrderId, draftKey])
 
   // ── Preloaded catalogue lookup map (artNumber → ArticleDetail) ──
   const artCatalogueMap = useMemo(() => {
@@ -754,6 +1059,11 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
     setColorQuantities(prev => ({ ...prev, [selectedColorId]: q }))
   }
 
+  const matrixSizes: SizeEntry[] = useMemo(
+    () => (selectedArt && selectedColor ? selectedArt.sizes.filter(s => s.articleId === selectedColor.articleId) : []),
+    [selectedArt, selectedColor],
+  )
+
   const currentColorTotal = useMemo(
     () => Object.values(currentQties).reduce((s, n) => s + n, 0),
     [currentQties],
@@ -766,11 +1076,96 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
     setSelectedArt(detail)
     setSelectedColorId(null)
     setColorQuantities({})
+    // Keyboard: continue on the colours (1, 2, 3… or arrows, then Enter).
+    setTimeout(() => colourRefs.current[0]?.focus({ preventScroll: true }), 50)
+  }
+
+  // ── Choose a colour (chip tap, number key, or Shift+number in the matrix) ──
+  function selectColour(c: { id: number }) {
+    if (!selectedArt) return
+    // Only seed from saved line if there are no working quantities
+    // already — preserves any unsaved edits the user made before switching away.
+    const hasWorking = Object.values(colorQuantities[c.id] ?? {}).some(v => v > 0)
+    if (!hasWorking) {
+      const savedLine = lines.find(l => l.articleId === selectedArt.id && l.colorId === c.id)
+      if (savedLine) setColorQuantities(prev => ({ ...prev, [c.id]: { ...savedLine.quantities } }))
+    }
+    setSelectedColorId(c.id)
+  }
+
+  /** Keyboard on the colour chips: ←→↑↓ move, 1…9 pick colour N, Enter open its sizes, Esc skip. */
+  function handleColourKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (!selectedArt) return
+    const colours = selectedArt.colors
+    const at = colourRefs.current.findIndex(b => b === document.activeElement)
+    const digit = /^(Digit|Numpad)([1-9])$/.exec(e.code)?.[2]
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1
+      colourRefs.current[(Math.max(0, at) + step + colours.length) % colours.length]?.focus()
+    } else if (digit && !e.ctrlKey && !e.altKey) {
+      const c = colours[Number(digit) - 1]
+      if (!c) return
+      e.preventDefault()
+      selectColour(c)
+      colourRefs.current[Number(digit) - 1]?.focus()
+    } else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault()
+      const c = colours[Math.max(0, at)]
+      if (!c) return
+      selectColour(c)
+      setTimeout(() => matrixRef.current?.focus(), 50)
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      skipArticle()
+    }
+  }
+
+  /** Esc: next article without adding what is typed for this one. */
+  function skipArticle() {
+    setArtQuery('')
+    setSelectedArt(null)
+    setSelectedColorId(null)
+    setColorQuantities({})
+    setEditingLineId(null)
+    setError('')
+    setMatrixKey(k => k + 1)
+    setTimeout(() => artSearchRef.current?.focus(), 50)
+  }
+
+  /** Enter in the matrix: add + next article. Shift+Enter: add this colour, stay on the article. */
+  function handleMatrixEnter(stay: boolean) {
+    // Enter after the last size: go to the buttons (Next Article / Add to Order), ←→ between them.
+    if (!stay) { nextArtBtnRef.current?.focus(); return }
+    if (currentColorTotal === 0) { setError('Add at least one pair before adding this item.'); return }
+    handleAddToOrder()
+    setTimeout(() => colourRefs.current[0]?.focus({ preventScroll: true }), 50)
+  }
+
+  /** Keyboard on Next Article / Add to Order: ←→ switch, ↑ back to the sizes, Esc skip. */
+  function handleActionKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    const btns = [nextArtBtnRef.current, addBtnRef.current].filter((b): b is HTMLButtonElement => !!b && !b.disabled)
+    const at = btns.findIndex(b => b === document.activeElement)
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault()
+      btns[(Math.max(0, at) + (e.key === 'ArrowRight' ? 1 : -1) + btns.length) % btns.length]?.focus()
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault(); matrixRef.current?.focus()
+    } else if (e.key === 'Escape') {
+      // Esc on Next Article / Add to Order: back to the size bar (Esc there skips the article).
+      e.preventDefault(); matrixRef.current?.focus()
+    }
+  }
+
+  function handleMatrixColour(n: number) {
+    const c = selectedArt?.colors[n - 1]
+    if (!c) return
+    selectColour(c)
+    setTimeout(() => matrixRef.current?.focus(), 50)
   }
 
   function clearArticle() {
     setArtQuery('')
-    setArtResults([])
     setSelectedArt(null)
     setSelectedColorId(null)
     setColorQuantities({})
@@ -783,8 +1178,9 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
    * If the matrix already has quantities, show the replace-confirm dialog.
    * Otherwise, apply immediately.
    */
-  function handlePickSet(qties: Record<string, number>) {
+  function handlePickSet(labelled: Record<string, number>) {
     setSetPickerOpen(false)
+    const qties = toKeyed(labelled, matrixSizes)
     const hasAny = Object.values(currentQties).some(v => v > 0)
     if (hasAny) {
       setPendingSetQties(qties)
@@ -836,14 +1232,14 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
         colorId: selectedColorId,
         colorName: selectedColor.colorName,
         colorHex: selectedColor.colorHex,
-        sizes: selectedArt.sizes,
+        sizes: matrixSizes,
         quantities: qties,
       }
       setLines(prev => [...prev, newLine])
     }
 
-    // Remember last used set globally
-    setLastUsedSet(qties)
+    // Remember last used set globally (plain sizes, so it fits any article)
+    setLastUsedSet(toLabelled(qties, matrixSizes))
 
     // Clear working quantities for this color and deselect
     setColorQuantities(prev => ({ ...prev, [selectedColorId]: {} }))
@@ -854,57 +1250,12 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
 
   // ── Next Article — save ALL colors with qty > 0 for this article, then jump to article search ──
   function handleNextArticle() {
-    if (selectedArt) {
-      let lastQties: Record<string, number> | null = null
-
-      setLines(prev => {
-        let next = [...prev]
-
-        // Flush every color that has at least 1 pair entered
-        for (const [colorIdStr, qties] of Object.entries(colorQuantities)) {
-          const colorId = Number(colorIdStr)
-          const total = Object.values(qties).reduce((s, n) => s + n, 0)
-          if (total === 0) continue
-
-          const colorObj = selectedArt.colors.find(c => c.id === colorId)
-          if (!colorObj) continue
-
-          lastQties = qties
-
-          // If we're editing a specific line and this is that color, update it
-          const editIdx = editingLineId ? next.findIndex(l => l.id === editingLineId && l.colorId === colorId) : -1
-          if (editIdx !== -1) {
-            next = next.map(l => l.id === editingLineId ? { ...l, quantities: { ...qties } } : l)
-          } else {
-            const existingIdx = next.findIndex(
-              l => l.articleId === selectedArt.id && l.colorId === colorId
-            )
-            if (existingIdx !== -1) {
-              next = next.map((l, i) => i !== existingIdx ? l : { ...l, quantities: { ...qties } })
-            } else {
-              next = [...next, {
-                id: uid(),
-                articleId: selectedArt.id,
-                artNumber: selectedArt.artNumber,
-                colorId,
-                colorName: colorObj.colorName,
-                colorHex: colorObj.colorHex,
-                sizes: selectedArt.sizes,
-                quantities: { ...qties },
-              }]
-            }
-          }
-        }
-
-        return next
-      })
-
-      if (lastQties) setLastUsedSet(lastQties)
-    }
+    const merged = mergeMatrix(lines, selectedArt, colorQuantities, editingLineId, uid)
+    if (merged.added) setLines(merged.lines)
+    if (merged.lastQuantities && selectedArt) setLastUsedSet(toLabelled(merged.lastQuantities, selectedArt.sizes))
 
     // Clear article and focus the search input
     setArtQuery('')
-    setArtResults([])
     setSelectedArt(null)
     setSelectedColorId(null)
     setColorQuantities({})
@@ -952,7 +1303,11 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
   }, [])
 
   // ── Reset everything ──
+  // The open draft is only let go of here (it stays saved); deleting it is done by the caller.
   function resetForm() {
+    draftIdRef.current = null
+    setOpenDraftId(null)
+    setDraftSavedAt(null)
     setSelectedSk(null); setSkQuery('')
     clearArticle()
     setLines([]); setNotes('')
@@ -966,43 +1321,156 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
     setDetailError('')
   }
 
+  // ── Moving between tabs ──
+  // The draft left by going to another tab; New Order opens it again (an empty form otherwise).
+  const leftDraftRef = useRef<string | null>(null)
+  const skipSaveRef = useRef(false)
+
+  function goTo(next: View, filter?: StatusFilter) {
+    if (filter) setFilterStatus(filter)
+    if (next === view && next !== 'new') return
+    // Keyboard: "New" while New Order is already open puts the cursor back in the form.
+    if (next === 'new' && view === 'new' && hasKeyboard()) { setTimeout(() => (selectedSk ? artSearchRef.current : skSearchRef.current)?.focus(), 0); return }
+    if (view === 'new' && next !== 'new') {
+      if (editingOrderId == null && draftIdRef.current) {
+        leftDraftRef.current = draftIdRef.current
+        setNotice('Kept in Drafts')
+      }
+      resetForm()
+    }
+    if (next === 'new' && view !== 'new' && leftDraftRef.current) {
+      const d = drafts.find(x => x.id === leftDraftRef.current)
+      leftDraftRef.current = null
+      if (d) { openDraft(d); return }
+    }
+    if (next === 'print') { setPrintSelectedIds(new Set()); setPrintItemsMap({}) }
+    setView(next)
+  }
+
+  /** Put a draft back into the New Order form. */
+  function openDraft(d: OrderDraft) {
+    resetForm()
+    const vendor = d.vendor
+      ? (catalogue.vendors.find(v => v.name === d.vendor!.name) ?? (d.vendor as ShopkeeperResult))
+      : null
+    skipSaveRef.current = true // opening is not a change: keep its saved time
+    setSelectedSk(vendor)
+    setSkQuery(vendor?.name ?? '')
+    setLines(d.lines)
+    setNotes(d.notes)
+    draftIdRef.current = d.id
+    setOpenDraftId(d.id)
+    setDraftSavedAt(d.savedAt)
+    leftDraftRef.current = null
+    setView('new')
+  }
+
+  /**
+   * Pairs typed in the size grid but not added yet go into the order first, as "Add to Order" would
+   * (owner, 27 Nov 2026: Create Order / Save / Save draft must not lose them). Returns the lines to save.
+   */
+  function takeMatrix(): OrderLine[] {
+    const merged = mergeMatrix(lines, selectedArt, colorQuantities, editingLineId, uid)
+    if (!merged.added) return lines
+    setLines(merged.lines)
+    if (merged.lastQuantities && selectedArt) setLastUsedSet(toLabelled(merged.lastQuantities, selectedArt.sizes))
+    setColorQuantities({})
+    setSelectedColorId(null)
+    setEditingLineId(null)
+    setMatrixKey(k => k + 1)
+    return merged.lines
+  }
+
+  /** "Save draft": it is already saved — keep it in Drafts and start a fresh order here. */
+  function handleSaveDraft() {
+    // Pairs still in the size grid go into the draft before the form is cleared.
+    const all = takeMatrix()
+    if (all !== lines) {
+      const saved = saveDraft(draftKey, {
+        id: draftIdRef.current ?? uid(),
+        savedAt: Date.now(),
+        vendor: selectedSk ? { id: selectedSk.id, name: selectedSk.name, code: selectedSk.code, phone: selectedSk.phone, address: selectedSk.address } : null,
+        lines: all,
+        notes,
+      })
+      if (!saved) { setDraftStoreFailed(true); setError('Could not save the draft on this phone.'); return }
+      setDrafts(saved)
+    }
+    leftDraftRef.current = null
+    resetForm()
+    setDraftsOpen(false)
+    setNotice('Draft saved · new order started')
+    setView('new')
+    setTimeout(() => (hasKeyboard() ? skSearchRef.current?.focus() : undefined), 50)
+  }
+
+  function handleDiscardCurrent() {
+    const id = draftIdRef.current
+    resetForm()
+    if (id) setDrafts(deleteDraft(draftKey, id))
+    setDiscardOpen(false)
+    setTimeout(() => (hasKeyboard() ? skSearchRef.current?.focus() : undefined), 50)
+  }
+
+  function handleDeleteDraft() {
+    const id = deleteDraftId
+    if (!id) return
+    if (draftIdRef.current === id) resetForm()
+    if (leftDraftRef.current === id) leftDraftRef.current = null
+    setDrafts(deleteDraft(draftKey, id))
+    setDeleteDraftId(null)
+    setNotice('Draft discarded')
+  }
+
   // ── Submit order (create new OR update existing) ──
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
+    setSubmitError('')
     if (!selectedSk) { setError('Please select a vendor.'); return }
-    if (lines.length === 0) { setError('Add at least one item to the order.'); return }
+    const all = takeMatrix()
+    if (all.length === 0) { setError('Add at least one item to the order.'); return }
 
-    const items = lines.flatMap(l =>
+    const items = all.flatMap(l =>
       Object.entries(l.quantities)
         .filter(([, qty]) => qty > 0)
-        .map(([size, qty]) => ({
-          artNumber: l.artNumber,
-          colorNumber: l.colorName,
-          sizeNumber: size,
-          quantityOrdered: qty,
-        }))
+        .map(([k, qty]) => {
+          const entry = l.sizes.find(s => sizeKey(s) === k)
+          return {
+            artNumber: l.artNumber,
+            colorNumber: l.colorName,
+            sizeNumber: entry?.sizeLabel ?? k,
+            artCode: entry?.artCode,
+            quantityOrdered: qty,
+          }
+        })
     )
     if (items.length === 0) { setError('All items have zero quantity.'); return }
 
-    const payload = { shopkeeperName: selectedSk.name, notes, items }
+    const payload = { shopkeeperName: selectedSk.name, notes, items, overrideCredit: allowHeld }
 
     startTransition(async () => {
       try {
+        // The saved order goes into the list at once; the action also refreshes the page (or, in the
+        // admin hub, the open tab), so no extra refresh and no waiting here.
         if (editingOrderId != null) {
-          await updateOrder(editingOrderId, payload)
-          setSuccess('Order updated!')
+          const row = await updateOrder(editingOrderId, payload)
+          keepSaved(row, orders.find(o => o.id === row.id)?.salesmanName ?? null)
+          setNotice('Order updated')
         } else {
-          await createOrder(payload)
-          setSuccess('Order created!')
+          const row = await createOrder(payload)
+          keepSaved(row, userName || null)
+          setNotice('Order created')
+          // Sent: its draft is done with.
+          const id = draftIdRef.current
+          if (id) setDrafts(deleteDraft(draftKey, id))
+          leftDraftRef.current = null
         }
-        setTimeout(() => {
-          resetForm()
-          router.refresh()   // re-fetch server props so orders list is up to date
-          setView('list')
-        }, 1200)
-      } catch {
-        setError(editingOrderId != null ? 'Failed to update order. Please try again.' : 'Failed to create order. Please try again.')
+        resetForm()
+        setView('list')
+      } catch (err) {
+        setSubmitError(isCreditHold(err) ? (err as Error).message
+          : editingOrderId != null ? 'Failed to update order. Please try again.' : 'Failed to create order. Please try again.')
       }
     })
   }
@@ -1010,7 +1478,9 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
   // ── Totals ──
   const totalPairs = useMemo(() => lines.reduce((s, l) => s + linePairs(l), 0), [lines])
 
-  const canSubmit = !!selectedSk && lines.length > 0 && !isPending
+  // Pairs still in the size grid count: Create Order takes them first.
+  const gridPairs = useMemo(() => matrixPairs(selectedArt, colorQuantities), [selectedArt, colorQuantities])
+  const canSubmit = !!selectedSk && (lines.length > 0 || gridPairs > 0) && !isPending
 
   // ── Edit existing order: load its items back into the new-order form ──
   async function handleEditOrder(order: ExistingOrder) {
@@ -1044,12 +1514,16 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
             colorId: colorMatch?.id ?? 0,
             colorName: item.colorNumber ?? '',
             colorHex: colorMatch?.colorHex ?? null,
-            sizes: detail?.sizes ?? [],
+            sizes: (detail?.sizes ?? []).filter(s => !colorMatch || s.articleId === colorMatch.articleId),
             quantities: {},
           })
         }
         const line = lineMap.get(key)!
-        if (item.sizeNumber) line.quantities[item.sizeNumber] = item.quantityOrdered
+        if (item.sizeNumber) {
+          const code = (item.artCode ?? '').toUpperCase()
+          const entry = line.sizes.find(s => s.sizeLabel === item.sizeNumber && (!code || !s.artCode || s.artCode === code))
+          line.quantities[entry ? sizeKey(entry) : item.sizeNumber] = item.quantityOrdered
+        }
       }
       setLines(Array.from(lineMap.values()))
       setSelectedSk({ id: '', name: o.shopkeeperName, code: null, phone: null, address: null })
@@ -1070,13 +1544,14 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
     if (cancelOrderId == null) return
     startCancelTransition(async () => {
       try {
-        await cancelOrder(cancelOrderId)
+        const row = await cancelOrder(cancelOrderId)
+        keepSaved(row, orders.find(o => o.id === row.id)?.salesmanName ?? null)
+        setNotice('Order cancelled')
         setCancelOrderId(null)
         // If we cancelled from the detail view, close it and go back to list
         setDetailOrder(null)
         setDetailItems([])
         setView('list')
-        router.refresh()
       } catch (e: unknown) {
         setOrderActionError(e instanceof Error ? e.message : 'Failed to cancel order.')
         setCancelOrderId(null)
@@ -1127,204 +1602,29 @@ export function SalesmanDashboard({ orders, userName, embedded, catalogue: serve
     }
   }
 
-  // ── Build a Pick List bill HTML fragment for one order ──
-  function buildBillFragment(
-    order: ExistingOrder,
-    items: DetailItem[],
-    salesman: string,
-    orientation: 'portrait' | 'landscape',
-    hindiName?: string,
-    hindiAddress?: string,
-    engAddress?: string,
-  ): string {
-    const artMap = new Map<string, Map<string, Record<string, number>>>()
-    for (const item of items) {
-      const art = item.artNumber
-      const col = item.colorNumber ?? ''
-      if (!artMap.has(art)) artMap.set(art, new Map())
-      const colMap = artMap.get(art)!
-      if (!colMap.has(col)) colMap.set(col, {})
-      const sz = item.sizeNumber ?? '?'
-      colMap.get(col)![sz] = (colMap.get(col)![sz] ?? 0) + item.quantityOrdered
-    }
-    const grandTotal = items.reduce((s, i) => s + i.quantityOrdered, 0)
-    const dateStr = new Date(order.orderedAt).toLocaleDateString('en-IN', {
-      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
-    })
-    let rows = ''
-    artMap.forEach((colMap, artNumber) => {
-      rows += `<div class="art-block"><div class="art-number">${artNumber}</div>`
-      colMap.forEach((sizes, color) => {
-        const sorted = Object.entries(sizes).sort(([a], [b]) => Number(a) - Number(b) || a.localeCompare(b))
-        const sizesStr = sorted.map(([sz, qty]) => `${sz}/${qty}`).join(', ')
-        const bracket = orientation === 'portrait'
-          ? '[&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;]'
-          : '[&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;]'
-        rows += `<div class="color-row"><span class="col-color">${color || '—'}</span><span class="col-sizes">${sizesStr}</span><span class="col-bracket">${bracket}</span></div>`
-      })
-      rows += `</div>`
-    })
-    return `<div class="bill${orientation === 'portrait' ? ' bill-portrait' : ''}">
-  <div class="bill-row">
-    <span class="bill-title">${order.shopkeeperName}</span>
-    <span class="bill-addr-eng">${engAddress || ''}</span>
-  </div>
-  <div class="bill-row">
-    <span class="bill-title-hindi">${hindiName || ''}</span>
-    <span class="bill-addr-hindi">${hindiAddress || ''}</span>
-  </div>
-  <div class="bill-row bill-meta-row">
-    <span class="bill-meta-left">Order #${order.orderNumber}</span>
-    <span class="bill-meta-right">${dateStr}</span>
-  </div>
-  <div class="rule"></div>
-  ${rows}
-  <div class="rule"></div>
-  <div class="total-row"><span>Total</span><span>${grandTotal} pairs</span></div>
-  <div class="rule"></div>
-  <div class="picker-row"><span>Picked by:&nbsp;<span class="blank-line"></span></span><span>Salesman: ${salesman}</span></div>
-</div>`
-  }
-
-  // ── Estimate the relative "height" of a bill (in logical line units) ──
-  function estimateBillHeight(items: DetailItem[]): number {
-    // Fixed overhead: title(1) + meta(1) + rule(1) + parties(1) + rule(1) + rule(1) + total(1) + rule(1) + picker(1) = 9
-    const FIXED_LINES = 9
-    // Per article: article-number row (1) + one color row per unique color
-    const artMap = new Map<string, Set<string>>()
-    for (const item of items) {
-      if (!artMap.has(item.artNumber)) artMap.set(item.artNumber, new Set())
-      artMap.get(item.artNumber)!.add(item.colorNumber ?? '')
-    }
-    let artLines = 0
-    artMap.forEach((colors, _) => { artLines += 1 + colors.size })  // 1 art-number + N color rows
-    return FIXED_LINES + artLines
-  }
-
-  // ── Open a new window with bills packed tightly and trigger print ──
+  // ── Print the selected orders, compact (owner, 24 Nov 2026): lib/orders/pick-list-print.ts ──
+  // Newspaper columns (as many as fit the paper), one line per colour, two-line header. Measured on 30
+  // orders: A5 portrait 16 → 4 pages, A4 portrait 11 → 2. The order's own salesman is printed.
   async function handlePrintOrders(
     selectedOrders: ExistingOrder[],
     pageSize: 'A4' | 'A5',
     orientation: 'portrait' | 'landscape',
   ) {
-    // Page dimensions in mm
-    const pageDims = {
-      A4:     { w: 210, h: 297 },
-      A5:     { w: 148, h: 210 },
-    }
-    const { w: pw, h: ph } = pageDims[pageSize]
-    const [pageW, pageH] = orientation === 'landscape' ? [ph, pw] : [pw, ph]
-
-    // Usable area after margins (6mm each side)
-    const marginMm = 6
-    const usableW = pageW - marginMm * 2   // mm
-
-    // Bill width: try to fit 2 per row in landscape, 1 in portrait
-    // 1mm ≈ 3.7795px at 96dpi; bill inner width chosen so two fit with a gap
-    const gapMm = 4
-    const cols = orientation === 'landscape' ? 2 : 1
-    const billWidthMm = (usableW - gapMm * (cols - 1)) / cols
-    const billWidthPx = Math.floor(billWidthMm * 3.7795)
-
-    // ── Sort by height descending so same-sized bills land on the same row ──
-    // flex-wrap places bills left→right; sorting descending means the two
-    // tallest bills fill row 1, the next two fill row 2, etc.
-    // For portrait (1 col) the row concept doesn't apply — keep original order.
-    let orderedOrders: ExistingOrder[]
-    if (cols === 1) {
-      orderedOrders = [...selectedOrders]
-    } else {
-      orderedOrders = [...selectedOrders].sort(
-        (a, b) =>
-          estimateBillHeight(printItemsMap[b.id] ?? []) -
-          estimateBillHeight(printItemsMap[a.id] ?? []),
-      )
-    }
-
-    // Fetch Hindi transliterations for all shopkeeper names + addresses in parallel
-    const engAddresses = orderedOrders.map(o =>
-      o.shopkeeperAddress || vendorAddressMap.get(o.shopkeeperName.toUpperCase()) || ''
-    )
-    const [hindiNames, hindiAddresses] = await Promise.all([
-      Promise.all(orderedOrders.map(o => transliterateToHindi(o.shopkeeperName))),
-      Promise.all(engAddresses.map(addr => addr ? transliterateToHindi(addr) : Promise.resolve(''))),
-    ])
-
-    const bills = orderedOrders
-      .map((o, i) => buildBillFragment(o, printItemsMap[o.id] ?? [], userName, orientation, hindiNames[i], hindiAddresses[i], engAddresses[i]))
-      .join('\n')
-
-    const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<title>Bills</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"/>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;700&display=swap"/>
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 12px;
-    background: #fff;
-    color: #000;
-    /* flex-wrap so bills fill columns naturally */
-    display: flex;
-    flex-wrap: wrap;
-    align-content: flex-start;
-    gap: ${gapMm}mm;
-    padding: ${marginMm}mm;
-    width: ${pageW}mm;
-  }
-  .bill {
-    width: ${billWidthPx}px;
-    border: 1px solid #ccc;
-    padding: 6px 8px 5px;
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-  .bill-row         { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1px; }
-  .bill-title       { font-size: 13px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
-  .bill-addr-eng    { font-size: 11px; font-weight: bold; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
-  .bill-title-hindi { font-size: 13px; font-weight: bold; color: #222; font-family: 'Noto Sans Devanagari', 'Mangal', Arial, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
-  .bill-addr-hindi  { font-size: 11px; font-family: 'Noto Sans Devanagari', 'Mangal', Arial, sans-serif; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
-  .bill-meta-row    { margin-top: 1px; margin-bottom: 3px; }
-  .bill-meta-left   { font-size: 9px; color: #555; white-space: nowrap; }
-  .bill-meta-right  { font-size: 9px; color: #555; white-space: nowrap; }
-  .bill-meta-sm  { font-size: 8.5px; margin-bottom: 4px; }
-  .rule          { border-top: 1px dashed #aaa; margin: 3px 0; }
-  .bill-parties  { display: flex; justify-content: space-between; align-items: baseline; padding: 2px 0; }
-  .shop-name     { font-weight: bold; font-size: 12px; }
-  .salesman-name { font-size: 11px; }
-  .art-block     { margin: 4px 0 1px; }
-  .art-number    { font-weight: bold; font-size: 12px; margin-bottom: 1px; }
-  .color-row     { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; font-size: 11px; }
-  .col-color     { width: 64px; flex-shrink: 0; }
-  .col-sizes     { flex: 1; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; min-width: 0; }
-  .bill-portrait .color-row { gap: 12px; }
-  .col-bracket   { white-space: nowrap; }
-  .total-row     { display: flex; justify-content: space-between; font-weight: bold; font-size: 13px; padding: 2px 0; }
-  .picker-row    { display: flex; justify-content: space-between; font-size: 10px; color: #555; padding: 2px 0; }
-  .blank-line    { display: inline-block; border-bottom: 1px solid #000; width: 80px; margin-bottom: -1px; }
-  .blank-line.short { width: 50px; }
-  @media print {
-    @page {
-      size: ${pageSize} ${orientation};
-      margin: ${marginMm}mm;
-    }
-    body { padding: 0; width: 100%; }
-  }
-</style>
-</head>
-<body>
-${bills}
-<script>window.onload = function(){ window.print(); }</` + `script>
-</body>
-</html>`
-
-    const winW = Math.round(pageW * 3.7795) + 40
-    const winH = Math.min(Math.round(pageH * 3.7795) + 80, screen.availHeight - 60)
-    const w = window.open('', '_blank', `width=${winW},height=${winH}`)
+    const addresses = selectedOrders.map(o => o.shopkeeperAddress || vendorAddressMap.get(o.shopkeeperName.toUpperCase()) || '')
+    const hindiNames = await Promise.all(selectedOrders.map(o => transliterateToHindi(o.shopkeeperName)))
+    const html = pickListHtml(selectedOrders.map((o, i) => ({
+      orderNumber: o.orderNumber,
+      shopkeeperName: o.shopkeeperName,
+      hindiName: hindiNames[i],
+      address: addresses[i],
+      orderedAt: o.orderedAt,
+      salesman: o.salesmanName ?? userName,
+      sets,
+      items: (printItemsMap[o.id] ?? []).map(it => ({ artNumber: it.artNumber, colorNumber: it.colorNumber ?? null, sizeNumber: it.sizeNumber ?? null, quantityOrdered: it.quantityOrdered })),
+    })), pageSize, orientation)
+    const mm = { A4: { w: 210, h: 297 }, A5: { w: 148, h: 210 } }[pageSize]
+    const [pageW, pageH] = orientation === 'landscape' ? [mm.h, mm.w] : [mm.w, mm.h]
+    const w = window.open('', '_blank', `width=${Math.round(pageW * 3.7795) + 40},height=${Math.min(Math.round(pageH * 3.7795) + 80, screen.availHeight - 60)}`)
     if (w) {
       w.document.write(html)
       w.document.close()
@@ -1349,11 +1649,12 @@ ${bills}
   }
 
   // ── Counts for stats ──
-  const counts = {
-    total: orders.length,
-    pending: orders.filter(o => o.status === 'pending').length,
-    inProgress: orders.filter(o => !['pending', 'cancelled', 'dispatched', 'delivered'].includes(o.status)).length,
-  }
+  // Counted once per list change; the cards and the status chips show the same numbers.
+  const statusCounts = useMemo(() => {
+    const c = Object.fromEntries(STATUS_CHIPS.map(s => [s.value, 0])) as Record<StatusFilter, number>
+    for (const o of orders) for (const s of STATUS_CHIPS) if (matchesStatus(o.status, s.value)) c[s.value]++
+    return c
+  }, [orders])
 
   // ── Unique salesmen list for filter dropdown ──
   const uniqueSalesmen = useMemo(() => {
@@ -1373,18 +1674,31 @@ ${bills}
   const displayedOrders = useMemo(() => {
     let list = orders
     if (filterStatus !== 'all') {
-      list = list.filter(o => o.status === filterStatus)
+      list = list.filter(o => matchesStatus(o.status, filterStatus))
     }
-    if (filterSalesman !== 'all') {
+    if (filterSalesman !== 'all' && uniqueSalesmen.length > 1) {
       list = list.filter(o => o.salesmanName === filterSalesman)
+    }
+    const q = search.trim().toLowerCase()
+    if (q) {
+      list = list.filter(o => o.shopkeeperName.toLowerCase().includes(q) || o.orderNumber.toLowerCase().includes(q))
     }
     if (sortBy === 'date-desc') list = [...list].sort((a, b) => new Date(b.orderedAt).getTime() - new Date(a.orderedAt).getTime())
     if (sortBy === 'date-asc')  list = [...list].sort((a, b) => new Date(a.orderedAt).getTime() - new Date(b.orderedAt).getTime())
     if (sortBy === 'order')     list = [...list].sort((a, b) => a.orderNumber.localeCompare(b.orderNumber))
     return list
-  }, [orders, filterStatus, filterSalesman, sortBy])
+  }, [orders, filterStatus, filterSalesman, uniqueSalesmen, search, sortBy])
 
-  const ALL_STATUSES = ['pending', 'assigned', 'packed', 'dispatched', 'delivered', 'cancelled']
+  const TABS: SegTab<'new' | 'list' | 'print'>[] = [
+    { value: 'new', label: 'New' },
+    { value: 'list', label: 'Orders' },
+    { value: 'print', label: 'Print' },
+  ]
+  const activeTab = view === 'detail' ? 'list' : view
+  const otherDrafts = drafts.filter(d => d.id !== openDraftId)
+  const listShowing = view === 'list' || view === 'detail'
+  // Draws 100 rows at a time (filters and search still cover every order).
+  const { visible: shownOrders, more: moreOrders } = useShowMore(displayedOrders, 100, [filterStatus, filterSalesman, search, sortBy])
 
   // ─────────────────────────────────────────────────────────────────────────
   // Render
@@ -1392,146 +1706,174 @@ ${bills}
 
   return (
     <div className={embedded ? '' : 'min-h-screen bg-background'}>
-      <div className={embedded ? 'pb-32' : 'max-w-4xl mx-auto px-4 py-6 pb-32'}>
+      <div className={embedded ? 'pb-40 md:pb-28' : 'max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 pb-40 md:pb-28'}>
         {!embedded && (
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-4">
           <PageHeader title="My Orders" subtitle={`Welcome, ${userName}`} />
           <PageNav />
         </div>
         )}
 
-        <div className="grid grid-cols-3 gap-3 mb-6">
-          <StatCard label="Total" value={counts.total} />
-          <StatCard label="Pending" value={counts.pending} color="text-yellow-600" />
-          <StatCard label="In Progress" value={counts.inProgress} color="text-blue-600" />
+        {/* Cards open their list: Pending → All Orders · Pending, In progress → All Orders · In progress. */}
+        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-3">
+          <StatButton label="All" value={statusCounts.all}
+            active={listShowing && filterStatus === 'all'} onClick={() => goTo('list', 'all')} />
+          <StatButton label="Pending" value={statusCounts.pending} color="text-yellow-600 dark:text-yellow-400"
+            active={listShowing && filterStatus === 'pending'} onClick={() => goTo('list', 'pending')} />
+          <StatButton label="In progress" value={statusCounts.in_progress} color="text-blue-600 dark:text-blue-400"
+            hint="With the picker or biller, not dispatched yet"
+            active={listShowing && filterStatus === 'in_progress'} onClick={() => goTo('list', 'in_progress')} />
         </div>
 
         {/* Tab bar */}
-        <div className="flex border-b border-border mb-6">
-          {(['list', 'new', 'print'] as const)
-            .map(t => (
-            <button key={t} type="button"
-              onClick={() => {
-                setView(t)
-                if (t === 'list') resetForm()
-                if (t === 'print') { setPrintSelectedIds(new Set()); setPrintItemsMap({}) }
-              }}
-              className={`flex-1 px-2 py-2 text-xs sm:text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
-                (view === t || (view === 'detail' && t === 'list')) ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
-              }`}>
-              {t === 'list' ? 'All Orders' : t === 'new' ? 'New Order' : 'Print Orders'}
-            </button>
-          ))}
+        <div className="mb-4">
+          <SegTabs label="Orders" tabs={TABS} active={activeTab} onChange={v => goTo(v)} />
         </div>
+
+        {/* Messages shown on every tab (saved, cancelled, draft kept…) */}
+        {notice && (
+          <p role="status" className="mb-3 text-sm font-medium text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/20 rounded-xl px-3 py-2">{`✓ ${notice}`}</p>
+        )}
 
         {/* ═══════════════════════════════════════════════════════════════
             ALL ORDERS LIST
         ════════════════════════════════════════════════════════════════ */}
         {view === 'list' && (
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             {orderActionError && (
-              <p className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
+              <p role="alert" className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
             )}
 
-            {/* Live refresh indicator */}
-            <LiveBadge lastRefreshed={lastRefreshed} onRefresh={refresh} />
-
-            {/* Filter + Sort bar (Compact & Sleek) */}
-            {orders.length > 0 && (
-              <div className="bg-card border border-border rounded-xl p-2.5 space-y-2 mb-3 text-xs shadow-sm">
-                {/* 1st Line: Salesman Selector (Compact & Full-width) */}
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-muted-foreground uppercase tracking-wide flex-shrink-0">Salesman:</span>
-                  <select
-                    value={filterSalesman}
-                    onChange={e => setFilterSalesman(e.target.value)}
-                    className="flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer min-w-0"
-                  >
-                    <option value="all">All Salesmen</option>
-                    {uniqueSalesmen.map(name => (
-                      <option key={name} value={name}>{name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* 2nd Line: Status (left) & Sort (right) (Compact) */}
-                <div className="flex items-center justify-between gap-4">
-                  {/* Status Filter */}
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-semibold text-muted-foreground uppercase tracking-wide flex-shrink-0">Status:</span>
-                    <select
-                      value={filterStatus}
-                      onChange={e => setFilterStatus(e.target.value)}
-                      className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer w-32 sm:w-36"
-                    >
-                      <option value="all">All Statuses</option>
-                      {ALL_STATUSES.map(s => (
-                        <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Sort Filter */}
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-semibold text-muted-foreground uppercase tracking-wide flex-shrink-0">Sort:</span>
-                    <select
-                      value={sortBy}
-                      onChange={e => setSortBy(e.target.value as typeof sortBy)}
-                      className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer w-32 sm:w-36"
-                    >
-                      <option value="date-desc">Newest first</option>
-                      <option value="date-asc">Oldest first</option>
-                      <option value="order">Order number</option>
-                    </select>
-                  </div>
-                </div>
+            {/* Search + sort on one line */}
+            <div className="flex items-center gap-2">
+              <div className="relative min-w-0 flex-1">
+                <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input type="search" data-list-search value={search} onChange={e => setSearch(e.target.value)} aria-label="Search orders"
+                  placeholder="Shop or order number"
+                  className="h-10 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
+              <select value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)} aria-label="Sort"
+                className="h-10 w-[7.5rem] shrink-0 rounded-xl border border-border bg-background px-2 text-xs font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                <option value="date-desc">Newest</option>
+                <option value="date-asc">Oldest</option>
+                <option value="order">Order no.</option>
+              </select>
+            </div>
+
+            {/* Status chips — scroll sideways on a phone */}
+            <div className="-mx-3 flex gap-1.5 overflow-x-auto px-3 pb-0.5 sm:mx-0 sm:flex-wrap sm:px-0 [scrollbar-width:none]" role="group" aria-label="Status">
+              {STATUS_CHIPS.map(s => {
+                const on = filterStatus === s.value
+                return (
+                  <button key={s.value} type="button" aria-pressed={on} onClick={() => setFilterStatus(s.value)}
+                    className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition-colors ${
+                      on ? 'border-foreground bg-foreground text-background' : 'border-border bg-card text-muted-foreground hover:text-foreground'
+                    }`}>
+                    {s.label}
+                    <span className={`tabular-nums ${on ? 'opacity-70' : 'opacity-60'}`}>{statusCounts[s.value]}</span>
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Only when there is more than one salesman in the list (admin) */}
+            {uniqueSalesmen.length > 1 && (
+              <label className="flex items-center gap-2 text-xs">
+                <span className="shrink-0 font-semibold uppercase tracking-wide text-muted-foreground">Salesman</span>
+                <select value={filterSalesman} onChange={e => setFilterSalesman(e.target.value)}
+                  className="h-9 min-w-0 flex-1 rounded-lg border border-border bg-background px-2 text-xs font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                  <option value="all">All Salesmen</option>
+                  {uniqueSalesmen.map(name => <option key={name} value={name}>{name}</option>)}
+                </select>
+              </label>
             )}
+
+            <LiveBadge lastRefreshed={lastRefreshed} onRefresh={refresh} />
 
             {orders.length === 0 && (
               <div className="text-center py-12 text-muted-foreground">
-                <p className="text-sm">No orders yet.</p>
-                <button type="button" onClick={() => setView('new')}
+                <p className="text-sm">No open orders and none in the last 60 days.</p>
+                <button type="button" onClick={() => goTo('new')}
                   className="mt-2 text-sm text-primary hover:underline">
                   Create your first order →
                 </button>
               </div>
             )}
             {displayedOrders.length === 0 && orders.length > 0 && (
-              <p className="text-center py-8 text-sm text-muted-foreground">No orders match this filter.</p>
+              <div className="py-8 text-center">
+                <p className="text-sm text-muted-foreground">No orders match this filter.</p>
+                {(filterStatus !== 'all' || search) && (
+                  <button type="button" onClick={() => { setFilterStatus('all'); setSearch('') }} className="mt-2 text-sm font-medium text-primary hover:underline">
+                    Show all orders
+                  </button>
+                )}
+              </div>
             )}
-            {displayedOrders.map(order => {
-              const tag = orderTag(order)
-              return (
-                <button
-                  key={order.id}
-                  type="button"
-                  onClick={() => handleViewOrder(order)}
-                  className="w-full text-left rounded-xl border border-border bg-card p-4 hover:bg-muted/30 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="font-medium text-sm">{order.shopkeeperName}</p>
-                    <StatusPill status={order.status} />
+            <div ref={ordersListRef} className="space-y-2">
+              {shownOrders.map(order => {
+                const tag = orderTag(order)
+                const canPick = pickers.length > 0 && OPEN_FOR_PICKING.includes(order.status)
+                return (
+                  <div key={order.id} data-list-row className="flex items-stretch rounded-xl border border-border bg-card">
+                  {/* The order opens it; Assign and ⚡ Direct bill sit beside it (no button inside a button). */}
+                  <button
+                    type="button"
+                    data-row-open
+                    onClick={() => handleViewOrder(order)}
+                    className="min-w-0 flex-1 text-left rounded-xl px-3.5 py-3 hover:bg-muted/30 active:bg-muted/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="min-w-0 flex-1 truncate font-semibold text-sm text-foreground">{order.shopkeeperName}</p>
+                      <StatusPill status={order.status} />
+                    </div>
+                    <div className="mt-1 flex items-center gap-x-2 gap-y-0.5 flex-wrap text-xs text-muted-foreground">
+                      <span className="font-mono" data-no-translate>{order.orderNumber}</span>
+                      <span aria-hidden>·</span>
+                      <span>{tag === 'updated' ? fmt(order.updatedAt) : fmt(order.orderedAt)}</span>
+                      {tag === 'new' && (
+                        <span className="rounded bg-green-100 px-1.5 py-px text-[10px] font-semibold text-green-700 dark:bg-green-900/30 dark:text-green-400">NEW</span>
+                      )}
+                      {tag === 'updated' && (
+                        <span className="rounded bg-blue-100 px-1.5 py-px text-[10px] font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">UPDATED</span>
+                      )}
+                      {uniqueSalesmen.length > 1 && order.salesmanName && (
+                        <span className="truncate">{`· ${order.salesmanName}`}</span>
+                      )}
+                    </div>
+                    {order.notes && <p className="mt-1 line-clamp-1 text-xs italic text-muted-foreground">{order.notes}</p>}
+                  </button>
+                  {canPick && (
+                    <div className="flex shrink-0 items-center gap-1.5 py-2 pr-2.5">
+                      <button type="button" onClick={() => openRowAction(order, 'assign')}
+                        aria-label={`Assign a picker to ${order.orderNumber}`}
+                        className="h-9 rounded-lg border border-border bg-background px-3 text-xs font-semibold hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                        {order.status === 'assigned' ? 'Reassign' : 'Assign'}
+                      </button>
+                      {canDirectBill && (
+                        <button type="button" onClick={() => openRowAction(order, 'direct')}
+                          title="Direct bill — skip picking, straight to the biller"
+                          aria-label={`Direct bill ${order.orderNumber}`}
+                          className="flex h-9 w-9 items-center justify-center rounded-lg border border-amber-300 bg-amber-50 text-base text-amber-700 hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300 dark:hover:bg-amber-950/60">
+                          <span aria-hidden>⚡</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
                   </div>
-                  <div className="mt-2 flex items-center gap-2 flex-wrap">
-                    <span className="font-mono text-xs text-muted-foreground">{order.orderNumber}</span>
-                    {order.salesmanName && (
-                      <span className="text-xs text-muted-foreground">• Created by: <span className="font-medium text-foreground">{order.salesmanName}</span></span>
-                    )}
-                    {tag === 'new' && (
-                      <span className="inline-flex items-center border-l-2 border-green-500 pl-1.5 pr-1 py-px text-[10px] font-medium text-green-600 dark:text-green-400 tracking-wide">NEW</span>
-                    )}
-                    {tag === 'updated' && (
-                      <span className="inline-flex items-center border-l-2 border-blue-400 pl-1.5 pr-1 py-px text-[10px] font-medium text-blue-500 dark:text-blue-400 tracking-wide">UPDATED</span>
-                    )}
-                    <span className="text-xs text-muted-foreground">
-                      {tag === 'updated' ? fmt(order.updatedAt) : fmt(order.orderedAt)}
-                    </span>
-                  </div>
-                  {order.notes && <p className="mt-1.5 text-xs text-muted-foreground italic">{order.notes}</p>}
-                </button>
-              )
-            })}
+                )
+              })}
+            </div>
+            {moreOrders}
+            {/* Also when the list is empty: all of a salesman's orders may be older than 60 days. */}
+            {olderState !== 'done' && (
+              <button type="button" onClick={loadOlder} disabled={olderState === 'loading'}
+                className="w-full rounded-xl border border-dashed border-border py-2.5 text-xs font-medium text-muted-foreground hover:bg-muted disabled:opacity-60">
+                {olderState === 'loading' ? 'Loading…' : olderState === 'error' ? 'Could not load — try again' : 'Load older orders'}
+              </button>
+            )}
+            {olderState === 'done' && <p className="text-center text-xs text-muted-foreground">No older orders.</p>}
           </div>
         )}
 
@@ -1589,7 +1931,7 @@ ${bills}
                 <p className="px-4 py-6 text-sm text-muted-foreground text-center">Loading items…</p>
               )}
               {detailError && (
-                <p className="px-4 py-4 text-sm text-red-600">{detailError}</p>
+                <p role="alert" className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>
               )}
               {!detailLoading && !detailError && detailItems.length === 0 && (
                 <p className="px-4 py-6 text-sm text-muted-foreground text-center">No items found.</p>
@@ -1609,11 +1951,13 @@ ${bills}
                   artNumber,
                   colorGroups: Array.from(colorMap.entries()).map(([color, items]) => ({ color, items })),
                 }))
+                let serial = 0 // line number, 1, 2, 3… down the table
                 return (
                   <div className="overflow-x-auto">
                   <table className="w-full text-sm border-collapse">
                     <thead className="bg-muted/20 border-b border-border">
                       <tr>
+                        <th className="w-8 px-2 py-2 text-right text-xs font-medium text-muted-foreground">#</th>
                         <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Article</th>
                         <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Color</th>
                         <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">
@@ -1645,6 +1989,7 @@ ${bills}
                           const allVer = isBilled ? allPkd : 0
                           return (
                             <tr key={`${artNumber}-${color}`} className="border-b border-border hover:bg-muted/20">
+                              <td className="w-8 px-2 py-2.5 text-right text-xs tabular-nums text-muted-foreground align-top border-r border-border">{++serial}</td>
                               {ci === 0 && (
                                 <td
                                   className="px-4 py-2.5 font-semibold text-xs align-top border-r border-border"
@@ -1666,7 +2011,7 @@ ${bills}
                                   {items.map(item => {
                                     if (!showPacked) return (
                                       <span key={item.id} className="text-xs tabular-nums whitespace-nowrap">
-                                        <span className="text-muted-foreground">{item.sizeNumber ?? '—'}</span>
+                                        <span className="text-muted-foreground">{sizeWithCode(item, items)}</span>
                                         <span className="mx-0.5 text-muted-foreground">/</span>
                                         <span className="font-semibold text-foreground">{item.quantityOrdered}</span>
                                       </span>
@@ -1676,7 +2021,7 @@ ${bills}
                                     const verified = isBilled ? pkd : 0
                                     return (
                                       <span key={item.id} className="inline-flex items-baseline gap-0.5 tabular-nums whitespace-nowrap">
-                                        <span className="text-xs text-muted-foreground">{item.sizeNumber ?? '—'}</span>
+                                        <span className="text-xs text-muted-foreground">{sizeWithCode(item, items)}</span>
                                         <span className="text-[10px] text-muted-foreground/50 mx-px">/</span>
                                         <span className="text-xs font-bold text-muted-foreground">{item.quantityOrdered}</span>
                                         <span className="text-[10px] text-muted-foreground/40">→</span>
@@ -1701,7 +2046,7 @@ ${bills}
                     </tbody>
                     <tfoot className="border-t-2 border-border bg-muted/20">
                       <tr>
-                        <td colSpan={2} className="px-4 py-2.5 text-xs font-medium text-muted-foreground text-right">Total</td>
+                        <td colSpan={3} className="px-4 py-2.5 text-xs font-medium text-muted-foreground text-right">Total</td>
                         <td className="px-3 py-2.5 text-xs">
                           {showPacked ? (() => {
                             const totalOrd = detailItems.reduce((s, i) => s + i.quantityOrdered, 0)
@@ -1755,7 +2100,7 @@ ${bills}
                       disabled={!canAct}
                       title={reason}
                       onClick={() => { setOrderActionError(''); setCancelOrderId(detailOrder.id) }}
-                      className="flex-1 rounded-xl border border-red-300 text-red-500 px-4 py-2.5 text-sm font-semibold hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                      className="flex-1 rounded-xl border border-red-300 dark:border-red-500/30 text-red-500 px-4 py-2.5 text-sm font-semibold hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                     >
                       Cancel Order
                     </button>
@@ -1769,7 +2114,7 @@ ${bills}
               )
             })()}
             {orderActionError && (
-              <p className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
+              <p role="alert" className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl px-3 py-2">{orderActionError}</p>
             )}
           </div>
         )}
@@ -1778,7 +2123,40 @@ ${bills}
             NEW ORDER FORM
         ════════════════════════════════════════════════════════════════ */}
         {view === 'new' && (
-          <form id="new-order-form" onSubmit={handleSubmit} className="space-y-4" noValidate>
+          <form id="new-order-form" onSubmit={handleSubmit} className="space-y-3 sm:space-y-4" noValidate>
+            {/* Status line: editing / draft saved · Start over · keyboard help */}
+            <div className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1">
+              {editingOrderId != null ? (
+                <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">
+                  {`Editing order ${orders.find(o => o.id === editingOrderId)?.orderNumber ?? ''}`.trim()}
+                </span>
+              ) : draftSavedAt != null ? (
+                <span className="rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300" role="status">
+                  {`Draft · saved ${new Date(draftSavedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`}
+                </span>
+              ) : (
+                <span className="text-xs text-muted-foreground">Saved as a draft while you work</span>
+              )}
+              {draftStoreFailed && editingOrderId == null && (
+                <span className="text-xs font-medium text-red-600 dark:text-red-400">This phone could not save the draft</span>
+              )}
+              <div className="ml-auto flex items-center gap-2">
+                {editingOrderId == null && (selectedSk || lines.length > 0) && (
+                  <button type="button" onClick={() => setDiscardOpen(true)}
+                    className="h-8 rounded-lg px-2 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+                    Start over
+                  </button>
+                )}
+                {editingOrderId == null && (
+                  <button type="button" onClick={() => setDraftsOpen(true)}
+                    className="flex h-8 items-center gap-1.5 rounded-lg border border-border px-2.5 text-xs font-semibold hover:bg-muted">
+                    Drafts
+                    {otherDrafts.length > 0 && <span className="rounded-full bg-primary/15 px-1.5 text-[10px] font-bold text-primary">{otherDrafts.length}</span>}
+                  </button>
+                )}
+                <ShortcutGuide />
+              </div>
+            </div>
 
             {/* ── 1. SHOPKEEPER ── */}
             <section aria-labelledby="sk-heading" className="rounded-2xl border border-border bg-card">
@@ -1798,13 +2176,14 @@ ${bills}
               <div className="p-4">
                 {!selectedSk ? (
                   <SearchCombobox<ShopkeeperResult>
+                    ref={skSearchRef}
                     id="sk-search"
                     label="Search Vendor"
                     required
                     placeholder="Search vendor..."
                     inputValue={skQuery}
                     onInputChange={setSkQuery}
-                    onSelect={sk => { setSelectedSk(sk); setSkQuery(sk.name) }}
+                    onSelect={sk => { setSelectedSk(sk); setSkQuery(sk.name); setTimeout(() => artSearchRef.current?.focus(), 50) }}
                     onClear={() => { setSelectedSk(null); setSkQuery('') }}
                     results={skResults}
                     loading={skLoading}
@@ -1831,6 +2210,9 @@ ${bills}
                     </div>
                   </div>
                 )}
+                {selectedSk && editingOrderId == null && (
+                  <div className="mt-3"><CreditNote info={credit} allow={allowHeld} onAllow={setAllowHeld} /></div>
+                )}
               </div>
             </section>
 
@@ -1845,7 +2227,14 @@ ${bills}
               </div>
 
               <div className="p-4 space-y-4">
-                {/* Article search */}
+                {/* Article search — Enter with nothing typed goes to Create Order */}
+                <div onKeyDownCapture={e => {
+                  // Runs before the search box: with nothing typed, Enter must not pick an article.
+                  if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || artQuery.trim()) return
+                  e.preventDefault()
+                  e.stopPropagation()
+                  if (lines.length) createOrderRef.current?.focus()
+                }}>
                 <SearchCombobox<ArticleResult>
                   ref={artSearchRef}
                   id="art-search"
@@ -1867,6 +2256,7 @@ ${bills}
                     </div>
                   )}
                 />
+                </div>
 
                 {selectedArt && (
                   <>
@@ -1884,8 +2274,8 @@ ${bills}
                     {selectedArt.colors.length > 0 ? (
                       <div>
                         <p className="text-xs font-medium text-muted-foreground mb-2">Available Colors</p>
-                        <div className="flex flex-wrap gap-2">
-                          {selectedArt.colors.map(c => {
+                        <div className="flex flex-wrap gap-2" onKeyDown={handleColourKey}>
+                          {selectedArt.colors.map((c, i) => {
                             const active = selectedColorId === c.id
                             const hasData = Object.values(colorQuantities[c.id] ?? {}).some(v => v > 0)
                             const savedLine = lines.find(l => l.articleId === selectedArt.id && l.colorId === c.id)
@@ -1899,28 +2289,18 @@ ${bills}
                             return (
                               <button
                                 key={c.id}
+                                ref={el => { colourRefs.current[i] = el }}
                                 type="button"
                                 aria-pressed={active}
-                                onClick={() => {
-                                  // Only seed from saved line if there are no working quantities
-                                  // already — preserves any unsaved edits the user made before switching away.
-                                  const hasWorking = Object.values(colorQuantities[c.id] ?? {}).some(v => v > 0)
-                                  if (!hasWorking) {
-                                    const savedLine = lines.find(
-                                      l => l.articleId === selectedArt.id && l.colorId === c.id
-                                    )
-                                    if (savedLine) {
-                                      setColorQuantities(prev => ({ ...prev, [c.id]: { ...savedLine.quantities } }))
-                                    }
-                                  }
-                                  setSelectedColorId(c.id)
-                                }}
+                                aria-keyshortcuts={i < 9 ? String(i + 1) : undefined}
+                                onClick={() => selectColour(c)}
                                 className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                                   active
                                     ? 'border-primary bg-primary/10 text-foreground ring-1 ring-primary'
                                     : 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
                                 }`}
                               >
+                                {i < 9 && <span className="hidden text-[10px] font-bold text-muted-foreground [@media(pointer:fine)]:inline" aria-hidden>{i + 1}</span>}
                                 <span className="w-3.5 h-3.5 rounded-full border border-white/30 flex-shrink-0"
                                   style={{ background: swatch(c.colorHex, c.colorName) }} aria-hidden />
                                 {c.colorName}
@@ -1979,19 +2359,24 @@ ${bills}
 
                         <SizeMatrix
                           key={matrixKey}
+                          ref={matrixRef}
                           sizes={selectedArt.sizes.filter(s => s.articleId === selectedColor.articleId)}
                           quantities={currentQties}
                           onChange={setCurrentQties}
+                          onEnter={handleMatrixEnter}
+                          onColour={handleMatrixColour}
+                          onEscape={skipArticle}
                         />
 
                         {/* Error for this section */}
                         {error && (
-                          <p className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>
+                          <p role="alert" className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</p>
                         )}
 
                         {/* Add to Order + Next Article — full-width on mobile, auto-width on wider */}
-                        <div className="flex items-center gap-2 pt-1">
+                        <div className="flex items-center gap-2 pt-1" onKeyDown={handleActionKey}>
                           <button
+                            ref={nextArtBtnRef}
                             type="button"
                             onClick={handleNextArticle}
                             className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-xl border border-border bg-background px-4 py-2.5 text-sm font-semibold text-foreground hover:bg-muted transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -2001,19 +2386,27 @@ ${bills}
                             </svg>
                             Next Article
                           </button>
-                          <button
-                            type="button"
-                            onClick={handleAddToOrder}
-                            disabled={currentColorTotal === 0}
-                            className="flex-1 sm:flex-none flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                            </svg>
-                            {(editingLineId || lines.some(l => l.articleId === selectedArt.id && l.colorId === selectedColorId))
-                              ? 'Save Changes'
-                              : 'Add to Order'}
-                          </button>
+                          {/* One colour only: Next Article saves it, so it is the only button. */}
+                          {selectedArt.colors.length > 1 && (
+                            <button
+                              ref={addBtnRef}
+                              type="button"
+                              onClick={e => {
+                                handleAddToOrder()
+                                // From the keyboard (Enter), continue on this article's colours.
+                                if (e.detail === 0) setTimeout(() => colourRefs.current[0]?.focus({ preventScroll: true }), 50)
+                              }}
+                              disabled={currentColorTotal === 0}
+                              className="flex-1 sm:flex-none flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                              </svg>
+                              {(editingLineId || lines.some(l => l.articleId === selectedArt.id && l.colorId === selectedColorId))
+                                ? 'Save Changes'
+                                : 'Add to Order'}
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}
@@ -2037,7 +2430,7 @@ ${bills}
                     <button
                       type="button"
                       onClick={handleDeleteSelectedLine}
-                      className="flex items-center gap-1 rounded-lg border border-red-300 bg-red-50 dark:bg-red-900/20 px-2.5 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
+                      className="flex items-center gap-1 rounded-lg border border-red-300 dark:border-red-500/30 bg-red-50 dark:bg-red-900/20 px-2.5 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
                       aria-label="Delete selected line"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
@@ -2065,7 +2458,7 @@ ${bills}
             </div>
 
             {success && (
-              <p className="text-sm text-green-600 bg-green-50 dark:bg-green-900/20 rounded-xl px-3 py-2">{success}</p>
+              <p className="text-sm text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 rounded-xl px-3 py-2">{success}</p>
             )}
           </form>
         )}
@@ -2233,20 +2626,29 @@ ${bills}
 
       {/* ── Sticky bottom actions (new order only) ── */}
       {view === 'new' && (
-        <div className="fixed bottom-0 left-0 right-0 z-20 bg-background/95 backdrop-blur border-t border-border pb-safe">
-          <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2.5 sm:py-3 flex gap-2 items-center">
-            {lines.length > 0 && (
-              <div className="flex gap-2 sm:gap-4 mr-auto text-xs sm:text-sm min-w-0 shrink">
-                <span className="text-muted-foreground whitespace-nowrap">{lines.length} line{lines.length !== 1 ? 's' : ''}</span>
-                <span className="font-semibold text-foreground whitespace-nowrap">{totalPairs} pairs</span>
-              </div>
+        // Sits above the phone's bottom menu (z-40 there), at the very bottom from md up.
+        <div className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] left-0 right-0 z-30 bg-background/95 backdrop-blur border-t border-border md:bottom-0 md:pb-[env(safe-area-inset-bottom)]">
+          {submitError && (
+            <p role="alert" className="mx-auto max-w-4xl px-3 pt-2 text-sm text-red-600 dark:text-red-400 sm:px-4">{submitError}</p>
+          )}
+          <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2 sm:py-3 flex gap-2 items-center">
+            <div className="mr-auto flex min-w-0 shrink flex-col text-xs leading-tight sm:flex-row sm:gap-3 sm:text-sm">
+              <span className="font-semibold text-foreground whitespace-nowrap tabular-nums">{`${totalPairs} pairs`}</span>
+              <span className="text-muted-foreground whitespace-nowrap">{`${lines.length} line${lines.length !== 1 ? 's' : ''}`}</span>
+            </div>
+            {editingOrderId != null ? (
+              <button type="button" onClick={() => goTo('list')}
+                className="h-11 shrink-0 rounded-xl border border-border px-3 sm:px-5 text-sm font-medium hover:bg-muted transition-colors">
+                Cancel
+              </button>
+            ) : (
+              <button type="button" onClick={handleSaveDraft} disabled={!(selectedSk || lines.length > 0) || draftStoreFailed}
+                className="h-11 shrink-0 rounded-xl border border-border px-3 sm:px-5 text-sm font-medium hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                Save draft
+              </button>
             )}
-            <button type="button" onClick={() => { setView('list'); resetForm() }}
-              className="shrink-0 rounded-xl border border-border px-3 sm:px-5 py-2.5 text-sm font-medium hover:bg-muted transition-colors">
-              Cancel
-            </button>
-            <button type="submit" form="new-order-form" disabled={!canSubmit}
-              className="shrink-0 rounded-xl bg-primary px-4 sm:px-6 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <button ref={createOrderRef} type="submit" form="new-order-form" disabled={!canSubmit}
+              className="h-11 shrink-0 rounded-xl bg-primary px-4 sm:px-6 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               {isPending ? (editingOrderId != null ? 'Saving…' : 'Creating…') : (editingOrderId != null ? 'Save Changes' : 'Create Order')}
             </button>
           </div>
@@ -2263,7 +2665,7 @@ ${bills}
           (s, o) => s + (printItemsMap[o.id] ?? []).reduce((ss, i) => ss + i.quantityOrdered, 0), 0
         )
         return (
-          <div className="fixed bottom-0 left-0 right-0 z-20 bg-background/95 backdrop-blur-sm border-t border-border">
+          <div className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] left-0 right-0 z-30 bg-background/95 backdrop-blur-sm border-t border-border md:bottom-0">
             <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2.5 flex items-center gap-3">
               {/* Left stat pills — only shown when something is selected */}
               {selectedOrders.length > 0 && (
@@ -2317,6 +2719,7 @@ ${bills}
             className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
             onClick={e => { if (e.target === e.currentTarget) setPrintConfigOpen(false) }}
           >
+            <DialogKeys onClose={() => setPrintConfigOpen(false)} />
             <div className="w-full sm:max-w-sm bg-card rounded-t-2xl sm:rounded-2xl border border-border shadow-2xl overflow-hidden">
 
               {/* Modal header */}
@@ -2338,6 +2741,13 @@ ${bills}
                   </svg>
                 </button>
               </div>
+
+              {/* Pages per paper for these orders, before printing; least paper preselected (owner, 24 Nov 2026). */}
+              <PaperEstimate ordersKey={selectedOrders.map(o => o.id).join(',')} pageSize={printPageSize} orientation={printOrientation}
+                onPick={(s, o) => { setPrintPageSize(s); setPrintOrientation(o) }}
+                orders={selectedOrders.map(o => ({ orderNumber: o.orderNumber, shopkeeperName: o.shopkeeperName, orderedAt: o.orderedAt, salesman: o.salesmanName ?? userName,
+                  address: o.shopkeeperAddress || vendorAddressMap.get(o.shopkeeperName.toUpperCase()) || '', sets,
+                  items: (printItemsMap[o.id] ?? []).map(it => ({ artNumber: it.artNumber, colorNumber: it.colorNumber ?? null, sizeNumber: it.sizeNumber ?? null, quantityOrdered: it.quantityOrdered })) }))} />
 
               <div className="px-4 py-4 space-y-4">
 
@@ -2378,8 +2788,8 @@ ${bills}
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Orientation</p>
                   <div className="grid grid-cols-2 gap-2">
                     {([
-                      { value: 'portrait',  label: 'Portrait',  sub: '1 bill / row',  w: 24, h: 32 },
-                      { value: 'landscape', label: 'Landscape', sub: '2 bills / row', w: 32, h: 24 },
+                      { value: 'portrait',  label: 'Portrait',  sub: `${columnsFor(printPageSize, 'portrait')} columns`,  w: 24, h: 32 },
+                      { value: 'landscape', label: 'Landscape', sub: `${columnsFor(printPageSize, 'landscape')} columns`, w: 32, h: 24 },
                     ] as const).map(({ value, label, sub, w, h }) => (
                       <button key={value} type="button"
                         onClick={() => setPrintOrientation(value)}
@@ -2418,20 +2828,13 @@ ${bills}
                 <button type="button"
                   onClick={() => {
                     setPrintConfigOpen(false)
-                    // Open picker assignment step first (if pickers exist)
-                    setSelectedOrdersForAssign(selectedOrders)
-                    setPrintSettingsSnapshot({ pageSize: printPageSize, orientation: printOrientation })
-                    // Pre-fill: orders already assigned keep their picker
-                    const preMap: Record<number, string> = {}
-                    selectedOrders.forEach(o => { preMap[o.id] = '' })
-                    setPickerAssignMap(preMap)
-                    setPickerAssignOpen(true)
+                    handlePrintOrders(selectedOrders, printPageSize, printOrientation)
                   }}
                   className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring whitespace-nowrap">
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                   </svg>
-                  Next: Assign Pickers
+                  Print
                 </button>
               </div>
             </div>
@@ -2439,92 +2842,55 @@ ${bills}
         )
       })()}
 
-      {/* ── Picker assignment dialog ── */}
-      {pickerAssignOpen && (
+      {/* ── One order: Assign picker / ⚡ Direct bill (who picked it) ── */}
+      {rowAction && (
         <div
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
-          onClick={e => { if (e.target === e.currentTarget) setPickerAssignOpen(false) }}
+          onClick={e => { if (e.target === e.currentTarget && !rowSaving) setRowAction(null) }}
         >
-          <div className="w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl bg-background shadow-2xl max-h-[90vh] flex flex-col">
-
-            {/* Drag handle */}
-            <div className="sm:hidden flex justify-center pt-3 pb-1 shrink-0">
-              <div className="w-10 h-1 rounded-full bg-border" />
-            </div>
-
-            {/* Header */}
-            <div className="px-5 pt-5 pb-4 border-b border-border shrink-0">
-              <p className="text-xl font-bold text-foreground tracking-tight">Assign Pickers</p>
-              <p className="text-sm text-muted-foreground mt-0.5">
-                {selectedOrdersForAssign.length} order{selectedOrdersForAssign.length !== 1 ? 's' : ''} selected — choose a picker for each
+          <DialogKeys onClose={() => { if (!rowSaving) setRowAction(null) }} />
+          <form
+            role="dialog" aria-modal="true" aria-labelledby="row-action-title"
+            onSubmit={e => { e.preventDefault(); saveRowAction() }}
+            className="w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl bg-background p-5 shadow-2xl space-y-4"
+          >
+            <div>
+              <p id="row-action-title" className="text-lg font-bold text-foreground">
+                {rowAction.mode === 'direct' ? '⚡ Direct bill' : 'Assign picker'}
+              </p>
+              <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                {rowAction.order.shopkeeperName} · <span className="font-mono" data-no-translate>{rowAction.order.orderNumber}</span>
               </p>
             </div>
-
-            {/* Order rows */}
-            <div className="overflow-y-auto flex-1 px-4 py-3 space-y-2">
-              {selectedOrdersForAssign.map(order => (
-                <div key={order.id} className="rounded-2xl bg-muted/50 px-4 py-3 space-y-2">
-                  {/* Order info */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-foreground truncate">{order.shopkeeperName}</p>
-                      <p className="text-[11px] text-muted-foreground font-mono mt-0.5">{order.orderNumber}</p>
-                    </div>
-                    <StatusPill status={order.status} />
-                  </div>
-                  {/* Picker selector */}
-                  <select
-                    value={pickerAssignMap[order.id] ?? ''}
-                    onChange={e => setPickerAssignMap(prev => ({ ...prev, [order.id]: e.target.value }))}
-                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    <option value="">— Skip / No picker —</option>
-                    {pickers.map(p => (
-                      <option key={p.id} value={p.id}>{p.name ?? p.id}</option>
-                    ))}
-                  </select>
-                </div>
-              ))}
-            </div>
-
-            {/* Footer */}
-            <div className="px-4 pb-5 pt-3 border-t border-border shrink-0 space-y-2">
-              <button
-                type="button"
-                disabled={pickerAssigning}
-                onClick={() => {
-                  startPickerAssign(async () => {
-                    // Fire all assignments in parallel (skip blanks)
-                    await Promise.all(
-                      selectedOrdersForAssign
-                        .filter(o => pickerAssignMap[o.id])
-                        .map(o => salesmanAssignPicker(o.id, pickerAssignMap[o.id]))
-                    )
-                    setPickerAssignOpen(false)
-                    handlePrintOrders(selectedOrdersForAssign, printSettingsSnapshot.pageSize, printSettingsSnapshot.orientation)
-                  })
-                }}
-                className="w-full rounded-2xl bg-foreground text-background px-4 py-3.5 text-base font-semibold hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+            {rowAction.mode === 'direct' && (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                The order skips the picking screen and goes to the biller&apos;s Bills tab. The biller scans the boxes; pairs not received are marked on the order.
+              </p>
+            )}
+            <label className="block space-y-1.5">
+              <span className="text-sm font-medium text-foreground">{rowAction.mode === 'direct' ? 'Who picked it?' : 'Picker'}</span>
+              <select
+                autoFocus
+                value={rowPicker}
+                onChange={e => { setRowPicker(e.target.value); setRowError('') }}
+                className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               >
-                {pickerAssigning ? (
-                  <>
-                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                    </svg>
-                    Assigning…
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                    </svg>
-                    Assign & Print
-                  </>
-                )}
+                <option value="">— Choose —</option>
+                {pickers.map(p => <option key={p.id} value={p.id}>{p.name ?? p.id}</option>)}
+              </select>
+            </label>
+            {rowError && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{rowError}</p>}
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setRowAction(null)} disabled={rowSaving}
+                className="flex-1 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold hover:bg-muted disabled:opacity-50">
+                Cancel
+              </button>
+              <button type="submit" disabled={rowSaving}
+                className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+                {rowSaving ? 'Saving…' : rowAction.mode === 'direct' ? 'Send to biller' : 'Assign'}
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
 
@@ -2534,6 +2900,7 @@ ${bills}
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm"
           onClick={() => setSetPickerOpen(false)}
         >
+          <DialogKeys onClose={() => setSetPickerOpen(false)} />
           <div
             className="w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl bg-background shadow-2xl"
             onClick={e => e.stopPropagation()}
@@ -2623,6 +2990,65 @@ ${bills}
           onConfirm={confirmApplySet}
         />
       )}
+
+      {/* ── Drafts panel (same pattern as Direct Billing's draft bills) ── */}
+      {draftsOpen && (
+        <SidePanel title="Draft orders" onClose={() => setDraftsOpen(false)}>
+          <p className="mb-4 text-sm text-muted-foreground">Orders that were started and not created. Saved on this phone as you work; not sent to the warehouse.</p>
+          {openDraftId != null && (
+            <div className="mb-3 rounded-xl border-2 border-primary/60 px-3 py-2.5">
+              <p className="truncate text-sm font-semibold"><span data-no-translate>{selectedSk?.name || 'No vendor yet'}</span></p>
+              <p className="text-xs text-muted-foreground">{`Open now · ${draftArticles({ lines })} article(s) · ${totalPairs} pairs`}</p>
+              <button type="button" onClick={handleSaveDraft}
+                className="mt-2 h-9 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-muted">
+                Start a new order (keep this as draft)
+              </button>
+            </div>
+          )}
+          {otherDrafts.length === 0 && <p className="text-sm text-muted-foreground">No other saved drafts.</p>}
+          {otherDrafts.length > 0 && (
+            <ul className="divide-y divide-border rounded-xl border border-border">
+              {otherDrafts.map(d => (
+                <li key={d.id} className="flex items-center gap-2 px-3 py-2.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium"><span data-no-translate>{d.vendor?.name || 'No vendor yet'}</span></p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {`${draftArticles(d)} article(s) · ${draftPairs(d)} pairs · ${fmt(new Date(d.savedAt))}`}
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => { setDraftsOpen(false); openDraft(d) }}
+                    className="h-9 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground">Open</button>
+                  <button type="button" onClick={() => setDeleteDraftId(d.id)}
+                    className="h-9 rounded-lg border border-border px-3 text-xs text-destructive hover:bg-muted">Discard</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SidePanel>
+      )}
+
+      {/* ── Drafts: start over / delete ── */}
+      {discardOpen && (
+        <ConfirmDialog
+          title="Start over?"
+          message="This order and its draft will be removed from this phone."
+          confirmLabel="Start over"
+          onCancel={() => setDiscardOpen(false)}
+          onConfirm={handleDiscardCurrent}
+        />
+      )}
+      {deleteDraftId != null && (() => {
+        const d = drafts.find(x => x.id === deleteDraftId)
+        return (
+          <ConfirmDialog
+            title="Discard this draft?"
+            message={<><strong>{d?.vendor?.name ?? 'No vendor yet'}</strong>{d ? ` · ${draftPairs(d)} pairs` : ''}<br />This cannot be undone.</>}
+            confirmLabel="Discard"
+            onCancel={() => setDeleteDraftId(null)}
+            onConfirm={handleDeleteDraft}
+          />
+        )
+      })()}
 
       {/* ── Cancel order confirmation ── */}
       {cancelOrderId != null && (() => {

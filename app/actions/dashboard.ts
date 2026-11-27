@@ -1,202 +1,22 @@
 'use server'
 
-import { auth } from '@/lib/auth'
+import { sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { scans } from '@/lib/db/schema'
-import { and, eq, isNull, desc, sql } from 'drizzle-orm'
-import { headers } from 'next/headers'
-import { revalidatePath } from 'next/cache'
-import { DUPLICATE_ENTRY_ERROR } from '@/lib/errors'
-import { fuzzyScore } from '@/lib/fuzzy'
+import { requirePermission, requireUser } from '@/lib/authz'
 
-async function getUser() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-  return { id: session.user.id, name: session.user.name ?? null }
-}
+// Two views of inventory:
+//  - "My scans"     : scan activity (scan_events) for the signed-in user.
+//  - "Overall stock": stock balances from the ledger (stock_balances), split into
+//                     scanned / unscanned / carton-derived provenance.
+// Every aggregate is computed in SQL; nothing loads raw rows to count them in JS.
 
 export async function getLoggedInUserName(): Promise<string | null> {
-  const user = await getUser()
-  return user.name
+  return (await requireUser()).name
 }
 
-export async function searchInventory(query: string) {
-  await getUser()
-  const q = query.trim()
+const ACTIVE_STOCKTAKE = sql`e.status = 'active' AND e.purpose = 'stocktake'`
 
-  if (!q) {
-    return db.select().from(scans).orderBy(desc(scans.createdAt))
-  }
-
-  // Broad substring fetch
-  const like = `%${q}%`
-  const rows = await db
-    .select()
-    .from(scans)
-    .where(
-      sql`(
-        ${scans.artNumber} ILIKE ${like} OR
-        ${scans.colorNumber} ILIKE ${like} OR
-        ${scans.sizeNumber} ILIKE ${like}
-      )`
-    )
-    .orderBy(desc(scans.createdAt))
-    .limit(500)
-
-  // Fuzzy re-rank: score each row, filter out non-matches, sort best first
-  const scored = rows
-    .map(row => ({
-      row,
-      score: Math.min(
-        fuzzyScore(row.artNumber ?? '', q),
-        fuzzyScore(row.colorNumber ?? '', q),
-        fuzzyScore(row.sizeNumber ?? '', q),
-      ),
-    }))
-    .filter(x => x.score < Infinity)
-    .sort((a, b) => a.score !== b.score ? a.score - b.score : 0)
-
-  return scored.map(x => x.row)
-}
-
-export async function getInventorySummary() {
-  const user = await getUser()
-  const rows = await db
-    .select({
-      artNumber:     scans.artNumber,
-      colorNumber:   scans.colorNumber,
-      sizeNumber:    scans.sizeNumber,
-      division:      scans.division,
-      mrp:           scans.mrp,
-      mfgMonth:      scans.mfgMonth,
-      mfgYear:       scans.mfgYear,
-      scannedByName: scans.scannedByName,
-      entryType:     scans.entryType,
-      quantity:      sql<number>`sum(${scans.quantity})::int`,
-      count:         sql<number>`count(*)::int`,
-      lastScanned:   sql<Date>`max(${scans.scannedAt})`,
-    })
-    .from(scans)
-    .where(eq(scans.scannedByName, user.name ?? ''))
-    .groupBy(
-      scans.artNumber, scans.colorNumber, scans.sizeNumber,
-      scans.division, scans.mrp, scans.mfgMonth, scans.mfgYear,
-      scans.scannedByName, scans.entryType,
-    )
-    .orderBy(desc(sql`max(${scans.scannedAt})`))
-
-  return rows.map((r) => ({
-    ...r,
-    mrp: r.mrp != null ? Number(r.mrp) : undefined,
-    artNumber: r.artNumber ?? undefined,
-    colorNumber: r.colorNumber ?? undefined,
-    sizeNumber: r.sizeNumber ?? undefined,
-    division: r.division ?? undefined,
-    scannedByName: r.scannedByName ?? undefined,
-    mfgMonth: r.mfgMonth ?? undefined,
-    mfgYear: r.mfgYear ?? undefined,
-  }))
-}
-
-export type AddManualEntryResult =
-  | { ok: true; data: typeof scans.$inferSelect }
-  | { ok: false; error: typeof DUPLICATE_ENTRY_ERROR | 'ERROR'; scannedByName?: string | null }
-
-function colEq(col: Parameters<typeof eq>[0], val: string | undefined) {
-  return val ? eq(col, val) : isNull(col)
-}
-
-export async function addManualEntry(
-  artNumber: string,
-  colorNumber: string,
-  sizeNumber: string,
-  quantity: number,
-  notes?: string,
-  mrp?: number,
-  division?: string,
-  mfgMonth?: number,
-  mfgYear?: number,
-): Promise<AddManualEntryResult> {
-  const user = await getUser()
-
-  const art      = artNumber.trim().toUpperCase()   || undefined
-  const color    = colorNumber.trim().toUpperCase() || undefined
-  const size     = sizeNumber.trim().toUpperCase()  || undefined
-  const mrpStr   = mrp != null ? String(mrp) : undefined
-  const divNorm  = division || undefined
-
-  const matched = await db
-    .select({ id: scans.id })
-    .from(scans)
-    .where(
-      and(
-        colEq(scans.artNumber,   art),
-        colEq(scans.colorNumber, color),
-        colEq(scans.sizeNumber,  size),
-        colEq(scans.division,    divNorm),
-        colEq(scans.mrp,         mrpStr),
-        mfgMonth != null ? eq(scans.mfgMonth, mfgMonth) : isNull(scans.mfgMonth),
-        mfgYear  != null ? eq(scans.mfgYear,  mfgYear)  : isNull(scans.mfgYear),
-      )
-    )
-    .limit(1)
-
-  if (matched.length > 0) {
-    const rows = await db
-      .update(scans)
-      .set({ quantity: sql`${scans.quantity} + ${quantity}`, updatedAt: sql`now()` })
-      .where(eq(scans.id, matched[0].id))
-      .returning()
-
-    revalidatePath('/dashboard')
-    return { ok: true, data: rows[0] }
-  }
-
-  const rows = await db
-    .insert(scans)
-    .values({
-      entryType: 'manual',
-      artNumber: art ?? artNumber,
-      colorNumber: color ?? colorNumber,
-      sizeNumber: size ?? sizeNumber,
-      scannedByName: user.name ?? '',
-      notes,
-      quantity,
-      mrp: mrpStr,
-      division: divNorm,
-      mfgMonth: mfgMonth ?? undefined,
-      mfgYear: mfgYear ?? undefined,
-    })
-    .returning()
-
-  revalidatePath('/dashboard')
-  return { ok: true, data: rows[0] }
-}
-
-export async function getStatistics() {
-  const user = await getUser()
-  const name = user.name ?? ''
-  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
-
-  const [totals] = await db
-    .select({
-      totalScans:    sql<number>`count(*)::int`,
-      totalItems:    sql<number>`sum(${scans.quantity})::int`,
-      uniqueItems:   sql<number>`count(distinct (${scans.artNumber}, ${scans.colorNumber}, ${scans.sizeNumber}))::int`,
-      scansLast24h:  sql<number>`count(*) filter (where ${scans.scannedAt} > ${oneDayAgo})::int`,
-    })
-    .from(scans)
-    .where(eq(scans.scannedByName, name))
-
-  return {
-    totalScans:   totals?.totalScans   ?? 0,
-    totalItems:   totals?.totalItems   ?? 0,
-    uniqueItems:  totals?.uniqueItems  ?? 0,
-    scansLast24h: totals?.scansLast24h ?? 0,
-  }
-}
-
-export interface OverallStockItem {
+export interface InventorySummaryRow {
   artNumber: string | undefined
   colorNumber: string | undefined
   sizeNumber: string | undefined
@@ -206,157 +26,241 @@ export interface OverallStockItem {
   mfgYear: number | undefined
   scannedByName: string | undefined
   entryType: string
+  quantity: number
+  count: number
+  lastScanned: Date
+}
+
+/** The signed-in user's own scans, grouped per article/colour/size/MRP/batch. */
+export async function getInventorySummary(): Promise<InventorySummaryRow[]> {
+  const u = await requirePermission('inventory.view')
+  const r = await db.execute<Record<string, unknown>>(sql`
+    SELECT e."articleCode" AS "artNumber", e."colourCode" AS "colorNumber", e."sizeLabel" AS "sizeNumber",
+           a.division, e.mrp, e."mfgMonth", e."mfgYear", e."userName" AS "scannedByName", e."entryType",
+           sum(e.quantity)::int AS quantity, count(*)::int AS count, max(e."createdAt") AS "lastScanned"
+    FROM scan_events e LEFT JOIN articles a ON a.id = e."articleId"
+    WHERE ${ACTIVE_STOCKTAKE} AND e."userId" = ${u.id}
+    GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9
+    ORDER BY max(e."createdAt") DESC
+    LIMIT 2000`)
+  return r.rows.map((x) => ({
+    artNumber: (x.artNumber as string) ?? undefined,
+    colorNumber: (x.colorNumber as string) ?? undefined,
+    sizeNumber: (x.sizeNumber as string) ?? undefined,
+    division: (x.division as string) ?? undefined,
+    mrp: x.mrp != null ? Number(x.mrp) : undefined,
+    mfgMonth: (x.mfgMonth as number) ?? undefined,
+    mfgYear: (x.mfgYear as number) ?? undefined,
+    scannedByName: (x.scannedByName as string) ?? undefined,
+    entryType: x.entryType as string,
+    quantity: Number(x.quantity),
+    count: Number(x.count),
+    lastScanned: new Date(x.lastScanned as string),
+  }))
+}
+
+export async function getStatistics() {
+  const u = await requirePermission('inventory.view')
+  const r = await db.execute<Record<string, unknown>>(sql`
+    SELECT count(*)::int AS "totalScans",
+           coalesce(sum(e.quantity), 0)::int AS "totalItems",
+           count(DISTINCT (e."articleCode", e."colourCode", e."sizeLabel"))::int AS "uniqueItems",
+           count(*) FILTER (WHERE e."createdAt" > now() - interval '24 hours')::int AS "scansLast24h"
+    FROM scan_events e WHERE ${ACTIVE_STOCKTAKE} AND e."userId" = ${u.id}`)
+  const x = r.rows[0] ?? {}
+  return {
+    totalScans: Number(x.totalScans ?? 0),
+    totalItems: Number(x.totalItems ?? 0),
+    uniqueItems: Number(x.uniqueItems ?? 0),
+    scansLast24h: Number(x.scansLast24h ?? 0),
+  }
+}
+
+export interface OverallStockItem {
+  skuId: number
+  artNumber: string
+  artName: string
+  colorNumber: string
+  colorName: string
+  sizeNumber: string
+  division: string | undefined
+  scannedQuantity: number
+  unscannedQuantity: number
+  cartonQuantity: number
   totalQuantity: number
-  totalScans: number
   lastUpdated: Date
 }
 
 export interface OverallStockStats {
   totalStockItems: number
+  scannedStockItems: number
+  unscannedStockItems: number
   uniqueSKUs: number
-  totalLocations: number
-  lowStockItems: number
+  awaitingArticleLink: number
+  negativeSKUs: number
 }
 
+/** Stock on hand per SKU from the ledger balances. */
 export async function getOverallStockSummary(): Promise<OverallStockItem[]> {
-  const rows = await db
-    .select({
-      artNumber:     scans.artNumber,
-      colorNumber:   scans.colorNumber,
-      sizeNumber:    scans.sizeNumber,
-      division:      scans.division,
-      mrp:           scans.mrp,
-      mfgMonth:      scans.mfgMonth,
-      mfgYear:       scans.mfgYear,
-      scannedByName: scans.scannedByName,
-      entryType:     scans.entryType,
-      totalQuantity: sql<number>`sum(${scans.quantity})::int`,
-      totalScans:    sql<number>`count(*)::int`,
-      lastUpdated:   sql<Date>`max(${scans.scannedAt})`,
-    })
-    .from(scans)
-    .groupBy(
-      scans.artNumber, scans.colorNumber, scans.sizeNumber,
-      scans.division, scans.mrp, scans.mfgMonth, scans.mfgYear,
-      scans.scannedByName, scans.entryType,
-    )
-    .orderBy(desc(sql`max(${scans.scannedAt})`))
-
-  return rows.map((r) => ({
-    artNumber:     r.artNumber ?? undefined,
-    colorNumber:   r.colorNumber ?? undefined,
-    sizeNumber:    r.sizeNumber ?? undefined,
-    division:      r.division ?? undefined,
-    mrp:           r.mrp != null ? Number(r.mrp) : undefined,
-    mfgMonth:      r.mfgMonth ?? undefined,
-    mfgYear:       r.mfgYear ?? undefined,
-    scannedByName: r.scannedByName ?? undefined,
-    entryType:     r.entryType,
-    totalQuantity: r.totalQuantity,
-    totalScans:    r.totalScans,
-    lastUpdated:   r.lastUpdated,
+  await requirePermission('inventory.view.all')
+  const r = await db.execute<Record<string, unknown>>(sql`
+    SELECT b."skuId", a."artCode", a."artName", a."colorCode", a.color, s."sizeLabel", a.division,
+           sum(b.quantity) FILTER (WHERE b.provenance = 'scanned')::int AS scanned,
+           sum(b.quantity) FILTER (WHERE b.provenance = 'unscanned')::int AS unscanned,
+           sum(b.quantity) FILTER (WHERE b.provenance = 'carton')::int AS carton,
+           sum(b.quantity)::int AS total, max(b."updatedAt") AS updated
+    FROM stock_balances b
+    JOIN article_sizes s ON s.id = b."skuId"
+    JOIN articles a ON a.id = s."articleId"
+    GROUP BY b."skuId", a."artCode", a."artName", a."colorCode", a.color, s."sizeLabel", s."sortOrder", a.division
+    HAVING sum(b.quantity) <> 0 OR bool_or(b.quantity <> 0)
+    ORDER BY a."artName", a.color, s."sortOrder"
+    LIMIT 5000`)
+  return r.rows.map((x) => ({
+    skuId: Number(x.skuId),
+    artNumber: (x.artCode as string) || (x.artName as string),
+    artName: x.artName as string,
+    colorNumber: (x.colorCode as string) || '',
+    colorName: x.color as string,
+    sizeNumber: x.sizeLabel as string,
+    division: (x.division as string) ?? undefined,
+    scannedQuantity: Number(x.scanned ?? 0),
+    unscannedQuantity: Number(x.unscanned ?? 0),
+    cartonQuantity: Number(x.carton ?? 0),
+    totalQuantity: Number(x.total ?? 0),
+    lastUpdated: new Date(x.updated as string),
   }))
 }
 
 export async function getOverallStockStats(): Promise<OverallStockStats> {
-  const result = await db.execute<{
-    total_stock_items: string
-    unique_sk_us: string
-    total_locations: string
-    low_stock_items: string
-  }>(sql`
-    WITH sku_totals AS (
-      SELECT
-        coalesce("artNumber", '') || '-' || coalesce("colorNumber", '') || '-' || coalesce("sizeNumber", '') AS sku,
-        sum("quantity")::int AS qty
-      FROM "scans"
-      GROUP BY "artNumber", "colorNumber", "sizeNumber"
-    )
+  await requirePermission('inventory.view.all')
+  const r = await db.execute<Record<string, unknown>>(sql`
+    WITH per_sku AS (SELECT "skuId", sum(quantity) q FROM stock_balances GROUP BY 1)
     SELECT
-      (SELECT sum("quantity")::int FROM "scans")                          AS total_stock_items,
-      count(*)::int                                                        AS unique_sk_us,
-      (SELECT count(distinct "scannedByName")::int FROM "scans")          AS total_locations,
-      count(*) filter (where qty <= 5)::int                               AS low_stock_items
-    FROM sku_totals
-  `)
-
-  const row = result.rows?.[0]
+      (SELECT coalesce(sum(quantity), 0) FROM stock_balances)::int AS total,
+      (SELECT coalesce(sum(quantity), 0) FROM stock_balances WHERE provenance = 'scanned')::int AS scanned,
+      (SELECT coalesce(sum(quantity), 0) FROM stock_balances WHERE provenance = 'unscanned')::int AS unscanned,
+      (SELECT count(*) FROM per_sku WHERE q > 0)::int AS skus,
+      (SELECT count(*) FROM per_sku WHERE q < 0)::int AS negative,
+      (SELECT coalesce(sum(quantity), 0) FROM scan_events WHERE status = 'active' AND resolution <> 'resolved')::int AS awaiting`)
+  const x = r.rows[0] ?? {}
   return {
-    totalStockItems: Number(row?.total_stock_items ?? 0),
-    uniqueSKUs:      Number(row?.unique_sk_us      ?? 0),
-    totalLocations:  Number(row?.total_locations   ?? 0),
-    lowStockItems:   Number(row?.low_stock_items   ?? 0),
+    totalStockItems: Number(x.total ?? 0),
+    scannedStockItems: Number(x.scanned ?? 0),
+    unscannedStockItems: Number(x.unscanned ?? 0),
+    uniqueSKUs: Number(x.skus ?? 0),
+    negativeSKUs: Number(x.negative ?? 0),
+    awaitingArticleLink: Number(x.awaiting ?? 0),
   }
 }
 
+// The browser runs server actions one at a time, so two actions in Promise.all on the client run one
+// after the other. These run each pair in parallel on the server: one request (Orders speed, 22 Nov 2026).
+
+/** Scanned inventory list + its statistics, one request. */
+export async function getScannedInventoryView() {
+  const [summary, stats] = await Promise.all([getInventorySummary(), getStatistics()])
+  return { summary, stats }
+}
+
+/** Overall stock list + its statistics, one request. */
+export async function getOverallStockView() {
+  const [items, stats] = await Promise.all([getOverallStockSummary(), getOverallStockStats()])
+  return { items, stats }
+}
+
+/** Every one of my active scan events, one row per box (CSV export). */
 export async function exportToExcel(): Promise<Record<string, string | number>[]> {
-  const user = await getUser()
-  const scanData = await db
-    .select()
-    .from(scans)
-    .where(eq(scans.scannedByName, user.name ?? ''))
-    .orderBy(desc(scans.createdAt))
-
-  return scanData.map((scan) => ({
-    'Entry Type': scan.entryType,
-    'Art Number': scan.artNumber ?? '',
-    'Color Number': scan.colorNumber ?? '',
-    'Size Number': scan.sizeNumber ?? '',
-    Division: scan.division ?? '',
-    MRP: scan.mrp != null ? Number(scan.mrp) : '',
-    'Mfg Month': scan.mfgMonth ?? '',
-    'Mfg Year': scan.mfgYear ?? '',
-    'Scanned By': scan.scannedByName ?? '',
-    Quantity: scan.quantity,
-    'Scanned At': scan.scannedAt.toISOString(),
-    'Raw QR': scan.rawQrCode ?? '',
+  const u = await requirePermission('inventory.view')
+  const r = await db.execute<Record<string, unknown>>(sql`
+    SELECT e.id, e."entryType", e."articleCode", e."colourCode", e."sizeLabel", a."artName", a.color, a.division,
+           e.mrp, e."mfgMonth", e."mfgYear", e."userName", e.quantity, e.resolution, e.flag, e."createdAt", e."rawInput"
+    FROM scan_events e LEFT JOIN articles a ON a.id = e."articleId"
+    WHERE ${ACTIVE_STOCKTAKE} AND e."userId" = ${u.id}
+    ORDER BY e.id DESC LIMIT 20000`)
+  return r.rows.map((x) => ({
+    'Scan ID': Number(x.id),
+    'Entry Type': x.entryType as string,
+    'Article Code': (x.articleCode as string) ?? '',
+    'Article Name': (x.artName as string) ?? '',
+    'Colour Code': (x.colourCode as string) ?? '',
+    'Colour': (x.color as string) ?? '',
+    Size: (x.sizeLabel as string) ?? '',
+    Division: (x.division as string) ?? '',
+    MRP: x.mrp != null ? Number(x.mrp) : '',
+    'Mfg Month': (x.mfgMonth as number) ?? '',
+    'Mfg Year': (x.mfgYear as number) ?? '',
+    'Scanned By': x.userName as string,
+    Quantity: Number(x.quantity),
+    Status: x.resolution === 'resolved' ? 'In stock' : 'Awaiting article link',
+    Flag: (x.flag as string) ?? '',
+    'Scanned At': new Date(x.createdAt as string).toISOString(),
+    'Raw QR': (x.rawInput as string) ?? '',
   }))
 }
 
+/** Stock on hand per SKU (CSV export). */
 export async function exportOverallStockToCSV(): Promise<Record<string, string | number>[]> {
-  await getUser()
-  const allScans = await db.select().from(scans).orderBy(desc(scans.createdAt))
-
-  return allScans.map((scan) => ({
-    'Entry Type': scan.entryType,
-    'Art Number': scan.artNumber ?? '',
-    'Color Number': scan.colorNumber ?? '',
-    'Size Number': scan.sizeNumber ?? '',
-    Division: scan.division ?? '',
-    MRP: scan.mrp != null ? Number(scan.mrp) : '',
-    'Mfg Month': scan.mfgMonth ?? '',
-    'Mfg Year': scan.mfgYear ?? '',
-    'Scanned By': scan.scannedByName ?? '',
-    Quantity: scan.quantity,
-    'Scanned At': scan.scannedAt.toISOString(),
+  await requirePermission('inventory.export')
+  const rows = await getOverallStockSummary()
+  return rows.map((r) => ({
+    'Article Code': r.artNumber,
+    'Article Name': r.artName,
+    'Colour Code': r.colorNumber,
+    Colour: r.colorName,
+    Size: r.sizeNumber,
+    Division: r.division ?? '',
+    'Scanned Pairs': r.scannedQuantity,
+    'Unscanned Pairs': r.unscannedQuantity,
+    'Carton-derived Pairs': r.cartonQuantity,
+    'Total Pairs': r.totalQuantity,
+    'Last Updated': r.lastUpdated.toISOString(),
   }))
 }
 
-export interface ScansOverTimePoint {
-  date: string
-  scans: number
-  quantity: number
+export interface ScansOverTimePoint { date: string; scans: number; quantity: number }
+export interface DivisionBreakdownItem { division: string; quantity: number }
+export interface TopSKUItem { sku: string; quantity: number }
+export interface EntryTypeItem { type: string; count: number }
+export interface ScansByUserItem { user: string; scans: number; quantity: number }
+
+function fill14Days(rows: Array<{ day: string; scans: number; quantity: number }>): ScansOverTimePoint[] {
+  const map = new Map(rows.map((r) => [r.day, r]))
+  const out: ScansOverTimePoint[] = []
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i)
+    const key = `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+    const r = map.get(key)
+    out.push({ date: key, scans: Number(r?.scans ?? 0), quantity: Number(r?.quantity ?? 0) })
+  }
+  return out
 }
 
-export interface DivisionBreakdownItem {
-  division: string
-  quantity: number
-}
-
-export interface TopSKUItem {
-  sku: string
-  quantity: number
-}
-
-export interface EntryTypeItem {
-  type: string
-  count: number
-}
-
-export interface ScansByUserItem {
-  user: string
-  scans: number
-  quantity: number
+async function chartData(userId: string | null) {
+  const mine = userId ? sql`AND e."userId" = ${userId}` : sql``
+  const [time, div, sku, type, users] = await Promise.all([
+    db.execute<{ day: string; scans: number; quantity: number }>(sql`
+      SELECT to_char(e."createdAt" AT TIME ZONE 'Asia/Kolkata', 'MM/DD') AS day, count(*)::int AS scans, sum(e.quantity)::int AS quantity
+      FROM scan_events e WHERE ${ACTIVE_STOCKTAKE} ${mine} AND e."createdAt" >= now() - interval '14 days' GROUP BY 1`),
+    db.execute<{ division: string; quantity: number }>(sql`
+      SELECT coalesce(a.division, 'Unassigned') AS division, sum(e.quantity)::int AS quantity
+      FROM scan_events e LEFT JOIN articles a ON a.id = e."articleId" WHERE ${ACTIVE_STOCKTAKE} ${mine} GROUP BY 1 ORDER BY 2 DESC`),
+    db.execute<{ sku: string; quantity: number }>(sql`
+      SELECT coalesce(e."articleCode", '?') || '-' || coalesce(e."colourCode", '?') || '-' || coalesce(e."sizeLabel", '?') AS sku, sum(e.quantity)::int AS quantity
+      FROM scan_events e WHERE ${ACTIVE_STOCKTAKE} ${mine} GROUP BY 1 ORDER BY 2 DESC LIMIT 10`),
+    db.execute<{ type: string; count: number }>(sql`
+      SELECT e."entryType" AS type, count(*)::int AS count FROM scan_events e WHERE ${ACTIVE_STOCKTAKE} ${mine} GROUP BY 1`),
+    userId ? Promise.resolve({ rows: [] as Array<Record<string, unknown>> }) : db.execute<Record<string, unknown>>(sql`
+      SELECT e."userName" AS "user", count(*)::int AS scans, sum(e.quantity)::int AS quantity
+      FROM scan_events e WHERE ${ACTIVE_STOCKTAKE} GROUP BY 1 ORDER BY 2 DESC`),
+  ])
+  return {
+    scansOverTime: fill14Days(time.rows),
+    divisionBreakdown: div.rows.map((r) => ({ division: r.division, quantity: Number(r.quantity) })),
+    topSKUs: sku.rows.map((r) => ({ sku: r.sku, quantity: Number(r.quantity) })),
+    entryTypeBreakdown: type.rows.map((r) => ({ type: r.type, count: Number(r.count) })),
+    scansByUser: users.rows.map((r) => ({ user: String(r.user), scans: Number(r.scans), quantity: Number(r.quantity) })),
+  }
 }
 
 export async function getScannedChartData(): Promise<{
@@ -365,61 +269,9 @@ export async function getScannedChartData(): Promise<{
   topSKUs: TopSKUItem[]
   entryTypeBreakdown: EntryTypeItem[]
 }> {
-  const user = await getUser()
-  const name = user.name ?? ''
-  const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
-
-  const [timeRows, divRows, skuRows, typeRows] = await Promise.all([
-    db.select({
-      day:      sql<string>`to_char(${scans.scannedAt}, 'MM/DD')`,
-      scans:    sql<number>`count(*)::int`,
-      quantity: sql<number>`sum(${scans.quantity})::int`,
-    }).from(scans)
-      .where(and(eq(scans.scannedByName, name), sql`${scans.scannedAt} >= ${fourteenDaysAgo}`))
-      .groupBy(sql`to_char(${scans.scannedAt}, 'MM/DD')`)
-      .orderBy(sql`to_char(${scans.scannedAt}, 'MM/DD')`),
-
-    db.select({
-      division: sql<string>`coalesce(${scans.division}, 'Unknown')`,
-      quantity: sql<number>`sum(${scans.quantity})::int`,
-    }).from(scans)
-      .where(eq(scans.scannedByName, name))
-      .groupBy(sql`coalesce(${scans.division}, 'Unknown')`)
-      .orderBy(desc(sql`sum(${scans.quantity})`)),
-
-    db.select({
-      sku:      sql<string>`coalesce(${scans.artNumber} || '-' || ${scans.colorNumber} || '-' || ${scans.sizeNumber}, 'Unknown')`,
-      quantity: sql<number>`sum(${scans.quantity})::int`,
-    }).from(scans)
-      .where(eq(scans.scannedByName, name))
-      .groupBy(scans.artNumber, scans.colorNumber, scans.sizeNumber)
-      .orderBy(desc(sql`sum(${scans.quantity})`))
-      .limit(10),
-
-    db.select({
-      type:  scans.entryType,
-      count: sql<number>`count(*)::int`,
-    }).from(scans)
-      .where(eq(scans.scannedByName, name))
-      .groupBy(scans.entryType),
-  ])
-
-  const dayMap: Record<string, { scans: number; quantity: number }> = {}
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date(); d.setDate(d.getDate() - i)
-    const key = `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
-    dayMap[key] = { scans: 0, quantity: 0 }
-  }
-  for (const r of timeRows) {
-    if (r.day in dayMap) { dayMap[r.day].scans = r.scans; dayMap[r.day].quantity = r.quantity }
-  }
-
-  return {
-    scansOverTime:      Object.entries(dayMap).map(([date, v]) => ({ date, scans: v.scans, quantity: v.quantity })),
-    divisionBreakdown:  divRows.map((r) => ({ division: r.division, quantity: r.quantity })),
-    topSKUs:            skuRows.map((r) => ({ sku: r.sku, quantity: r.quantity })),
-    entryTypeBreakdown: typeRows.map((r) => ({ type: r.type, count: r.count })),
-  }
+  const u = await requirePermission('inventory.view')
+  const d = await chartData(u.id)
+  return { scansOverTime: d.scansOverTime, divisionBreakdown: d.divisionBreakdown, topSKUs: d.topSKUs, entryTypeBreakdown: d.entryTypeBreakdown }
 }
 
 export async function getOverallChartData(): Promise<{
@@ -429,62 +281,6 @@ export async function getOverallChartData(): Promise<{
   entryTypeBreakdown: EntryTypeItem[]
   scansByUser: ScansByUserItem[]
 }> {
-  const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
-
-  const [timeRows, divRows, skuRows, typeRows, userRows] = await Promise.all([
-    db.select({
-      day:      sql<string>`to_char(${scans.scannedAt}, 'MM/DD')`,
-      scans:    sql<number>`count(*)::int`,
-      quantity: sql<number>`sum(${scans.quantity})::int`,
-    }).from(scans)
-      .where(sql`${scans.scannedAt} >= ${fourteenDaysAgo}`)
-      .groupBy(sql`to_char(${scans.scannedAt}, 'MM/DD')`)
-      .orderBy(sql`to_char(${scans.scannedAt}, 'MM/DD')`),
-
-    db.select({
-      division: sql<string>`coalesce(${scans.division}, 'Unknown')`,
-      quantity: sql<number>`sum(${scans.quantity})::int`,
-    }).from(scans)
-      .groupBy(sql`coalesce(${scans.division}, 'Unknown')`)
-      .orderBy(desc(sql`sum(${scans.quantity})`)),
-
-    db.select({
-      sku:      sql<string>`coalesce(${scans.artNumber} || '-' || ${scans.colorNumber} || '-' || ${scans.sizeNumber}, 'Unknown')`,
-      quantity: sql<number>`sum(${scans.quantity})::int`,
-    }).from(scans)
-      .groupBy(scans.artNumber, scans.colorNumber, scans.sizeNumber)
-      .orderBy(desc(sql`sum(${scans.quantity})`))
-      .limit(10),
-
-    db.select({
-      type:  scans.entryType,
-      count: sql<number>`count(*)::int`,
-    }).from(scans).groupBy(scans.entryType),
-
-    db.select({
-      user:     sql<string>`coalesce(${scans.scannedByName}, 'Unknown')`,
-      scans:    sql<number>`count(*)::int`,
-      quantity: sql<number>`sum(${scans.quantity})::int`,
-    }).from(scans)
-      .groupBy(sql`coalesce(${scans.scannedByName}, 'Unknown')`)
-      .orderBy(desc(sql`count(*)`)),
-  ])
-
-  const dayMap: Record<string, { scans: number; quantity: number }> = {}
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date(); d.setDate(d.getDate() - i)
-    const key = `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
-    dayMap[key] = { scans: 0, quantity: 0 }
-  }
-  for (const r of timeRows) {
-    if (r.day in dayMap) { dayMap[r.day].scans = r.scans; dayMap[r.day].quantity = r.quantity }
-  }
-
-  return {
-    scansOverTime:      Object.entries(dayMap).map(([date, v]) => ({ date, scans: v.scans, quantity: v.quantity })),
-    divisionBreakdown:  divRows,
-    topSKUs:            skuRows,
-    entryTypeBreakdown: typeRows,
-    scansByUser:        userRows,
-  }
+  await requirePermission('inventory.view.all')
+  return chartData(null)
 }

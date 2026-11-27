@@ -54,7 +54,7 @@ interface OfflineBannerProps {
 
 export function OfflineBanner({ children }: OfflineBannerProps) {
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
+    <div className="flex items-start gap-3 rounded-lg border border-yellow-300 dark:border-yellow-500/30 bg-yellow-50 dark:bg-yellow-500/15 px-4 py-3 text-sm text-yellow-800 dark:text-yellow-300">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-4 w-4 shrink-0">
         <line x1="1" y1="1" x2="23" y2="23" />
         <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55" />

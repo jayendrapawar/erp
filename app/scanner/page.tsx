@@ -1,8 +1,7 @@
-import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
-import { auth } from '@/lib/auth'
+import { getSessionUser } from '@/lib/authz'
+import { hasPermission } from '@/lib/permissions'
 import { ScannerPage } from '@/components/scanner-page'
-import { isRedirectError } from 'next/dist/client/components/redirect-error'
 
 export const metadata = {
   title: 'Scanner - Shayona Inventory',
@@ -10,12 +9,10 @@ export const metadata = {
 }
 
 export default async function Scanner() {
-  try {
-    const session = await auth.api.getSession({ headers: await headers() })
-    if (!session?.user) redirect('/sign-in')
-  } catch (err) {
-    if (isRedirectError(err)) throw err
-  }
+  // Signed in is not enough: the account needs a role that allows this page.
+  const u = await getSessionUser()
+  if (!u) redirect('/sign-in')
+  if (!hasPermission(u.roles, 'scan.record')) redirect('/home')
 
   return <ScannerPage />
 }

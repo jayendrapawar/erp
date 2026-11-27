@@ -9,11 +9,30 @@ import { VendorsTab } from './vendors-tab'
 import type { Vendor } from './vendors-tab'
 import { ArticlesTab } from './articles-tab'
 import type { Article } from './articles-tab'
-import type { MissingArticle } from '@/app/actions/articles'
+import type { CatalogReviewItem } from '@/app/actions/articles'
+import type { MissingArticle } from '@/lib/catalog/missing-articles'
 import { SetsTab } from './sets-tab'
+import { BillTemplateTab } from './bill-template-tab'
+import { BanksTab } from '@/components/master/banks-tab'
+import { SuppliersTab } from './suppliers-tab'
+import { AssortmentsTab } from './assortments-tab'
+import type { Assortment } from '@/lib/catalog/assortment-store'
+import type { Supplier } from '@/app/actions/suppliers'
+import { ROLE_LABELS, ROLES as ALL_ROLES } from '@/lib/permissions'
 import type { OrderSet } from './sets-tab'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { PageNav } from '@/components/page-nav'
+import { useListKeys } from '@/lib/shortcuts/list'
+import { useTabKeys } from '@/lib/shortcuts/tabs'
+import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
+
+type UserRow = { id: string; name: string | null; email: string; role: string | null; createdAt: Date }
+const USER_FILTERS: ColumnFilterDef<UserRow>[] = [
+  { key: 'name', label: 'Name', kind: 'text', get: u => u.name },
+  { key: 'email', label: 'Email', kind: 'text', get: u => u.email },
+  { key: 'role', label: 'Current role', kind: 'text', placeholder: 'e.g. biller', get: u => (u.role ?? '').split(',').map(r => `${r} ${(ROLE_LABELS as Record<string, string>)[r] ?? ''}`).join(' ') },
+  { key: 'joined', label: 'Joined', kind: 'text', placeholder: 'e.g. Nov', get: u => fmt(u.createdAt) },
+]
 
 interface RoleSelectorProps {
   userId: string
@@ -81,6 +100,27 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
     setIsOpen(!isOpen)
   }
 
+  // Keyboard: Enter / Space open the menu (arrows move between buttons). The menu is in a portal at
+  // the end of the page, so focus moves into it when it opens;
+  // ↑↓ move between roles, Space ticks, Esc / Tab close it and return to the button.
+  useEffect(() => {
+    if (!isOpen) return
+    const t = setTimeout(() => menuRef.current?.querySelector<HTMLInputElement>('input')?.focus(), 0)
+    return () => clearTimeout(t)
+  }, [isOpen])
+  function onMenuKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    const boxes = [...(menuRef.current?.querySelectorAll<HTMLInputElement>('input') ?? [])]
+    const at = boxes.indexOf(document.activeElement as HTMLInputElement)
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      boxes[(Math.max(0, at) + (e.key === 'ArrowDown' ? 1 : -1) + boxes.length) % boxes.length]?.focus()
+    } else if (e.key === 'Escape' || e.key === 'Tab') {
+      e.preventDefault()
+      setIsOpen(false)
+      buttonRef.current?.focus()
+    }
+  }
+
   function handleToggleRole(role: string) {
     let newRoles: string[]
     if (role === 'admin') {
@@ -125,6 +165,10 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
         type="button"
         disabled={disabled}
         onClick={handleButtonClick}
+        aria-haspopup="true"
+        aria-expanded={isOpen}
+        aria-label={`Roles: ${displayText}`}
+        data-row-open
         className="inline-flex justify-between items-center w-full sm:w-48 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted/50 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
       >
         <span className="truncate">{displayText}</span>
@@ -137,9 +181,12 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
         <div
           ref={menuRef}
           style={menuStyle}
+          role="group"
+          aria-label="Roles"
+          onKeyDown={onMenuKey}
           className="overflow-y-auto rounded-md shadow-lg bg-popover border border-border z-50 p-2 space-y-1"
         >
-          {['admin', 'accountant', 'salesman', 'picker', 'dispatcher', 'user'].map(r => {
+          {[...ALL_ROLES, 'user'].map(r => {
             const isChecked = activeRoles.includes(r)
             return (
               <label
@@ -153,7 +200,7 @@ function RoleSelector({ userId, currentRoles, onChange, disabled }: RoleSelector
                   onChange={() => handleToggleRole(r)}
                   className="rounded border-border text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer"
                 />
-                <span>{r === 'user' ? 'No Role (User)' : r.charAt(0).toUpperCase() + r.slice(1)}</span>
+                <span>{r === 'user' ? 'No role (no access)' : ROLE_LABELS[r as keyof typeof ROLE_LABELS]}</span>
               </label>
             )
           })}
@@ -169,25 +216,26 @@ interface Props {
   vendors: Vendor[]
   articles: Article[]
   missingArticles: MissingArticle[]
+  catalogReviewItems: CatalogReviewItem[]
   sets: OrderSet[]
+  suppliers: Supplier[]
+  assortments: Assortment[]
   /** When true, only Vendors and Articles tabs are shown (hides Users tab) — used for accountant role */
   isAccountant?: boolean
 }
 
-const ROLES: AppRole[] = ['admin', 'accountant', 'salesman', 'picker', 'dispatcher', 'user']
+const ROLES: AppRole[] = [...ALL_ROLES, 'user']
+/** Section names for the page title (computers hide the tab row; the sidebar lists the sections). */
+const MASTER_TAB_LABEL: Record<string, string> = { users: 'Users', vendors: 'Retailers', suppliers: 'Suppliers', articles: 'Articles', assortments: 'Assortments', sets: 'Sets', bill: 'Bill template', banks: 'Banks' }
 
-export function MasterDashboard({ users, currentUserId, vendors: initialVendors, articles: initialArticles, missingArticles, sets: initialSets, isAccountant = false }: Props) {
+export function MasterDashboard({ users, currentUserId, vendors: initialVendors, articles: initialArticles, missingArticles, catalogReviewItems, sets: initialSets, suppliers, assortments, isAccountant = false }: Props) {
   const [isPending, startTransition] = useTransition()
-  const [search, setSearch] = useState('')
+  const [userFilters, setUserFilters] = useState<FilterValues>({})
   const [vendorList, setVendorList] = useState<Vendor[]>(initialVendors)
   const [articleList, setArticleList] = useState<Article[]>(initialArticles)
   const [setList, setSetList] = useState<OrderSet[]>(initialSets)
 
-  const filteredUsers = users.filter(u =>
-    !search ||
-    (u.name ?? '').toLowerCase().includes(search.toLowerCase()) ||
-    u.email.toLowerCase().includes(search.toLowerCase())
-  )
+  const filteredUsers = applyColumnFilters(users, USER_FILTERS, userFilters)
 
   function handleRoleChange(userId: string, role: string) {
     startTransition(async () => {
@@ -196,29 +244,50 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
   }
 
   const defaultTab = isAccountant ? 'vendors' : 'users'
+  // Tab from the address (#articles) so the sidebar can open it; switching tabs updates the address.
+  const tabIds = isAccountant ? ['vendors', 'suppliers', 'articles', 'assortments', 'banks'] : ['users', 'vendors', 'suppliers', 'articles', 'assortments', 'sets', 'bill', 'banks']
+  const [tab, setTab] = useState(defaultTab)
+  useEffect(() => {
+    const read = () => {
+      const h = window.location.hash.replace('#', '')
+      if (tabIds.includes(h)) setTab(h)
+    }
+    read()
+    window.addEventListener('hashchange', read)
+    return () => window.removeEventListener('hashchange', read)
+  }, [isAccountant])
+  function changeTab(v: string) {
+    setTab(v)
+    window.history.replaceState(null, '', `#${v}`)
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+  }
+  // Keyboard: Alt+1…7 switch tabs; ↑↓ / j k on the users list (lib/shortcuts).
+  useTabKeys(tabIds.map(t => ({ value: t, label: MASTER_TAB_LABEL[t] ?? t })), changeTab, { group: 'Master tabs' })
+  const usersListRef = useRef<HTMLDivElement>(null)
+  useListKeys(usersListRef, { label: 'Users list' })
   // Admin tab count — sets tab shown only for admin
   const isAdmin = !isAccountant
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-5xl mx-auto px-4 py-6">
+      <div className="max-w-7xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-6">
-          <PageHeader title="Master" subtitle={isAccountant ? 'Vendors & articles' : 'User management, vendors & sets'} />
+          <PageHeader title={MASTER_TAB_LABEL[tab] ? `Master · ${MASTER_TAB_LABEL[tab]}` : 'Master'} subtitle={isAccountant ? 'Retailers, suppliers & articles' : 'Users, retailers, suppliers, articles & sets'} />
           <PageNav />
         </div>
 
-        {/* Stats row — hidden for accountant (user management not relevant) */}
-        {!isAccountant && (
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-6">
+        {/* People per role — only with the Users section (redesign, 21 Nov 2026); hidden for accountants */}
+        {!isAccountant && tab === 'users' && (
+        <div className="flex flex-wrap gap-2 mb-4">
           {ROLES.map(r => {
             const count = users.filter(u => {
               const roles = (u.role ?? 'user').split(',').map(x => x.trim())
               return roles.includes(r)
             }).length
             return (
-              <div key={r} className="rounded-xl border border-border bg-card p-4">
-                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{r}</p>
-                <p className="text-2xl font-bold mt-1 text-foreground">{count}</p>
+              <div key={r} className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5">
+                <span className="text-xs font-medium capitalize text-muted-foreground">{r}</span>
+                <span className="text-sm font-bold tabular-nums text-foreground">{count}</span>
               </div>
             )
           })}
@@ -226,27 +295,26 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
         )}
 
         {/* Tabs — pill style matching scanner / admin hub */}
-        <Tabs defaultValue={defaultTab} className="w-full">
+        <Tabs value={tab} onValueChange={(v) => changeTab(String(v))} className="w-full">
           <TabsList
-            className="grid w-full mb-6"
-            style={{ gridTemplateColumns: isAccountant ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))' }}
+            className="flex w-full mb-4 sm:mb-6 md:hidden"
           >
             {!isAccountant && <TabsTrigger value="users"    className="text-xs sm:text-sm">Users ({users.length})</TabsTrigger>}
-            <TabsTrigger value="vendors"  className="text-xs sm:text-sm">Vendors ({vendorList.length})</TabsTrigger>
+            <TabsTrigger value="vendors"  className="text-xs sm:text-sm">Retailers ({vendorList.length})</TabsTrigger>
+            <TabsTrigger value="suppliers" className="text-xs sm:text-sm">Suppliers ({suppliers.length})</TabsTrigger>
             <TabsTrigger value="articles" className="text-xs sm:text-sm">Articles ({articleList.length})</TabsTrigger>
+            <TabsTrigger value="assortments" className="text-xs sm:text-sm">Assortments ({assortments.length})</TabsTrigger>
             {isAdmin && <TabsTrigger value="sets" className="text-xs sm:text-sm">Sets ({setList.length})</TabsTrigger>}
+            {isAdmin && <TabsTrigger value="bill" className="text-xs sm:text-sm">Bill template</TabsTrigger>}
+            <TabsTrigger value="banks" className="text-xs sm:text-sm">Banks</TabsTrigger>
           </TabsList>
 
           {/* ── Users tab — hidden for accountant ── */}
           {!isAccountant && (
           <TabsContent value="users">
-            <input
-              type="search"
-              placeholder="Search by name or email…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-full mb-4 rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-            />
+            <div ref={usersListRef}>
+            <FiltersButton className="mb-4 sm:hidden" defs={USER_FILTERS} values={userFilters} onChange={setUserFilters} />
+            <div className="mb-2 hidden sm:block"><FilterSummary values={userFilters} onChange={setUserFilters} shown={filteredUsers.length} total={users.length} /></div>
 
             {filteredUsers.length === 0 && (
               <p className="text-center py-8 text-sm text-muted-foreground">No users found</p>
@@ -255,7 +323,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
             {/* ── Mobile: card list ── */}
             <div className="sm:hidden space-y-3">
               {filteredUsers.map(u => (
-                <div key={u.id} className="rounded-xl border border-border bg-card p-4 space-y-3">
+                <div key={u.id} data-list-row className="rounded-xl border border-border bg-card p-4 space-y-3">
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
@@ -294,10 +362,11 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
                       <th className="text-left px-4 py-3 font-medium text-muted-foreground">Joined</th>
                       <th className="text-left px-4 py-3 font-medium text-muted-foreground">Assign Role</th>
                     </tr>
+                    <FilterRow columns={[...USER_FILTERS, null]} values={userFilters} onChange={setUserFilters} firstCellClass="px-4" cellClass="px-4" />
                   </thead>
                   <tbody className="divide-y divide-border">
                     {filteredUsers.map(u => (
-                      <tr key={u.id} className="hover:bg-muted/30 transition-colors">
+                      <tr key={u.id} data-list-row className="hover:bg-muted/30 transition-colors">
                         <td className="px-4 py-3 font-medium">
                           {u.name ?? '—'}
                           {u.id === currentUserId && (
@@ -321,6 +390,7 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
                 </table>
               </div>
             </div>
+            </div>
           </TabsContent>
           )}
 
@@ -330,14 +400,34 @@ export function MasterDashboard({ users, currentUserId, vendors: initialVendors,
           </TabsContent>
 
           {/* ── Articles tab ── */}
+          <TabsContent value="suppliers">
+            <SuppliersTab initialSuppliers={suppliers} />
+          </TabsContent>
+
           <TabsContent value="articles">
-            <ArticlesTab initialArticles={articleList} initialMissingArticles={missingArticles} onListChange={setArticleList} />
+            <ArticlesTab initialArticles={articleList} initialMissingArticles={missingArticles} initialReviewItems={catalogReviewItems} canReviewCatalog={!isAccountant} onListChange={setArticleList} />
+          </TabsContent>
+
+          <TabsContent value="assortments">
+            <AssortmentsTab initialAssortments={assortments} canEdit />
           </TabsContent>
 
           {/* ── Sets tab (admin only) ── */}
           {isAdmin && (
             <TabsContent value="sets">
               <SetsTab initialSets={setList} onListChange={setSetList} />
+            </TabsContent>
+          )}
+
+          {/* ── Banks (admin, accountant): banks money comes into, slip numbers ── */}
+          <TabsContent value="banks">
+            <BanksTab />
+          </TabsContent>
+
+          {/* ── Bill template (admin only): details printed on sale bills ── */}
+          {isAdmin && (
+            <TabsContent value="bill">
+              <BillTemplateTab />
             </TabsContent>
           )}
 

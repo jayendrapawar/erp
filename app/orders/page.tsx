@@ -1,10 +1,9 @@
-import { headers } from 'next/headers'
+import { requirePageUser } from '@/lib/authz'
+import { retailerColumns, toBillingVendor } from '@/lib/retailer-columns'
 import { redirect } from 'next/navigation'
-import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { user, vendors } from '@/lib/db/schema'
+import { vendors } from '@/lib/db/schema'
 import { eq, asc } from 'drizzle-orm'
-import { isRedirectError } from 'next/dist/client/components/redirect-error'
 import { getSalesmanOrders, getPickerQueue, getBillerQueue, getPackedOrders } from '@/app/actions/orders'
 import { loadCatalogue } from '@/app/actions/catalogue'
 import { getSets } from '@/app/actions/sets'
@@ -13,8 +12,8 @@ import { MultiRoleOrdersHub } from './_components/multi-role-hub'
 import type { BillingVendor } from '@/components/billing-scanner-page'
 
 export const metadata = {
-  title: 'Orders - Shayona Inventory',
-  description: 'Order management portal',
+  title: 'Orders & Billing - Shayona Inventory',
+  description: 'Orders, picking, billing and dispatch',
 }
 
 async function loadVendorMap() {
@@ -34,17 +33,9 @@ async function loadVendorMap() {
 }
 
 export default async function OrdersPage() {
-  try {
-    const session = await auth.api.getSession({ headers: await headers() })
-    if (!session?.user) redirect('/sign-in')
-
-    const [u] = await db
-      .select({ role: user.role, id: user.id })
-      .from(user)
-      .where(eq(user.id, session.user.id))
-      .limit(1)
-
-    const roles = (u?.role ?? 'user').split(',').map(r => r.trim())
+  {
+    const me = await requirePageUser()
+    const roles: string[] = me.roles
 
     if (roles.includes('admin') || roles.includes('accountant')) {
       redirect('/orders/admin')
@@ -86,29 +77,23 @@ export default async function OrdersPage() {
 
     const [catalogue, vendorRows, sets, pickers] = await Promise.all([
       loadCatalogue(),
-      db.select().from(vendors).where(eq(vendors.status, 'active')).orderBy(asc(vendors.partyName)),
+      db.select(retailerColumns).from(vendors).where(eq(vendors.status, 'active')).orderBy(asc(vendors.partyName)),
       getSets(),
       getPickersList(),
       ...promises,
     ])
 
-    const billingVendors: BillingVendor[] = vendorRows.map(v => ({
-      id:      v.id,
-      name:    v.partyName,
-      code:    v.area   || null,
-      phone:   v.phone  || null,
-      address: [v.address, v.city].filter(Boolean).join(', ') || null,
-    }))
+    const billingVendors: BillingVendor[] = vendorRows.map(toBillingVendor)
 
     return (
       <MultiRoleOrdersHub
         roles={roles}
         salesmanOrders={salesmanOrders}
-        userName={session.user.name ?? ''}
+        userName={me.name}
         pickerQueue={pickerQueue}
-        currentPickerId={u?.id ?? session.user.id}
+        currentPickerId={me.id}
         billerOrders={billerOrders}
-        currentBillerId={u?.id ?? session.user.id}
+        currentBillerId={me.id}
         dispatcherOrders={dispatcherOrders}
         catalogue={catalogue}
         sets={sets}
@@ -116,8 +101,5 @@ export default async function OrdersPage() {
         billingVendors={billingVendors}
       />
     )
-  } catch (err) {
-    if (isRedirectError(err)) throw err
-    redirect('/sign-in')
   }
 }

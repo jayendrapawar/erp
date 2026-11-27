@@ -1,9 +1,45 @@
 'use client'
 
+import { ShopAccessDialog } from '@/components/master/shop-access-dialog'
 import { useState, useMemo, useTransition, useRef } from 'react'
-import { fuzzyFilter } from '@/lib/fuzzy'
+import { useListKeys } from '@/lib/shortcuts/list'
+import { useUrlFilters } from '@/lib/use-url-filters'
+import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { saveVendor, importVendors } from '@/app/actions/vendors'
+import { getRetailerTerms } from '@/app/actions/payments'
+import { TAX_TYPE_LABEL } from '@/lib/billing/bill-amounts'
+import type { TaxType } from '@/lib/billing/bill-totals'
+
+/** Bill type and payment terms as typed (text boxes; empty = the default / none). */
+interface TermsForm { taxType: TaxType; creditDays: string; creditLimit: string; discPct: string; discDays: string }
+const EMPTY_TERMS: TermsForm = { taxType: 'intra_state', creditDays: '', creditLimit: '', discPct: '', discDays: '' }
 import type { Vendor } from '@/app/actions/vendors'
+import { csvToCells, downloadCsv } from '@/lib/csv'
+import { UploadGuide, type UploadColumn } from '@/components/upload-guide'
+import { DialogKeys } from '@/components/dialog-keys'
+
+const RETAILER_FILTERS: ColumnFilterDef<Vendor>[] = [
+  { key: 'id', label: 'ID', kind: 'text', get: v => v.id },
+  { key: 'name', label: 'Party name', kind: 'text', get: v => v.partyName },
+  { key: 'gst', label: 'GST', kind: 'text', get: v => v.gst },
+  { key: 'phone', label: 'Phone', kind: 'text', get: v => v.phone },
+  { key: 'location', label: 'Location', kind: 'text', get: v => [v.address, v.area, v.city].filter(Boolean).join(' ') },
+  { key: 'day', label: 'Day', kind: 'text', get: v => v.day },
+  { key: 'salesman', label: 'Salesman', kind: 'text', get: v => v.salesman },
+  { key: 'status', label: 'Status', kind: 'select', options: ['active', 'inactive'], get: v => v.status },
+]
+
+const RETAILER_COLUMNS: UploadColumn[] = [
+  { name: 'partyName', required: true, example: 'Shree Footwear', help: 'Retailer / shop name. A name already in the list is skipped.' },
+  { name: 'gst', required: false, example: '24ABCDE1234F1Z5', help: 'GST number.' },
+  { name: 'phone', required: false, example: '9876543210', help: 'Phone number.' },
+  { name: 'address', required: false, example: 'Station Road', help: 'Address (commas are fine: Excel puts the cell in quotes when saving as CSV).' },
+  { name: 'city', required: false, example: 'Surat', help: 'City.' },
+  { name: 'area', required: false, example: 'Varachha', help: 'Area.' },
+  { name: 'day', required: false, example: 'Monday', help: 'Visit day.' },
+  { name: 'salesman', required: false, example: 'Ramesh', help: 'Salesman for this retailer.' },
+  { name: 'status', required: false, example: 'active', help: 'active or inactive (blank = active).' },
+]
 
 export type { Vendor }
 
@@ -14,14 +50,13 @@ type Day = typeof DAYS[number]
 // Expected columns (case-insensitive, order flexible):
 // partyName, gst, phone, address, city, area, day, salesman, status
 function parseCsv(text: string): Omit<Vendor, 'id' | 'createdAt' | 'updatedAt'>[] {
-  const lines = text.split(/\r?\n/).filter(l => l.trim())
-  if (lines.length < 2) return []
+  const rows = csvToCells(text)
+  if (rows.length < 2) return []
 
-  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/[^a-z]/g, ''))
+  const headers = rows[0].values.map(h => h.trim().toLowerCase().replace(/[^a-z]/g, ''))
   const idx = (name: string) => headers.indexOf(name.toLowerCase())
 
-  return lines.slice(1).flatMap(line => {
-    const cols = line.split(',').map(c => c.trim().replace(/^"|"$/g, ''))
+  return rows.slice(1).flatMap(({ values: cols }) => {
     const get = (name: string) => cols[idx(name)] ?? ''
     const partyName = get('partyname') || get('party')
     if (!partyName) return []
@@ -44,6 +79,7 @@ type VendorForm = {
   partyName: string
   gst: string
   phone: string
+  email: string
   address: string
   city: string
   area: string
@@ -56,6 +92,7 @@ const EMPTY_FORM: VendorForm = {
   partyName: '',
   gst: '',
   phone: '',
+  email: '',
   address: '',
   city: '',
   area: '',
@@ -91,15 +128,21 @@ interface Props {
 }
 
 export function VendorsTab({ initialVendors, onListChange }: Props) {
+  // Keyboard: ↑↓ / j k rows, Enter edits, / filters, n new (lib/shortcuts/list.ts).
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Retailers list', newLabel: 'New retailer', onNew: () => openAdd() })
   const [vendors, setVendors] = useState<Vendor[]>(initialVendors)
+  // Retailer shop: whose access is being set (owner, 21 Nov 2026)
+  const [shopTarget, setShopTarget] = useState<Vendor | null>(null)
 
   function updateVendors(next: Vendor[]) {
     setVendors(next)
     onListChange?.(next)
   }
 
-  const [search, setSearch] = useState('')
-  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all')
+  const [filters, setFilters] = useState<FilterValues>({})
+  // Opened from Ctrl+K "# " search: /master?f.name=…#vendors
+  useUrlFilters(['name', 'id', 'phone'], v => setFilters(f => ({ ...f, ...v })))
 
   // ── Modal state ──
   const [modalMode, setModalMode] = useState<'add' | 'edit' | null>(null)
@@ -145,14 +188,15 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
     reader.readAsText(file)
   }
 
-  const filtered = useMemo(() => {
-    let list = vendors
-    if (filterStatus !== 'all') list = list.filter(v => v.status === filterStatus)
-    return fuzzyFilter(list, search, v => [v.partyName, v.gst, v.city, v.area, v.salesman])
-  }, [vendors, search, filterStatus])
+  const filtered = useMemo(() => applyColumnFilters(vendors, RETAILER_FILTERS, filters), [vendors, filters])
+
+  // Bill type and payment terms (payments): loaded when a retailer is opened (1 query).
+  const [terms, setTerms] = useState<TermsForm>(EMPTY_TERMS)
+  const [termsReady, setTermsReady] = useState(true)
 
   function openAdd() {
     setForm(EMPTY_FORM)
+    setTerms(EMPTY_TERMS); setTermsReady(true)
     setFormError('')
     setEditTarget(null)
     setModalMode('add')
@@ -164,6 +208,15 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
     setFormError('')
     setEditTarget(v)
     setModalMode('edit')
+    setTerms(EMPTY_TERMS); setTermsReady(false)
+    getRetailerTerms(v.id).then((t) => {
+      if (t) setTerms({
+        taxType: t.taxType, creditDays: t.creditDays == null ? '' : String(t.creditDays),
+        creditLimit: t.creditLimitPaise == null ? '' : String(t.creditLimitPaise / 100),
+        discPct: t.earlyPayDiscountBp == null ? '' : String(t.earlyPayDiscountBp / 100), discDays: t.earlyPayDays == null ? '' : String(t.earlyPayDays),
+      })
+      setTermsReady(true)
+    }).catch(() => setFormError('Could not load the payment terms. Close and open the retailer again.'))
   }
 
   function handleSave() {
@@ -174,17 +227,28 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
     const payload = modalMode === 'edit' && editTarget
       ? { ...form, id: editTarget.id }
       : { ...form }
+    const num = (s: string) => (s.trim() === '' ? null : Number(s.replace(/,/g, '')))
+    const limit = num(terms.creditLimit), pct = num(terms.discPct)
+    if ([num(terms.creditDays), limit, pct, num(terms.discDays)].some((n) => n !== null && !Number.isFinite(n))) { setFormError('Payment terms: type numbers only.'); return }
+    const termsPayload = termsReady ? {
+      taxType: terms.taxType, creditDays: num(terms.creditDays), creditLimitPaise: limit == null ? null : Math.round(limit * 100),
+      earlyPayDiscountBp: pct == null ? null : Math.round(pct * 100), earlyPayDays: num(terms.discDays),
+    } : undefined
     startSave(async () => {
-      const updated = await saveVendor(payload)
-      updateVendors(updated)
-      setModalMode(null)
+      try {
+        const updated = await saveVendor(payload, termsPayload)
+        updateVendors(updated)
+        setModalMode(null)
+      } catch (e) {
+        setFormError(e instanceof Error ? e.message : 'Not saved. Try again.')
+      }
     })
   }
 
   const inputCls = 'w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring'
 
   return (
-    <div>
+    <div ref={listRef}>
       {/* ── Hidden CSV file input ── */}
       <input
         ref={csvInputRef}
@@ -195,27 +259,10 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
       />
 
       {/* ── Toolbar ── */}
-      {/* Row 1: search (full width on mobile) */}
-      <div className="mb-2">
-        <input
-          type="search"
-          placeholder="Search vendors…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-        />
-      </div>
-      {/* Row 2: filter + actions */}
-      <div className="flex items-center gap-2 mb-4">
-        <select
-          value={filterStatus}
-          onChange={e => setFilterStatus(e.target.value as typeof filterStatus)}
-          className="rounded-lg border border-border bg-background px-2 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-        >
-          <option value="all">All</option>
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-        </select>
+      {/* Filters: under each column heading on wide screens; a Filters button on phones. */}
+      <FiltersButton className="mb-2 sm:hidden" defs={RETAILER_FILTERS} values={filters} onChange={setFilters} />
+      <div className="mb-2 hidden sm:block"><FilterSummary values={filters} onChange={setFilters} shown={filtered.length} total={vendors.length} /></div>
+      <div className="flex flex-wrap items-center gap-2 mb-4">
         {/* Import CSV */}
         <button
           onClick={() => csvInputRef.current?.click()}
@@ -224,11 +271,21 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
         >
           {isImporting ? 'Importing…' : '↑ Import CSV'}
         </button>
+        <UploadGuide
+          title="How to upload a retailer list"
+          steps={[
+            'In Excel, fill one row per retailer with the column names below in the first row, then File → Save As → CSV.',
+            'Tap Import CSV and choose the file.',
+            'Retailers already in the list (same name) are skipped; nothing is deleted.',
+          ]}
+          columns={RETAILER_COLUMNS}
+          onTemplate={() => downloadCsv('retailer-template.csv', [RETAILER_COLUMNS.map(c => c.name), RETAILER_COLUMNS.map(c => c.example)])}
+        />
         <button
           onClick={openAdd}
           className="ml-auto rounded-lg bg-foreground text-background px-4 py-2 text-sm font-semibold hover:opacity-90 transition-opacity"
         >
-          + Add Vendor
+          + Add Retailer
         </button>
       </div>
 
@@ -236,21 +293,21 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
       {importMsg && (
         <div className={`mb-3 rounded-lg px-3 py-2 text-xs font-medium ${
           importMsg.type === 'ok'
-            ? 'bg-green-50 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-400'
-            : 'bg-red-50 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-400'
+            ? 'bg-green-50 text-green-700 border border-green-200 dark:border-green-500/30 dark:bg-green-900/20 dark:text-green-400'
+            : 'bg-red-50 text-red-700 border border-red-200 dark:border-red-500/30 dark:bg-red-900/20 dark:text-red-400'
         }`}>
           {importMsg.text}
         </div>
       )}
 
       {filtered.length === 0 && (
-        <p className="text-center py-10 text-sm text-muted-foreground">No vendors found</p>
+        <p className="text-center py-10 text-sm text-muted-foreground">No retailers found</p>
       )}
 
       {/* ── Mobile: card list ── */}
       <div className="sm:hidden space-y-3">
         {filtered.map(v => (
-          <div key={v.id} className="rounded-2xl border border-border bg-card overflow-hidden">
+          <div key={v.id} data-list-row className="rounded-2xl border border-border bg-card overflow-hidden">
             {/* Card header */}
             <div className="flex items-start justify-between gap-2 px-4 pt-4 pb-3">
               <div className="min-w-0">
@@ -296,10 +353,18 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
             </div>
 
             {/* Card footer */}
-            <div className="border-t border-border px-4 py-3">
+            <div className="flex gap-2 border-t border-border px-4 py-3">
               <button
+                onClick={() => setShopTarget(v)}
+                className={`flex-1 rounded-xl border py-2.5 text-sm font-medium active:scale-95 transition-all ${v.shopEnabled ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-border bg-background hover:bg-muted'}`}
+              >
+                {v.shopEnabled ? 'Shop: on' : 'Shop access'}
+              </button>
+              <button
+                type="button"
+                data-row-open
                 onClick={() => openEdit(v)}
-                className="w-full rounded-xl border border-border bg-background py-2.5 text-sm font-medium hover:bg-muted active:scale-95 transition-all"
+                className="flex-1 rounded-xl border border-border bg-background py-2.5 text-sm font-medium hover:bg-muted active:scale-95 transition-all"
               >
                 Edit
               </button>
@@ -324,10 +389,11 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
                 <th className="text-left px-2 py-2.5 font-semibold text-[11px] text-muted-foreground uppercase tracking-wide whitespace-nowrap">Status</th>
                 <th className="pr-4 pl-2 py-2.5 w-[56px]"></th>
               </tr>
+              <FilterRow columns={[...RETAILER_FILTERS, null]} values={filters} onChange={setFilters} />
             </thead>
             <tbody className="divide-y divide-border">
               {filtered.map(v => (
-                <tr key={v.id} className="hover:bg-muted/30 transition-colors">
+                <tr key={v.id} data-list-row className="hover:bg-muted/30 transition-colors">
                   <td className="pl-4 pr-2 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap">{v.id}</td>
                   <td className="px-2 py-3 max-w-[160px]">
                     <p className="font-medium text-foreground truncate text-sm" title={v.partyName}>{v.partyName}</p>
@@ -350,7 +416,10 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
                   </td>
                   <td className="px-2 py-3 whitespace-nowrap"><StatusBadge status={v.status} /></td>
                   <td className="pr-4 pl-2 py-3">
-                    <button onClick={() => openEdit(v)} className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap">Edit</button>
+                    <div className="flex justify-end gap-1.5">
+                      <button onClick={() => setShopTarget(v)} className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${v.shopEnabled ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-border hover:bg-muted'}`}>{v.shopEnabled ? 'Shop: on' : 'Shop'}</button>
+                      <button type="button" data-row-open onClick={() => openEdit(v)} className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap">Edit</button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -366,6 +435,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
           onClick={() => setModalMode(null)}
         >
+          <DialogKeys onClose={() => setModalMode(null)} />
           <div
             className="w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl border border-border bg-background shadow-2xl"
             onClick={e => e.stopPropagation()}
@@ -376,7 +446,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
             </div>
 
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-              <p className="font-semibold text-base text-foreground">{modalMode === 'add' ? 'Add Vendor' : 'Edit Vendor'}</p>
+              <p className="font-semibold text-base text-foreground">{modalMode === 'add' ? 'Add Retailer' : 'Edit Retailer'}</p>
               <button onClick={() => setModalMode(null)} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-muted transition-colors">
                 <svg className="w-4 h-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
@@ -384,7 +454,7 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
 
             <div className="p-5 space-y-3 overflow-y-auto max-h-[65vh] sm:max-h-[70vh]">
               {formError && (
-                <p className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
+                <p role="alert" className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</p>
               )}
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
@@ -398,6 +468,10 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
                 <div>
                   <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide block mb-1">Phone *</label>
                   <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} className={inputCls} placeholder="+91 …" type="tel" inputMode="tel" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide block mb-1">Email (for bills)</label>
+                  <input value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} className={inputCls} placeholder="shop@example.com" type="email" inputMode="email" autoComplete="off" />
                 </div>
                 <div className="col-span-2">
                   <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide block mb-1">Address</label>
@@ -429,6 +503,30 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
                     <option value="inactive">Inactive</option>
                   </select>
                 </div>
+                <fieldset className="col-span-2 mt-1 grid grid-cols-2 gap-3 rounded-xl border border-border p-3" disabled={!termsReady}>
+                  <legend className="px-1 text-xs font-semibold text-foreground">{termsReady ? 'Billing & payment terms' : 'Billing & payment terms (loading…)'}</legend>
+                  <label className="col-span-2 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Bill type
+                    <select value={terms.taxType} onChange={e => setTerms(t => ({ ...t, taxType: e.target.value as TaxType }))} className={`${inputCls} mt-1 normal-case tracking-normal`}>
+                      {(Object.keys(TAX_TYPE_LABEL) as TaxType[]).map(k => <option key={k} value={k}>{TAX_TYPE_LABEL[k]}</option>)}
+                    </select>
+                  </label>
+                  <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Credit days
+                    <input inputMode="numeric" value={terms.creditDays} onChange={e => setTerms(t => ({ ...t, creditDays: e.target.value }))} placeholder="90" className={`${inputCls} mt-1`} />
+                  </label>
+                  <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Credit limit (₹)
+                    <input inputMode="decimal" value={terms.creditLimit} onChange={e => setTerms(t => ({ ...t, creditLimit: e.target.value }))} placeholder="none" className={`${inputCls} mt-1`} />
+                  </label>
+                  <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Early-payment discount %
+                    <input inputMode="decimal" value={terms.discPct} onChange={e => setTerms(t => ({ ...t, discPct: e.target.value }))} placeholder="none" className={`${inputCls} mt-1`} />
+                  </label>
+                  <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">…if paid within (days)
+                    <input inputMode="numeric" value={terms.discDays} onChange={e => setTerms(t => ({ ...t, discDays: e.target.value }))} placeholder="e.g. 30" className={`${inputCls} mt-1`} />
+                  </label>
+                  <p className="col-span-2 text-[11px] text-muted-foreground">
+                    A bill unpaid longer than the credit days holds new orders and Direct bills (an admin can allow them). The credit limit only warns.
+                    The early-payment discount is suggested when recording a payment; the accountant decides.
+                  </p>
+                </fieldset>
               </div>
             </div>
 
@@ -436,12 +534,19 @@ export function VendorsTab({ initialVendors, onListChange }: Props) {
               <button onClick={() => setModalMode(null)} disabled={isSaving} className="flex-1 rounded-xl border border-border px-3 py-3 text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50">
                 Cancel
               </button>
-              <button onClick={handleSave} disabled={isSaving} className="flex-1 rounded-xl bg-foreground text-background px-3 py-3 text-sm font-semibold hover:opacity-90 active:scale-95 transition-all disabled:opacity-60">
-                {isSaving ? 'Saving…' : modalMode === 'add' ? 'Add Vendor' : 'Save Changes'}
+              <button data-primary onClick={handleSave} disabled={isSaving} className="flex-1 rounded-xl bg-foreground text-background px-3 py-3 text-sm font-semibold hover:opacity-90 active:scale-95 transition-all disabled:opacity-60">
+                {isSaving ? 'Saving…' : modalMode === 'add' ? 'Add Retailer' : 'Save Changes'}
               </button>
             </div>
           </div>
         </div>
+      )}
+      {shopTarget && (
+        <ShopAccessDialog
+          retailer={shopTarget}
+          onClose={() => setShopTarget(null)}
+          onSaved={(v) => { updateVendors(vendors.map(x => x.id === v.id ? v : x)); setShopTarget(v) }}
+        />
       )}
     </div>
   )

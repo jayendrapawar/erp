@@ -1,9 +1,16 @@
 'use client'
 
-import { useState, useTransition, useMemo, useEffect, useCallback } from 'react'
-import { fuzzyFilter } from '@/lib/fuzzy'
+import { useShowMore } from '@/components/show-more'
+import { sizeWithCode } from '@/lib/orders/size-label'
+import { useState, useTransition, useMemo, useEffect, useCallback, useRef } from 'react'
+import { useUrlFilters } from '@/lib/use-url-filters'
+import { useListKeys } from '@/lib/shortcuts/list'
+import { applyColumnFilters, FilterRow, FiltersButton, FilterSummary, type ColumnFilterDef, type FilterValues } from '@/components/column-filters'
 import { StatusPill, fmt, PageHeader, StatCard } from '../_components/shared'
-import { adminAssignPicker, adminUnassignPicker, getOrderWithItems, getPickerAssignments, deleteOrder, getBillLines } from '@/app/actions/orders'
+import { adminAssignPicker, adminUnassignPicker, getOrderWithItems, getPickerAssignments, deleteOrder, getBillsForPrint } from '@/app/actions/orders'
+import { BillDetailCard } from '@/components/bill-detail-card'
+import { amountsFromLines, type BillAmounts } from '@/lib/billing/bill-amounts'
+import { DialogKeys } from '@/components/dialog-keys'
 
 interface MrpLine {
   artNumber: string
@@ -41,6 +48,7 @@ interface DetailItem {
   artNumber: string
   colorNumber: string | null
   sizeNumber: string | null
+  artCode?: string | null
   quantityOrdered: number
   quantityPacked: number
   status: string
@@ -58,12 +66,54 @@ function orderTag(orderedAt: Date, updatedAt: Date): 'new' | 'updated' | null {
 
 const ALL_STATUSES = ['pending', 'assigned', 'packed', 'dispatched', 'delivered', 'cancelled']
 
+/**
+ * Picker list. A pick with the mouse or a finger saves at once (as before). With the keyboard, ↑↓
+ * on a closed list change the value on every press (Windows), so a keyboard change waits: Enter or
+ * leaving the list saves it, Esc puts the old picker back (docs/architecture/keyboard.md).
+ */
+function PickerSelect({ value, pickers, onCommit, disabled, className, ...rest }: {
+  value: string; pickers: Props['pickers']; onCommit: (pickerId: string) => void; disabled?: boolean; className?: string; 'aria-label'?: string
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const byKey = useRef(false)
+  const shown = draft ?? value
+  const commit = () => { if (draft !== null && draft !== value) onCommit(draft); setDraft(null) }
+  return (
+    <select
+      {...rest}
+      disabled={disabled}
+      value={shown}
+      onKeyDown={e => {
+        if (e.key === 'Enter') { e.preventDefault(); commit() }
+        else if (e.key === 'Escape' && draft !== null) { e.preventDefault(); setDraft(null) }
+        else byKey.current = true
+      }}
+      onChange={e => {
+        if (byKey.current) { byKey.current = false; setDraft(e.target.value); return }
+        setDraft(null); onCommit(e.target.value)
+      }}
+      onBlur={commit}
+      onMouseDown={() => { byKey.current = false }}
+      className={className}
+    >
+      <option value="">Select picker</option>
+      {pickers.map(p => (
+        <option key={p.id} value={p.id}>{p.name ?? p.email}</option>
+      ))}
+    </select>
+  )
+}
+
 export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = false, pickerMapOverride, onPickerChange }: Props) {
   const [isPending, startTransition] = useTransition()
-  const [search, setSearch] = useState('')
+  const [filters, setFilters] = useState<FilterValues>({})
+  // Opened from Ctrl+K "# " search: /orders/admin?f.order=…#overview
+  useUrlFilters(['order', 'shop'], v => setFilters(f => ({ ...f, ...v })))
+  // Keyboard: ↑↓ / j k rows, Enter opens, / filters (lib/shortcuts/list.ts).
+  const listRef = useRef<HTMLDivElement>(null)
+  useListKeys(listRef, { label: 'Orders list' })
 
   // ── Filter + sort ──
-  const [filterStatus, setFilterStatus] = useState<string>('all')
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'order'>('date-desc')
 
   // ── Picker assignments: orderId → pickerId ────────────────────────────────────
@@ -105,6 +155,8 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
   const [detailOrder, setDetailOrder] = useState<OrderRow | null>(null)
   const [detailItems, setDetailItems] = useState<DetailItem[]>([])
   const [detailBillLines, setDetailBillLines] = useState<MrpLine[]>([])
+  // The bill's saved amounts and line discount (getBillsForPrint: the same query the printed bill uses).
+  const [detailBill, setDetailBill] = useState<{ lineDiscPct: number; amounts: BillAmounts; unpaidPaise: number | null } | null>(null)
   const [detailBillLinesLoading, setDetailBillLinesLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState('')
@@ -127,6 +179,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
     setDetailOrder(order)
     setDetailItems([])
     setDetailBillLines([])
+    setDetailBill(null)
     setDetailError('')
     setDetailLoading(true)
     try {
@@ -142,8 +195,11 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
     if (['billed', 'dispatched', 'delivered'].includes(order.status)) {
       setDetailBillLinesLoading(true)
       try {
-        const rows = await getBillLines(order.id)
-        setDetailBillLines(rows)
+        const bill = (await getBillsForPrint([order.id]))[order.id]
+        const lines = bill?.lines ?? []
+        const disc = bill?.lineDiscPct ?? 30
+        setDetailBillLines(lines)
+        if (lines.length) setDetailBill({ lineDiscPct: disc, amounts: bill?.amounts ?? amountsFromLines(lines, disc, 'intra_state'), unpaidPaise: bill?.unpaidPaise ?? null })
       } catch {
         setDetailBillLines([])
       } finally {
@@ -152,70 +208,83 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
     }
   }
 
+  // Assign / unassign a picker: shown at once (safe and reversible); if the server refuses, the
+  // previous picker comes back and the reason is shown (Orders speed, 22 Nov 2026).
+  const [assignError, setAssignError] = useState('')
+  function setPickerLocally(orderId: number, pickerId: string | null) {
+    setLocalPickerMap(prev => { const n = { ...prev }; if (pickerId) n[orderId] = pickerId; else delete n[orderId]; return n })
+    onPickerChange?.(orderId, pickerId)
+  }
   function handlePickerSelect(orderId: number, pickerId: string) {
-    if (pickerId) {
-      // Optimistic assign
-      setLocalPickerMap(prev => ({ ...prev, [orderId]: pickerId }))
-      onPickerChange?.(orderId, pickerId)
-      startTransition(async () => {
-        await adminAssignPicker(orderId, pickerId)
+    const before = pickerMap[orderId] ?? null
+    setAssignError('')
+    setPickerLocally(orderId, pickerId || null)
+    startTransition(async () => {
+      try {
+        if (pickerId) await adminAssignPicker(orderId, pickerId)
+        else await adminUnassignPicker(orderId)
         // Refresh local map to authoritative state (standalone page only)
-        if (!pickerMapOverride) {
-          const fresh = await getPickerAssignments()
-          setLocalPickerMap(fresh)
-        }
-      })
-    } else {
-      // Optimistic unassign
-      setLocalPickerMap(prev => { const n = { ...prev }; delete n[orderId]; return n })
-      onPickerChange?.(orderId, null)
-      startTransition(async () => {
-        await adminUnassignPicker(orderId)
-      })
-    }
+        if (pickerId && !pickerMapOverride) setLocalPickerMap(await getPickerAssignments())
+      } catch (e) {
+        setPickerLocally(orderId, before)
+        const order = orders.find(o => o.id === orderId)
+        setAssignError(`${order?.orderNumber ?? 'Order'}: ${e instanceof Error && e.message ? e.message : 'picker not changed'} — it is back as it was.`)
+      }
+    })
   }
 
+  // Orders list filters (one per column; phones: Filters button).
+  const orderFilters: ColumnFilterDef<OrderRow>[] = useMemo(() => [
+    { key: 'order', label: 'Order', kind: 'text', get: o => o.orderNumber },
+    { key: 'shop', label: 'Shopkeeper', kind: 'text', get: o => o.shopkeeperName },
+    { key: 'status', label: 'Status', kind: 'select', options: ALL_STATUSES, get: o => o.status },
+    { key: 'date', label: 'Date', kind: 'text', placeholder: 'e.g. 20 Nov', get: o => `${fmt(o.orderedAt)} ${fmt(o.updatedAt)}` },
+    { key: 'picker', label: 'Picker', kind: 'text', get: o => { const p = pickers.find(x => x.id === (pickerMap[o.id] ?? '')); return p ? (p.name ?? p.email) : '' } },
+  ], [pickers, pickerMap])
+
   const filteredOrders = useMemo(() => {
-    let list = fuzzyFilter(
-      orders.filter(o => !deletedIds.has(o.id)),
-      search,
-      o => [o.shopkeeperName, o.orderNumber]
-    )
-    if (filterStatus !== 'all') list = list.filter(o => o.status === filterStatus)
+    let list = applyColumnFilters(orders.filter(o => !deletedIds.has(o.id)), orderFilters, filters)
     if (sortBy === 'date-desc') list = [...list].sort((a, b) => new Date(b.orderedAt).getTime() - new Date(a.orderedAt).getTime())
     if (sortBy === 'date-asc')  list = [...list].sort((a, b) => new Date(a.orderedAt).getTime() - new Date(b.orderedAt).getTime())
     if (sortBy === 'order')     list = [...list].sort((a, b) => a.orderNumber.localeCompare(b.orderNumber))
     return list
-  }, [orders, deletedIds, search, filterStatus, sortBy])
+  }, [orders, deletedIds, orderFilters, filters, sortBy])
+  // Draw 100 orders at a time (filters still search every loaded order).
+  const { visible: shownOrders, more: moreOrders } = useShowMore(filteredOrders, 100, [filters, sortBy])
 
   return (
     <div className={embedded ? '' : 'min-h-screen bg-background'}>
       <div className={embedded ? '' : 'max-w-6xl mx-auto px-4 py-6'}>
         {!embedded && (
         <div className="flex items-center justify-between mb-6">
-          <PageHeader title="Orders Dashboard" subtitle="Manage and track all orders" />
+          <PageHeader title="Orders &amp; Billing" subtitle="Every order from booking to billing and dispatch" />
           <a href="/home" className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Home</a>
         </div>
+        )}
+
+        {assignError && (
+          <p role="alert" className="mb-4 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">{assignError}</p>
         )}
 
         {/* Stats */}
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-6">
           <StatCard label="Active"     value={stats.total}      />
-          <StatCard label="Pending"    value={stats.pending}    color="text-yellow-600" />
-          <StatCard label="Packed"     value={stats.packed}     color="text-purple-600" />
-          <StatCard label="Dispatched" value={stats.dispatched} color="text-orange-600" />
-          <StatCard label="Delivered"  value={stats.delivered}  color="text-green-600"  />
-          <StatCard label="Cancelled"  value={stats.cancelled}  color="text-red-600"    />
+          <StatCard label="Pending"    value={stats.pending}    color="text-yellow-600 dark:text-yellow-400" />
+          <StatCard label="Packed"     value={stats.packed}     color="text-purple-600 dark:text-purple-400" />
+          <StatCard label="Dispatched" value={stats.dispatched} color="text-orange-600 dark:text-orange-400" />
+          <StatCard label="Delivered"  value={stats.delivered}  color="text-green-600 dark:text-green-400"  />
+          <StatCard label="Cancelled"  value={stats.cancelled}  color="text-red-600 dark:text-red-400"    />
         </div>
 
         {/* ── Detail panel overlay ── */}
         {detailOrder && (
           <div
-            className="fixed inset-0 z-40 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
+            className="fixed inset-0 z-50 flex flex-col justify-end sm:flex-row sm:justify-end bg-black/40 backdrop-blur-sm"
             onClick={() => setDetailOrder(null)}
           >
+            <DialogKeys onClose={() => setDetailOrder(null)} />
             <div
-              className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85vh] sm:max-h-none overflow-y-auto shadow-2xl rounded-t-2xl sm:rounded-none"
+              className="relative w-full sm:max-w-md bg-background sm:border-l border-t sm:border-t-0 border-border sm:h-full max-h-[85dvh] sm:max-h-none overflow-y-auto pb-[env(safe-area-inset-bottom)] shadow-2xl rounded-t-2xl sm:rounded-none"
               onClick={e => e.stopPropagation()}
             >
               {/* Mobile drag handle */}
@@ -269,17 +338,13 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                   <div className="space-y-2">
                     <div>
                       <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Assign Picker</p>
-                      <select
+                      <PickerSelect
                         disabled={isPending}
                         value={pickerMap[detailOrder.id] ?? ''}
-                        onChange={e => handlePickerSelect(detailOrder.id, e.target.value)}
+                        pickers={pickers}
+                        onCommit={v => handlePickerSelect(detailOrder.id, v)}
                         className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
-                      >
-                        <option value="">Select picker</option>
-                        {pickers.map(p => (
-                          <option key={p.id} value={p.id}>{p.name ?? p.email}</option>
-                        ))}
-                      </select>
+                      />
                     </div>
                   </div>
                 </div>
@@ -293,7 +358,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                     <p className="px-4 py-6 text-sm text-muted-foreground text-center">Loading items…</p>
                   )}
                   {detailError && (
-                    <p className="px-4 py-4 text-sm text-red-600">{detailError}</p>
+                    <p role="alert" className="px-4 py-4 text-sm text-red-600 dark:text-red-400">{detailError}</p>
                   )}
                   {!detailLoading && !detailError && detailItems.length === 0 && (
                     <p className="px-4 py-6 text-sm text-muted-foreground text-center">No items found.</p>
@@ -369,7 +434,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                                       {items.map(item => {
                                         if (!showPacked) return (
                                           <span key={item.id} className="text-xs tabular-nums whitespace-nowrap">
-                                            <span className="text-muted-foreground">{item.sizeNumber ?? '—'}</span>
+                                            <span className="text-muted-foreground">{sizeWithCode(item, items)}</span>
                                             <span className="mx-0.5 text-muted-foreground">/</span>
                                             <span className="font-semibold text-foreground">{item.quantityOrdered}</span>
                                           </span>
@@ -379,7 +444,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                                         const verified = isBilled ? pkd : 0
                                         return (
                                           <span key={item.id} className="inline-flex items-baseline gap-0.5 tabular-nums whitespace-nowrap">
-                                            <span className="text-xs text-muted-foreground">{item.sizeNumber ?? '—'}</span>
+                                            <span className="text-xs text-muted-foreground">{sizeWithCode(item, items)}</span>
                                             <span className="text-[10px] text-muted-foreground/50 mx-px">/</span>
                                             <span className="text-xs font-bold text-muted-foreground">{item.quantityOrdered}</span>
                                             <span className="text-[10px] text-muted-foreground/40">→</span>
@@ -468,95 +533,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                     )
                   }
 
-                  const LINE_DISC_PCT = (detailBillLines[0] as { lineDiscPct?: number }).lineDiscPct ?? 30
-                  const DISC_PCT = 4.75
-                  const CGST_PCT = 2.50
-                  const SGST_PCT = 2.50
-
-                  const totalQty  = detailBillLines.reduce((s, l) => s + l.qty, 0)
-                  const subTotal  = detailBillLines.reduce((s, l) => s + Math.ceil(l.mrp * (1 - LINE_DISC_PCT / 100)) * l.qty, 0)
-                  const discAmt   = Math.round(subTotal * DISC_PCT / 100 * 100) / 100
-                  const afterDisc = subTotal - discAmt
-                  const cgstAmt   = Math.round(afterDisc * CGST_PCT / 100 * 100) / 100
-                  const sgstAmt   = Math.round(afterDisc * SGST_PCT / 100 * 100) / 100
-                  const netAmt    = Math.round((afterDisc + cgstAmt + sgstAmt) * 100) / 100
-                  const fmtRs     = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-
-                  // group by artNumber for display
-                  const artGroupMap = new Map<string, typeof detailBillLines>()
-                  for (const l of detailBillLines) {
-                    if (!artGroupMap.has(l.artNumber)) artGroupMap.set(l.artNumber, [])
-                    artGroupMap.get(l.artNumber)!.push(l)
-                  }
-
-                  return (
-                    <div className="rounded-xl border border-border bg-card overflow-hidden">
-                      {/* Header */}
-                      <div className="px-4 py-3 bg-muted/30 border-b border-border flex items-center justify-between">
-                        <p className="text-sm font-semibold text-foreground">Bill Items</p>
-                        <span className="text-xs text-muted-foreground tabular-nums">
-                          {detailBillLines.length} line{detailBillLines.length !== 1 ? 's' : ''} · {totalQty} box{totalQty !== 1 ? 'es' : ''} · {fmtRs(subTotal)}
-                        </span>
-                      </div>
-
-                      {/* Discount % */}
-                      <div className="px-4 py-2 border-b border-border bg-muted/10 flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">Disc %</span>
-                        <span className="text-xs font-bold text-foreground tabular-nums">{LINE_DISC_PCT}</span>
-                      </div>
-
-                      {/* Line items table */}
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs border-collapse">
-                          <thead className="bg-muted/20 border-b border-border">
-                            <tr>
-                              <th className="text-left px-4 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Article</th>
-                              <th className="text-right px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">MRP</th>
-                              <th className="text-right px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Disc {LINE_DISC_PCT}%</th>
-                              <th className="text-center px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Qty</th>
-                              <th className="text-right px-4 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Amt</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {Array.from(artGroupMap.entries()).map(([artNumber, artLines]) =>
-                              artLines.map((l, li) => {
-                                const rate = Math.ceil(l.mrp * (1 - LINE_DISC_PCT / 100))
-                                const amt  = rate * l.qty
-                                return (
-                                  <tr key={`${artNumber}-${li}`} className="odd:bg-card even:bg-muted/10">
-                                    <td className="px-4 py-2 font-semibold text-foreground">{li === 0 ? artNumber : ''}</td>
-                                    <td className="px-3 py-2 text-right text-muted-foreground tabular-nums">{fmtRs(l.mrp)}</td>
-                                    <td className="px-3 py-2 text-right tabular-nums">{fmtRs(rate)}</td>
-                                    <td className="px-3 py-2 text-center font-bold tabular-nums">{l.qty}</td>
-                                    <td className="px-4 py-2 text-right font-semibold tabular-nums">{fmtRs(amt)}</td>
-                                  </tr>
-                                )
-                              })
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-
-                      {/* Totals */}
-                      <div className="border-t border-border divide-y divide-border/60">
-                        {[
-                          { label: `Sub Total (${totalQty} boxes)`, value: fmtRs(subTotal), cls: 'font-semibold text-foreground' },
-                          { label: `Discount (${DISC_PCT}%)`,       value: `− ${fmtRs(discAmt)}`, cls: 'text-red-600 dark:text-red-400' },
-                          { label: `CGST (${CGST_PCT}%)`,           value: `+ ${fmtRs(cgstAmt)}`, cls: 'text-muted-foreground' },
-                          { label: `SGST (${SGST_PCT}%)`,           value: `+ ${fmtRs(sgstAmt)}`, cls: 'text-muted-foreground' },
-                        ].map(row => (
-                          <div key={row.label} className="flex items-center justify-between px-4 py-2 text-xs">
-                            <span className="text-muted-foreground">{row.label}</span>
-                            <span className={`tabular-nums ${row.cls}`}>{row.value}</span>
-                          </div>
-                        ))}
-                        <div className="flex items-center justify-between px-4 py-3 bg-muted/20">
-                          <span className="text-sm font-bold text-foreground">Net Payable</span>
-                          <span className="text-sm font-extrabold tabular-nums text-foreground">{fmtRs(netAmt)}</span>
-                        </div>
-                      </div>
-                    </div>
-                  )
+                  return detailBill && <BillDetailCard lines={detailBillLines} lineDiscPct={detailBill.lineDiscPct} amounts={detailBill.amounts} unpaidPaise={detailBill.unpaidPaise} />
                 })()}
 
                 {/* Delete order — hidden for read-only roles (e.g. accountant) */}
@@ -579,13 +556,14 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
         {/* ── Delete confirmation dialog ── */}
         {deleteConfirmId !== null && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+            <DialogKeys onClose={() => setDeleteConfirmId(null)} />
             <div className="w-full max-w-sm rounded-2xl bg-background border border-border p-6 shadow-lg">
               <h2 className="text-base font-semibold mb-1 text-foreground">Delete Order?</h2>
               <p className="text-xs text-muted-foreground mb-5">
                 This will permanently delete <span className="font-medium text-foreground">{detailOrder?.orderNumber}</span> and all its items. This cannot be undone.
               </p>
               <div className="flex gap-3">
-                <button
+                <button data-autofocus
                   type="button"
                   onClick={() => setDeleteConfirmId(null)}
                   disabled={isDeleting}
@@ -593,7 +571,7 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                 >
                   Cancel
                 </button>
-                <button
+                <button data-primary data-destructive
                   type="button"
                   onClick={() => handleDeleteOrder(deleteConfirmId)}
                   disabled={isDeleting}
@@ -606,28 +584,11 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
           </div>
         )}
 
-        {/* Search */}
-        <input
-          type="search"
-          placeholder="Search by order or shopkeeper…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="w-full mb-3 rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-        />
-
-        {/* Filter + Sort bar */}
-        <div className="flex items-center gap-2 mb-4">
-          <span className="text-xs text-muted-foreground">Filter:</span>
-          <select
-            value={filterStatus}
-            onChange={e => setFilterStatus(e.target.value)}
-            className="rounded-lg border border-border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-          >
-            <option value="all">All</option>
-            {ALL_STATUSES.map(s => (
-              <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-            ))}
-          </select>
+        <div ref={listRef}>
+        {/* Filters (under each column on wide screens; Filters button on phones) + sort */}
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          <FiltersButton className="sm:hidden" defs={orderFilters} values={filters} onChange={setFilters} />
+          <div className="hidden sm:block"><FilterSummary values={filters} onChange={setFilters} shown={filteredOrders.length} total={orders.length - deletedIds.size} /></div>
           <span className="text-xs text-muted-foreground ml-auto">Sort:</span>
           <select
             value={sortBy}
@@ -646,12 +607,13 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
 
         {/* ── Mobile: card list ── */}
         <div className="sm:hidden space-y-3">
-          {filteredOrders.map(order => {
+          {shownOrders.map(order => {
             const tag = orderTag(order.orderedAt, order.updatedAt)
             return (
               <button
                 key={order.id}
                 type="button"
+                data-list-row
                 onClick={() => handleViewOrder(order)}
                 className="w-full text-left rounded-xl border border-border bg-card p-4 hover:bg-muted/30 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
@@ -691,16 +653,19 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                   <th className="text-left px-4 py-3 font-medium text-muted-foreground">Date</th>
                   <th className="text-left px-4 py-3 font-medium text-muted-foreground">Assign Picker</th>
                 </tr>
+                <FilterRow columns={orderFilters} values={filters} onChange={setFilters} firstCellClass="px-4" cellClass="px-4" />
               </thead>
               <tbody className="divide-y divide-border">
-                {filteredOrders.map(order => {
+                {shownOrders.map(order => {
                   const tag = orderTag(order.orderedAt, order.updatedAt)
                   return (
-                    <tr key={order.id}
+                    <tr key={order.id} data-list-row
                       className="hover:bg-muted/30 transition-colors cursor-pointer"
                       onClick={() => handleViewOrder(order)}
                     >
-                      <td className="px-4 py-3 font-mono text-xs font-medium">{order.orderNumber}</td>
+                      <td className="px-4 py-3 font-mono text-xs font-medium">
+                        <button type="button" data-row-open onClick={e => { e.stopPropagation(); handleViewOrder(order) }} className="rounded hover:underline">{order.orderNumber}</button>
+                      </td>
                       <td className="px-4 py-3">{order.shopkeeperName}</td>
                       <td className="px-4 py-3"><StatusPill status={order.status} /></td>
                       <td className="px-4 py-3">
@@ -717,17 +682,14 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
                         </div>
                       </td>
                       <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                        <select
+                        <PickerSelect
                           disabled={isPending}
                           value={pickerMap[order.id] ?? ''}
-                          onChange={e => handlePickerSelect(order.id, e.target.value)}
+                          pickers={pickers}
+                          onCommit={v => handlePickerSelect(order.id, v)}
+                          aria-label={`Picker for ${order.orderNumber}`}
                           className="rounded-md border border-border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
-                        >
-                          <option value="">Select picker</option>
-                          {pickers.map(p => (
-                            <option key={p.id} value={p.id}>{p.name ?? p.email}</option>
-                          ))}
-                        </select>
+                        />
                       </td>
                     </tr>
                   )
@@ -735,6 +697,8 @@ export function AdminDashboard({ stats, orders, pickers, embedded, readOnly = fa
               </tbody>
             </table>
           </div>
+        </div>
+        {moreOrders}
         </div>
       </div>
     </div>
