@@ -410,6 +410,7 @@ export async function getBillerQueue() {
       billedAt: orders.billedAt,
       billerId: orders.billerId,
       salesmanId: orders.salesmanId,
+      pickerId: orders.pickerId,
       isEmergency: orders.isEmergency,
       // Pairs on the bill (owner, 24 Nov 2026: shown on every bill in the list). Billed orders only.
       billedPairs: sql<number | null>`CASE WHEN ${orders.status} = 'billed' THEN (SELECT coalesce(sum(bl.qty), 0)::int FROM bill_lines bl WHERE bl."orderId" = ${orders.id}) END`,

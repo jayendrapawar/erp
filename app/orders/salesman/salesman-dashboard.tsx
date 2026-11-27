@@ -2,6 +2,7 @@
 
 import { sizeWithCode } from '@/lib/orders/size-label'
 import { columnsFor, pickListHtml } from '@/lib/orders/pick-list-print'
+import { mergeMatrix, matrixPairs } from '@/lib/orders/order-lines'
 import { PaperEstimate } from '@/components/orders/paper-estimate'
 import { useState, useTransition, useRef, useEffect, useMemo, useId, useCallback, forwardRef, useImperativeHandle, Fragment } from 'react'
 import { useAutoRefresh } from '@/lib/use-auto-refresh'
@@ -913,14 +914,8 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
   const [printPageSize, setPrintPageSize] = useState<'A4' | 'A5'>('A5')
   const [printOrientation, setPrintOrientation] = useState<'portrait' | 'landscape'>('portrait')
 
-  // ── Picker assignment step (shown after print config, before printing) ──
-  // pickerAssignOpen: which orders need picker assignment shown
-  const [pickerAssignOpen, setPickerAssignOpen] = useState(false)
-  // pickerAssignMap: orderId → pickerId ('' = unassigned / skip)
-  const [pickerAssignMap, setPickerAssignMap] = useState<Record<number, string>>({})
-  const [pickerAssigning, startPickerAssign] = useTransition()
-  // selectedOrdersForAssign: the orders that were selected when print was clicked
-  const [selectedOrdersForAssign, setSelectedOrdersForAssign] = useState<ExistingOrder[]>([])
+  // Printing no longer assigns pickers (owner, 27 Nov 2026): pickers claim orders on their phone or are
+  // assigned from the order's row; when an order has none, the biller names the picker when billing.
   // One order from the Orders list (owner, 23 Nov 2026): Assign a picker, or ⚡ Direct bill (admin),
   // which also names who picked the goods.
   const [rowAction, setRowAction] = useState<{ order: ExistingOrder; mode: 'assign' | 'direct' } | null>(null)
@@ -947,7 +942,6 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
       }
     })
   }
-  const [printSettingsSnapshot, setPrintSettingsSnapshot] = useState<{ pageSize: 'A4' | 'A5'; orientation: 'portrait' | 'landscape' }>({ pageSize: 'A5', orientation: 'portrait' })
 
   // ── Cancel order confirm (existing orders list) ──
   const [cancelOrderId, setCancelOrderId] = useState<number | null>(null)
@@ -1256,53 +1250,9 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
 
   // ── Next Article — save ALL colors with qty > 0 for this article, then jump to article search ──
   function handleNextArticle() {
-    if (selectedArt) {
-      let lastQties: Record<string, number> | null = null
-
-      setLines(prev => {
-        let next = [...prev]
-
-        // Flush every color that has at least 1 pair entered
-        for (const [colorIdStr, qties] of Object.entries(colorQuantities)) {
-          const colorId = Number(colorIdStr)
-          const total = Object.values(qties).reduce((s, n) => s + n, 0)
-          if (total === 0) continue
-
-          const colorObj = selectedArt.colors.find(c => c.id === colorId)
-          if (!colorObj) continue
-
-          lastQties = qties
-
-          // If we're editing a specific line and this is that color, update it
-          const editIdx = editingLineId ? next.findIndex(l => l.id === editingLineId && l.colorId === colorId) : -1
-          if (editIdx !== -1) {
-            next = next.map(l => l.id === editingLineId ? { ...l, quantities: { ...qties } } : l)
-          } else {
-            const existingIdx = next.findIndex(
-              l => l.articleId === selectedArt.id && l.colorId === colorId
-            )
-            if (existingIdx !== -1) {
-              next = next.map((l, i) => i !== existingIdx ? l : { ...l, quantities: { ...qties } })
-            } else {
-              next = [...next, {
-                id: uid(),
-                articleId: selectedArt.id,
-                artNumber: selectedArt.artNumber,
-                colorId,
-                colorName: colorObj.colorName,
-                colorHex: colorObj.colorHex,
-                sizes: selectedArt.sizes.filter(s => s.articleId === colorObj.articleId),
-                quantities: { ...qties },
-              }]
-            }
-          }
-        }
-
-        return next
-      })
-
-      if (lastQties) setLastUsedSet(toLabelled(lastQties, selectedArt.sizes))
-    }
+    const merged = mergeMatrix(lines, selectedArt, colorQuantities, editingLineId, uid)
+    if (merged.added) setLines(merged.lines)
+    if (merged.lastQuantities && selectedArt) setLastUsedSet(toLabelled(merged.lastQuantities, selectedArt.sizes))
 
     // Clear article and focus the search input
     setArtQuery('')
@@ -1415,8 +1365,37 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
     setView('new')
   }
 
+  /**
+   * Pairs typed in the size grid but not added yet go into the order first, as "Add to Order" would
+   * (owner, 27 Nov 2026: Create Order / Save / Save draft must not lose them). Returns the lines to save.
+   */
+  function takeMatrix(): OrderLine[] {
+    const merged = mergeMatrix(lines, selectedArt, colorQuantities, editingLineId, uid)
+    if (!merged.added) return lines
+    setLines(merged.lines)
+    if (merged.lastQuantities && selectedArt) setLastUsedSet(toLabelled(merged.lastQuantities, selectedArt.sizes))
+    setColorQuantities({})
+    setSelectedColorId(null)
+    setEditingLineId(null)
+    setMatrixKey(k => k + 1)
+    return merged.lines
+  }
+
   /** "Save draft": it is already saved — keep it in Drafts and start a fresh order here. */
   function handleSaveDraft() {
+    // Pairs still in the size grid go into the draft before the form is cleared.
+    const all = takeMatrix()
+    if (all !== lines) {
+      const saved = saveDraft(draftKey, {
+        id: draftIdRef.current ?? uid(),
+        savedAt: Date.now(),
+        vendor: selectedSk ? { id: selectedSk.id, name: selectedSk.name, code: selectedSk.code, phone: selectedSk.phone, address: selectedSk.address } : null,
+        lines: all,
+        notes,
+      })
+      if (!saved) { setDraftStoreFailed(true); setError('Could not save the draft on this phone.'); return }
+      setDrafts(saved)
+    }
     leftDraftRef.current = null
     resetForm()
     setDraftsOpen(false)
@@ -1449,9 +1428,10 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
     setError('')
     setSubmitError('')
     if (!selectedSk) { setError('Please select a vendor.'); return }
-    if (lines.length === 0) { setError('Add at least one item to the order.'); return }
+    const all = takeMatrix()
+    if (all.length === 0) { setError('Add at least one item to the order.'); return }
 
-    const items = lines.flatMap(l =>
+    const items = all.flatMap(l =>
       Object.entries(l.quantities)
         .filter(([, qty]) => qty > 0)
         .map(([k, qty]) => {
@@ -1498,7 +1478,9 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
   // ── Totals ──
   const totalPairs = useMemo(() => lines.reduce((s, l) => s + linePairs(l), 0), [lines])
 
-  const canSubmit = !!selectedSk && lines.length > 0 && !isPending
+  // Pairs still in the size grid count: Create Order takes them first.
+  const gridPairs = useMemo(() => matrixPairs(selectedArt, colorQuantities), [selectedArt, colorQuantities])
+  const canSubmit = !!selectedSk && (lines.length > 0 || gridPairs > 0) && !isPending
 
   // ── Edit existing order: load its items back into the new-order form ──
   async function handleEditOrder(order: ExistingOrder) {
@@ -1637,6 +1619,7 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
       address: addresses[i],
       orderedAt: o.orderedAt,
       salesman: o.salesmanName ?? userName,
+      sets,
       items: (printItemsMap[o.id] ?? []).map(it => ({ artNumber: it.artNumber, colorNumber: it.colorNumber ?? null, sizeNumber: it.sizeNumber ?? null, quantityOrdered: it.quantityOrdered })),
     })), pageSize, orientation)
     const mm = { A4: { w: 210, h: 297 }, A5: { w: 148, h: 210 } }[pageSize]
@@ -2763,7 +2746,7 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
               <PaperEstimate ordersKey={selectedOrders.map(o => o.id).join(',')} pageSize={printPageSize} orientation={printOrientation}
                 onPick={(s, o) => { setPrintPageSize(s); setPrintOrientation(o) }}
                 orders={selectedOrders.map(o => ({ orderNumber: o.orderNumber, shopkeeperName: o.shopkeeperName, orderedAt: o.orderedAt, salesman: o.salesmanName ?? userName,
-                  address: o.shopkeeperAddress || vendorAddressMap.get(o.shopkeeperName.toUpperCase()) || '',
+                  address: o.shopkeeperAddress || vendorAddressMap.get(o.shopkeeperName.toUpperCase()) || '', sets,
                   items: (printItemsMap[o.id] ?? []).map(it => ({ artNumber: it.artNumber, colorNumber: it.colorNumber ?? null, sizeNumber: it.sizeNumber ?? null, quantityOrdered: it.quantityOrdered })) }))} />
 
               <div className="px-4 py-4 space-y-4">
@@ -2845,20 +2828,13 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
                 <button type="button"
                   onClick={() => {
                     setPrintConfigOpen(false)
-                    // Open picker assignment step first (if pickers exist)
-                    setSelectedOrdersForAssign(selectedOrders)
-                    setPrintSettingsSnapshot({ pageSize: printPageSize, orientation: printOrientation })
-                    // Pre-fill: orders already assigned keep their picker
-                    const preMap: Record<number, string> = {}
-                    selectedOrders.forEach(o => { preMap[o.id] = '' })
-                    setPickerAssignMap(preMap)
-                    setPickerAssignOpen(true)
+                    handlePrintOrders(selectedOrders, printPageSize, printOrientation)
                   }}
                   className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring whitespace-nowrap">
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                   </svg>
-                  Next: Assign Pickers
+                  Print
                 </button>
               </div>
             </div>
@@ -2915,101 +2891,6 @@ export function SalesmanDashboard({ orders: recentOrders, userName, userId, embe
               </button>
             </div>
           </form>
-        </div>
-      )}
-
-      {/* ── Picker assignment dialog ── */}
-      {pickerAssignOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
-          onClick={e => { if (e.target === e.currentTarget) setPickerAssignOpen(false) }}
-        >
-          <DialogKeys onClose={() => setPickerAssignOpen(false)} />
-          <div className="w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl bg-background shadow-2xl max-h-[90vh] flex flex-col">
-
-            {/* Drag handle */}
-            <div className="sm:hidden flex justify-center pt-3 pb-1 shrink-0">
-              <div className="w-10 h-1 rounded-full bg-border" />
-            </div>
-
-            {/* Header */}
-            <div className="px-5 pt-5 pb-4 border-b border-border shrink-0">
-              <p className="text-xl font-bold text-foreground tracking-tight">Assign Pickers</p>
-              <p className="text-sm text-muted-foreground mt-0.5">
-                {selectedOrdersForAssign.length} order{selectedOrdersForAssign.length !== 1 ? 's' : ''} selected — choose a picker for each
-              </p>
-            </div>
-
-            {/* Order rows */}
-            <div className="overflow-y-auto flex-1 px-4 py-3 space-y-2">
-              {selectedOrdersForAssign.map(order => (
-                <div key={order.id} className="rounded-2xl bg-muted/50 px-4 py-3 space-y-2">
-                  {/* Order info */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-foreground truncate">{order.shopkeeperName}</p>
-                      <p className="text-[11px] text-muted-foreground font-mono mt-0.5">{order.orderNumber}</p>
-                    </div>
-                    <StatusPill status={order.status} />
-                  </div>
-                  {/* Picker selector */}
-                  <select
-                    value={pickerAssignMap[order.id] ?? ''}
-                    onChange={e => setPickerAssignMap(prev => ({ ...prev, [order.id]: e.target.value }))}
-                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    <option value="">— Skip / No picker —</option>
-                    {pickers.map(p => (
-                      <option key={p.id} value={p.id}>{p.name ?? p.id}</option>
-                    ))}
-                  </select>
-                </div>
-              ))}
-            </div>
-
-            {/* Footer */}
-            <div className="px-4 pb-5 pt-3 border-t border-border shrink-0 space-y-2">
-              <button
-                type="button"
-                disabled={pickerAssigning}
-                onClick={() => {
-                  startPickerAssign(async () => {
-                    // Fire all assignments in parallel (skip blanks); the list shows each saved row at once.
-                    try {
-                      await Promise.all(
-                        selectedOrdersForAssign
-                          .filter(o => pickerAssignMap[o.id])
-                          .map(async o => keepSaved(await salesmanAssignPicker(o.id, pickerAssignMap[o.id]), o.salesmanName ?? null))
-                      )
-                    } catch (e) {
-                      window.alert(`Not all orders were assigned: ${e instanceof Error ? e.message : 'network problem'}`)
-                      return
-                    }
-                    setPickerAssignOpen(false)
-                    handlePrintOrders(selectedOrdersForAssign, printSettingsSnapshot.pageSize, printSettingsSnapshot.orientation)
-                  })
-                }}
-                className="w-full rounded-2xl bg-foreground text-background px-4 py-3.5 text-base font-semibold hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-              >
-                {pickerAssigning ? (
-                  <>
-                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                    </svg>
-                    Assigning…
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                    </svg>
-                    Assign & Print
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
         </div>
       )}
 

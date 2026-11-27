@@ -50,6 +50,8 @@ interface BillerOrder {
   billedAt: Date | null
   billerId: string | null
   salesmanId: string | null
+  /** Who picked it; none when nobody claimed it or was assigned (the biller names them when billing). */
+  pickerId?: string | null
   isEmergency: boolean
   /** Pairs on the bill (billed orders; from the bill lines). */
   billedPairs?: number | null
@@ -142,7 +144,10 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
   const [billType, setBillType] = useState<TaxType>('intra_state')
   // Bill discount / GST typed on this bill (owner, 24 Nov 2026); empty = the Master defaults.
   const [rateEdits, setRateEdits] = useState<RateEdits>({})
-  useEffect(() => { if (scanOrder) { setBillType(scanOrder.taxType ?? 'intra_state'); setRateEdits({}) } }, [scanOrder?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (scanOrder) { setBillType(scanOrder.taxType ?? 'intra_state'); setRateEdits({}); setBillPicker('') } }, [scanOrder?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  // No picker on the order: the biller chooses who picked it before saving (owner, 27 Nov 2026).
+  const [billPicker, setBillPicker] = useState('')
+  const needsBillPicker = !!scanOrder && !scanOrder.pickerId
   const [scanItems, setScanItems] = useState<DetailItem[]>([])
   // scannedMap: itemKey → scanned count
   const [scannedMap, setScannedMap] = useState<Record<string, number>>({})
@@ -853,6 +858,8 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
     setMrpLinesMap(prev => ({ ...prev, [orderId]: builtLines }))
 
     const discPct = typeof lineDiscPct === 'number' ? lineDiscPct : 30
+    const pickerChoice = !scanOrder.pickerId ? billPicker : ''
+    if (!scanOrder.pickerId && !pickerChoice) { showMsg('err', 'Choose who picked the goods.'); return }
     setActiveId(orderId)
     startTransition(async () => {
       // Bills the order, saves its lines and takes the scanned boxes out of stock (one transaction).
@@ -861,7 +868,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       try {
         const rated = resolveRates(billType, billTemplate ? templateRates(billTemplate) : DEFAULT_BILL_RATES, rateEdits)
         if (rated.error) { setActiveId(null); showMsg('err', rated.error); return }
-        billed = await billOrder(orderId, qrsCopy, builtLines, discPct, { taxType: billType, ...(rated.changed ? { rates: rated.rates } : {}), ...(packedForSave ? { packed: packedForSave } : {}) })
+        billed = await billOrder(orderId, qrsCopy, builtLines, discPct, { taxType: billType, ...(rated.changed ? { rates: rated.rates } : {}), ...(packedForSave ? { packed: packedForSave } : {}), ...(pickerChoice ? { pickerId: pickerChoice } : {}) })
       } catch (e) {
         setActiveId(null)
         showMsg('err', e instanceof Error ? e.message : 'Could not save the bill. Try again.')
@@ -869,7 +876,7 @@ export function BillerDashboard({ orders: initialOrders, currentBillerId = '', e
       }
       closeScanner()
       setOrders(prev =>
-        prev.map(o => o.id === orderId ? { ...o, status: 'billed', billNo: billed.billNo, billerId: currentBillerId, billedAt: new Date() } : o)
+        prev.map(o => o.id === orderId ? { ...o, status: 'billed', billNo: billed.billNo, billerId: currentBillerId, billedAt: new Date(), pickerId: o.pickerId ?? (pickerChoice || null) } : o)
       )
       setActiveId(null)
       // After saving, switch to Generated Bills tab
@@ -2096,6 +2103,16 @@ Why is it cancelled?`)
                 className="w-16 h-7 rounded-lg border border-input bg-background px-2 text-xs text-center focus:outline-none focus:ring-1 focus:ring-ring"
               />
             </div>
+            {needsBillPicker && (
+              <label className="flex min-w-[200px] flex-1 items-center gap-2 text-xs font-medium">
+                <span className="shrink-0">Who picked it?</span>
+                <select value={billPicker} onChange={e => setBillPicker(e.target.value)} required disabled={isPending}
+                  className={`h-9 w-full rounded-lg border bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring ${billPicker ? 'border-input' : 'border-amber-400 text-muted-foreground'}`}>
+                  <option value="">Choose the picker…</option>
+                  {pickers.map(p => <option key={p.id} value={p.id}>{p.name ?? p.id}</option>)}
+                </select>
+              </label>
+            )}
             <div className="min-w-[220px] flex-1">
               <BillTypeChoice compact value={billType} onChange={setBillType} partyDefault={scanOrder.taxType ?? null} disabled={isPending} />
             </div>
@@ -2116,7 +2133,7 @@ Why is it cancelled?`)
             <button
               type="button"
               onClick={scanDirect ? handleDirectSave : handleSaveBill}
-              disabled={(scanDirect ? scannedQrs.length === 0 && Object.keys(manualEntries).length === 0 : !allVerified) || isPending}
+              disabled={(scanDirect ? scannedQrs.length === 0 && Object.keys(manualEntries).length === 0 : !allVerified) || isPending || (needsBillPicker && !billPicker)}
               className={`w-full rounded-xl py-3.5 text-sm font-semibold transition-all shadow-sm ${
                 allVerified || (scanDirect && scannedQrs.length + Object.keys(manualEntries).length > 0)
                   ? 'bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white'

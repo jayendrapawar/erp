@@ -23,7 +23,10 @@ export interface PickOrder {
   orderedAt: Date | string
   salesman?: string | null
   items: PickLine[]
+  /** Master → Sets: a colour line that is exactly a set (or 2×, 3× it) prints as "6x10 - 1". */
+  sets?: PrintSet[]
 }
+export interface PrintSet { name: string; quantities: Record<string, number> }
 export type PageSize = 'A4' | 'A5'
 export type Orientation = 'portrait' | 'landscape'
 
@@ -58,13 +61,41 @@ export function geometry(pageSize: PageSize, orientation: Orientation) {
 
 const sizeOrder = (a: string, b: string) => Number(a) - Number(b) || a.localeCompare(b)
 
+/**
+ * Print only (owner, 27 Nov 2026): a colour line whose sizes are exactly a set from Master → Sets,
+ * or a whole multiple of it, is printed as "<set> - <how many>" (6/1 7/1 8/2 9/1 10/1 → "6x10 - 1").
+ * Same sizes, every size the same multiple; nothing extra. When two sets fit, the bigger set wins
+ * (fewer of them). The order itself keeps the sizes; only the paper is shorter.
+ */
+export function setLabel(sizes: Map<string, number>, sets: readonly PrintSet[] | undefined): string | null {
+  if (!sets?.length || sizes.size === 0) return null
+  let best: { name: string; k: number; pairs: number } | null = null
+  for (const set of sets) {
+    const want = Object.entries(set.quantities).map(([sz, q]) => [sz.trim(), Number(q)] as const).filter(([, q]) => q > 0)
+    if (want.length === 0 || want.length !== sizes.size) continue
+    let k = 0
+    let ok = true
+    for (const [sz, q] of want) {
+      const have = sizes.get(sz)
+      if (!have || have % q !== 0) { ok = false; break }
+      const m = have / q
+      if (k === 0) k = m
+      else if (m !== k) { ok = false; break }
+    }
+    if (!ok || k < 1) continue
+    const pairs = want.reduce((t, [, q]) => t + q, 0)
+    if (!best || pairs > best.pairs) best = { name: set.name, k, pairs }
+  }
+  return best ? `${best.name} - ${best.k}` : null
+}
+
 /** One order as HTML (head = .h + .m, one <tr> per colour, foot = .f). */
 function orderBlock(o: PickOrder, i: number): string {
   const arts = new Map<string, Map<string, Map<string, number>>>()
   for (const it of o.items) {
     const colours = arts.get(it.artNumber) ?? new Map<string, Map<string, number>>()
     const sizes = colours.get(it.colorNumber ?? '') ?? new Map<string, number>()
-    const sz = it.sizeNumber ?? '?'
+    const sz = (it.sizeNumber ?? '?').trim()
     sizes.set(sz, (sizes.get(sz) ?? 0) + it.quantityOrdered)
     colours.set(it.colorNumber ?? '', sizes)
     arts.set(it.artNumber, colours)
@@ -77,7 +108,8 @@ function orderBlock(o: PickOrder, i: number): string {
   for (const [art, colours] of arts) {
     let first = true
     for (const [colour, sizes] of colours) {
-      const s = [...sizes].sort(([a], [b]) => sizeOrder(a, b)).map(([sz, q]) => `${esc(sz)}/${q}`).join(' ')
+      const set = setLabel(sizes, o.sets)
+      const s = set ? esc(set) : [...sizes].sort(([a], [b]) => sizeOrder(a, b)).map(([sz, q]) => `${esc(sz)}/${q}`).join(' ')
       rows += `<tr><td class="n">${++n}</td><td class="a">${first ? esc(art) : ''}</td><td class="c">${esc(colour || '—')}</td><td class="s">${s}</td><td class="t"></td></tr>`
       first = false
     }

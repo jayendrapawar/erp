@@ -7,6 +7,7 @@ import { applyAdvance } from '@/lib/payments/payments'
 import type { BillTotalsPaise } from '@/lib/billing/bill-totals'
 import { audit } from '@/lib/audit'
 import { recordReceivedPairs } from '@/lib/billing/received-pairs'
+import { assertPickerChoice } from '@/lib/orders/pickers'
 import { editBillByScan, loadBillForEdit, type BillForEdit, type EditedBill } from '@/lib/billing/edit-bill'
 import { and, eq, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
@@ -90,7 +91,7 @@ export async function billOrder(
   scannedQrs: string[],
   lines: { artNumber: string; mrp: number; qty: number }[],
   lineDiscPct: number,
-  opts: { taxType?: TaxType; packed?: { itemId: number; qty: number }[]; rates?: BillRates } = {},
+  opts: { taxType?: TaxType; packed?: { itemId: number; qty: number }[]; rates?: BillRates; pickerId?: string } = {},
 ): Promise<StockOutCounts & { skipped: number; billNo: string; taxType: TaxType; totals: BillTotalsPaise }> {
   const actor = await biller()
   if (opts.taxType !== undefined && !isTaxType(opts.taxType)) throw new Error('Unknown bill type.')
@@ -102,9 +103,12 @@ export async function billOrder(
     if (['cancelled', 'dispatched', 'delivered'].includes(o.status)) throw new Error(`This order is ${o.status}.`)
     if (!o.retailerId || !o.taxType) throw new Error(notInMasterMessage(o.shopkeeperName))
     if (opts.packed && !o.isEmergency) throw new Error('Only orders sent straight to billing are billed as scanned.')
+    // No picker on the order (nobody claimed it or was assigned): the biller names who picked it
+    // (owner, 27 Nov 2026). An order that has a picker keeps it.
+    const pickerId = o.pickerId ?? await assertPickerChoice(tx, opts.pickerId)
     if (o.status === 'billed') await cancelSaleBill(tx, actor, orderId, 'billed again')
     // isEmergency is kept: true = billed without the picker (Direct bill icon on Receipts).
-    await tx.update(orders).set({ status: 'billed', billerId: actor.id, billedAt: sql`now()`, retailerId: o.retailerId, updatedAt: sql`now()` })
+    await tx.update(orders).set({ status: 'billed', billerId: actor.id, pickerId, billedAt: sql`now()`, retailerId: o.retailerId, updatedAt: sql`now()` })
       .where(and(eq(orders.id, orderId)))
     // Pairs received per order line; what was not received stays marked on the order.
     if (opts.packed?.length) await recordReceivedPairs(tx, actor, orderId, opts.packed)

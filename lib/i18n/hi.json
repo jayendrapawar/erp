@@ -540,9 +540,6 @@
   "and cannot be edited or cancelled.": "और इसे बदला या रद्द नहीं किया जा सकता।",
   "Any special instructions…": "कोई खास निर्देश…",
   "Apply Set": "सेट लगाएं",
-  "Assign & Print": "असाइन करें और प्रिंट करें",
-  "Assign Pickers": "पिकर असाइन करें",
-  "Assigning…": "असाइन हो रहा है…",
   "Available Colors": "उपलब्ध कलर",
   "Back to All Orders": "सभी ऑर्डर पर वापस",
   "Cancel Order": "ऑर्डर रद्द करें",
@@ -572,7 +569,6 @@
   "Manual quantity for size {0}": "साइज़ {0} की हाथ से मात्रा",
   "New Order": "नया ऑर्डर",
   "Next Article": "अगला आर्टिकल",
-  "Next: Assign Pickers": "आगे: पिकर असाइन करें",
   "No colors configured for this article. Add them in Master.": "इस आर्टिकल में कोई कलर नहीं है। मास्टर में जोड़ें।",
   "No orders match this filter.": "इस फ़िल्टर में कोई ऑर्डर नहीं।",
   "No orders yet.": "अभी कोई ऑर्डर नहीं।",
@@ -1525,5 +1521,9 @@
   "Sealed — count it": "सील — गिनें",
   "Open — I'll scan its pairs": "खुला — मैं जोड़ियाँ स्कैन करूँगा",
   "Not started — your first scan starts it.": "शुरू नहीं हुई — आपका पहला स्कैन इसे शुरू करेगा।",
-  "The stocktake was finished by {0}: {1} pairs. The next scan starts a new one.": "स्टॉक गिनती {0} ने पूरी की: {1} जोड़ी। अगला स्कैन नई शुरू करेगा।"
+  "The stocktake was finished by {0}: {1} pairs. The next scan starts a new one.": "स्टॉक गिनती {0} ने पूरी की: {1} जोड़ी। अगला स्कैन नई शुरू करेगा।",
+  "Who picked it?": "किसने पिक किया?",
+  "Choose the picker…": "पिकर चुनें…",
+  "Choose who picked the goods.": "चुनें कि माल किसने पिक किया।",
+  "Could not save the draft on this phone.": "इस फ़ोन पर ड्राफ़्ट सेव नहीं हो सका।"
 }
